@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package plugin_generator.v1;
+
+import "google/protobuf/compiler/plugin.proto";
+
+option go_package = "github.com/easyp-tech/easyp-plugin-server/api/plugin-generator/v1;plugingeneratorv1";
+
+// Сервис для обработки запросов генерации кода плагинов
+service PluginGeneratorService {
+  // Метод для генерации кода на основе запроса и информации о плагине
+  rpc GenerateCode(GenerateCodeRequest) returns (GenerateCodeResponse);
+}
+
+// Запрос для генерации кода
+message GenerateCodeRequest {
+  // Запрос генератора кода из protoc
+  google.protobuf.compiler.CodeGeneratorRequest code_generator_request = 1;
+  
+  // Информация о плагине в формате "name:version" (например, "python:v32.1")
+  string plugin_info = 2;
+}
+
+// Ответ сервиса генерации кода
+message GenerateCodeResponse {
+  // Результат генерации кода
+  google.protobuf.compiler.CodeGeneratorResponse code_generator_response = 1;
+  
+  // Статус обработки
+  string status = 2;
+  
+  // Дополнительные сообщения или ошибки
+  string message = 3;
+}

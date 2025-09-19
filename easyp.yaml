@@ -1,0 +1,30 @@
+version: v1
+
+lint:
+  use:
+    - DEFAULT
+  except:
+    - PACKAGE_DIRECTORY_MATCH
+  enum_zero_value_suffix: _UNSPECIFIED
+  rpc_allow_same_request_response: false
+  rpc_allow_google_protobuf_empty_requests: true
+  rpc_allow_google_protobuf_empty_responses: true
+  service_suffix: Service
+
+generate:
+  inputs:
+    - directory: api
+
+  plugins:
+    - name: go
+      out: .
+      opts:
+        paths: source_relative
+    - name: go-grpc
+      out: .
+      opts:
+        paths: source_relative
+        require_unimplemented_servers: false
+
+deps:
+  - github.com/googleapis/googleapis@common-protos-1_3_1

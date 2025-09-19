@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package test;
+
+option go_package = "github.com/easyp-tech/easyp-plugin-server/test;testpb";
+
+// Тестовое сообщение
+message TestMessage {
+  string name = 1;
+  int32 value = 2;
+}
+
+// Тестовый сервис
+service TestService {
+  rpc GetTest(TestMessage) returns (TestMessage);
+}
