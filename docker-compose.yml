@@ -1,6 +1,9 @@
 volumes:
   registry-data:
   postgres-data:
+  loki-data:
+  prometheus-data:
+  grafana-data:
 
 services:
 
@@ -12,6 +15,8 @@ services:
       - "registry-data:/var/lib/registry"
     ports:
       - "127.0.0.1:5005:5000"
+    labels:
+      - "service=easyp-registry"
 
   postgres:
     image: postgres:17.4
@@ -25,6 +30,67 @@ services:
       POSTGRES_PASSWORD: "easyp_pass"
     ports:
       - "5432:5432"
+    labels:
+      - "service=easyp-database-postgres"
+
+  loki:
+    image: "grafana/loki:3.5.7"
+    container_name: "easyp-loki"
+    restart: "unless-stopped"
+    volumes:
+      - "./infrastructure/loki/config.yml:/etc/loki/config.yml"
+      - "loki-data:/loki"
+    command: [ "-config.file=/etc/loki/config.yml" ]
+    ports:
+      - "3100:3100"
+    labels:
+      - "service=easyp-logs-loki"
+
+  promtail:
+    image: "grafana/promtail:3.5.7"
+    container_name: "easyp-promtail"
+    restart: "unless-stopped"
+    volumes:
+      - "./infrastructure/promtail/config.yml:/etc/promtail/config.yml"
+      - "/var/lib/docker/containers:/var/lib/docker/containers:ro"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    command: [ "-config.file=/etc/promtail/config.yml", "-log.format=json" ]
+    ports:
+      - "9080:9080"
+    labels:
+      - "service=easyp-logs-promtail"
+
+  prometheus:
+    image: "prom/prometheus:v3.7.3"
+    container_name: "easyp-prometheus"
+    restart: "unless-stopped"
+    volumes:
+      - "prometheus-data:/data"
+      - "./infrastructure/prometheus/config.yml:/etc/prometheus/prometheus.yml"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--log.level=debug"
+    ports:
+      - "9090:9090"
+    labels:
+      - "service=easyp-metrics-prometheus"
+
+  grafana:
+    image: "grafana/grafana:12.2.1"
+    container_name: "easyp-grafana"
+    restart: "unless-stopped"
+    volumes:
+      - "./infrastructure/grafana/config.ini:/local/grafana.ini"
+      - "./infrastructure/grafana/dashboards:/etc/grafana/provisioning/dashboards"
+      - "./infrastructure/grafana/datasources:/etc/grafana/provisioning/datasources"
+      - "grafana-data:/var/lib/grafana"
+    environment:
+      GF_PATHS_CONFIG: "/local/grafana.ini"
+      GF_SERVER_SERVE_FROM_SUB_PATH: true
+    ports:
+      - "3000:3000"
+    labels:
+      - "service=easyp-metrics-grafana"
 
   service:
     build:
@@ -33,7 +99,7 @@ services:
     container_name: "easyp-service"
     restart: always
     labels:
-      service: "service"
+      service: "service-easyp-service"
     command: [
       "-cfg=/config.yml",
       "-log_level=debug",

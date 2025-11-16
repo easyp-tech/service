@@ -132,7 +132,7 @@ func run(ctx context.Context, cfg config, reg *prometheus.Registry, namespace st
 		}
 	}()
 
-	module := core.New(adapter_metrics.NoMetrics{}, r)
+	module := core.New(adapter_metrics.New(reg, namespace), r)
 
 	grpcAPI := api.New(ctx, m, module, reg, namespace)
 
