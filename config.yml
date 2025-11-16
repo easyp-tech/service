@@ -1,0 +1,10 @@
+server:
+  host: "0.0.0.0"
+  port:
+    grpc: 8080
+    metric: 8081
+    health: 8082
+db:
+  migrate_dir: "migrate"
+  driver: "postgres"
+  postgres: "postgres://easyp_svc:easyp_pass@postgres:5432/easyp_db?sslmode=disable"

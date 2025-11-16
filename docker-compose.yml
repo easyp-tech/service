@@ -1,0 +1,46 @@
+volumes:
+  registry-data:
+  postgres-data:
+
+services:
+
+  registry:
+    image: registry:3.0.0
+    container_name: "easyp-registry"
+    restart: "unless-stopped"
+    volumes:
+      - registry-data:/var/lib/registry
+    ports:
+      - "127.0.0.1:5005:5000"
+
+  postgres:
+    image: postgres:17.4
+    container_name: "easyp-postgres"
+    restart: unless-stopped
+    volumes:
+      - "postgres-data:/var/lib/postgresql/data"
+    environment:
+      POSTGRES_DB: "easyp_db"
+      POSTGRES_USER: "easyp_svc"
+      POSTGRES_PASSWORD: "easyp_pass"
+    ports:
+      - "5432:5432"
+
+  service:
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+    container_name: "easyp-service"
+    restart: always
+    labels:
+      service: "service"
+    command: [
+      "-cfg=/config.yml",
+      "-log_level=debug",
+    ]
+    volumes:
+      - "./config.yml:/config.yml"
+    ports:
+      - "8080:8080" # gRPC
+      - "8081:8081" # metric
+      - "8082:8082" # health

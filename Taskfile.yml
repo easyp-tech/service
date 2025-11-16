@@ -1,0 +1,105 @@
+version: '3'
+
+tasks:
+
+  test-unit:
+    dir: '{{.USER_WORKING_DIR}}'
+    cmds:
+      - "gotestsum --format pkgname -- -coverprofile=cover.out -race -count=1 ./..."
+
+  test-integration:
+    dir: '{{.USER_WORKING_DIR}}'
+    cmds:
+      - "gotestsum --format pkgname -- -coverprofile=.cover/cover.out -tags=integration -race -count=1 ./..."
+
+  build-internal:
+    internal: true
+    dir: '{{.USER_WORKING_DIR}}'
+    cmds:
+      - "CGO_ENABLED={{.CGO_ENABLED}} GOOS={{.GOOS}} GOARCH={{.GOARCH}} go build -o bin/ ./cmd/back/"
+
+  build:
+    vars:
+      CGO_ENABLED:
+        sh: go env CGO_ENABLED
+      GOOS:
+        sh: go env GOOS
+      GOARCH:
+        sh: go env GOARCH
+    cmds:
+      - task: build-internal
+        vars:
+          CGO_ENABLED: "{{.CGO_ENABLED}}"
+          GOOS: "{{.GOOS}}"
+          GOARCH: "{{.GOARCH}}"
+
+  build-linux:
+    cmds:
+      - task: build-internal
+        vars:
+          CGO_ENABLED: 0
+          GOOS: linux
+          GOARCH: amd64
+
+  build-windows:
+    cmds:
+      - task: build-internal
+        vars:
+          CGO_ENABLED: 0
+          GOOS: windows
+          GOARCH: amd64
+
+  init:
+    dir: '{{.USER_WORKING_DIR}}'
+    preconditions:
+      - "test -f ./scripts/build_env.sh"
+      - "test -f env.sh"
+    cmds:
+      - "./scripts/build_env.sh env.sh"
+      - "go get -v ./..."
+
+  lint:
+    dir: '{{.USER_WORKING_DIR}}'
+    deps:
+      - test-unit
+      - build
+    cmds:
+      - "go get -v ./..."
+      - "golangci-lint run ./..."
+      - "easyp lint"
+
+  up:
+    dir: '{{.USER_WORKING_DIR}}'
+    deps:
+      - "init"
+      - "build-linux"
+    dotenv:
+      - ".env"
+    preconditions:
+      - "test -f env.sh"
+      - "test -f docker-compose.yml"
+    cmds:
+      - "docker compose up --build --remove-orphans --detach"
+
+  down:
+    dir: '{{.USER_WORKING_DIR}}'
+    dotenv:
+      - ".env"
+    preconditions:
+      - "test -f docker-compose.yml"
+    cmds:
+      - "docker compose down --volumes"
+
+  local-push-registry:
+    dir: '{{.USER_WORKING_DIR}}'
+    preconditions:
+      - "test -f push.sh"
+    cmds:
+      - "./push.sh localhost:5005 --push"
+
+  dev-push-registry:
+    dir: '{{.USER_WORKING_DIR}}'
+    preconditions:
+      - "test -f push.sh"
+    cmds:
+      - "./push.sh registry.sipki.tech --push"

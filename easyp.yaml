@@ -64,11 +64,11 @@ generate:
     - directory: api
 
   plugins:
-    - name: go
+    - remote: "localhost:8080/protobuf/go:v1.36.10"
       out: .
       opts:
         paths: source_relative
-    - name: go-grpc
+    - remote: "localhost:8080/grpc/go:v1.5.1"
       out: .
       opts:
         paths: source_relative

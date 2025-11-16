@@ -1,5 +1,5 @@
 // Package server implements the API server for the application.
-package server
+package api
 
 import (
 	"context"
@@ -15,8 +15,8 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 
-	"github.com/easyp-tech/easyp-plugin-server/api/generator/v1"
-	"github.com/easyp-tech/easyp-plugin-server/internal/core"
+	"github.com/easyp-tech/service/api/generator/v1"
+	"github.com/easyp-tech/service/internal/core"
 )
 
 var _ generator.ServiceAPIServer = (*API)(nil)

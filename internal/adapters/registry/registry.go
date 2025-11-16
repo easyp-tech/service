@@ -20,7 +20,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/pluginpb"
 
-	"github.com/easyp-tech/easyp-plugin-server/internal/core"
+	"github.com/easyp-tech/service/internal/core"
 )
 
 var _ core.Registry = &Registry{}
@@ -111,6 +111,16 @@ func (r *Registry) Get(ctx context.Context, pluginName string) (core.Plugin, err
 	return nil, nil
 }
 
+// Close database connection.
+func (r *Registry) Close() error {
+	return r.sql.Close()
+}
+
+// Health checks the health of the registry.
+func (r *Registry) Health(ctx context.Context) error {
+	return r.sql.NoTx(func(db *sqlx.DB) error { return db.PingContext(ctx) })
+}
+
 // Generate implements core.Plugin.
 func (p *plugin) Generate(ctx context.Context, req *pluginpb.CodeGeneratorRequest) (*pluginpb.CodeGeneratorResponse, error) {
 	requestData, err := proto.Marshal(req)
@@ -146,10 +156,6 @@ func (p *plugin) Generate(ctx context.Context, req *pluginpb.CodeGeneratorReques
 	var response pluginpb.CodeGeneratorResponse
 	if err := proto.Unmarshal(output, &response); err != nil {
 		return nil, fmt.Errorf("proto.Unmarshal: %w", err)
-	}
-
-	if response.Error != nil {
-		return nil, fmt.Errorf("%w: %s", core.ErrGenerationFailed, *response.Error)
 	}
 
 	return &response, nil

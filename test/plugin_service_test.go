@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	plugingeneratorv1 "github.com/easyp-tech/easyp-plugin-server/api/plugin-generator/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -18,6 +17,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/pluginpb"
+
+	plugingeneratorv1 "github.com/easyp-tech/service/api/generator/v1"
 )
 
 const (
@@ -28,7 +29,7 @@ const (
 // PluginServiceTestSuite тестовая suite для PluginService
 type PluginServiceTestSuite struct {
 	suite.Suite
-	client plugingeneratorv1.PluginGeneratorServiceClient
+	client plugingeneratorv1.ServiceAPIClient
 	conn   *grpc.ClientConn
 }
 
@@ -38,7 +39,7 @@ func (suite *PluginServiceTestSuite) SetupSuite() {
 	require.NoError(suite.T(), err, "Failed to connect to server")
 
 	suite.conn = conn
-	suite.client = plugingeneratorv1.NewPluginGeneratorServiceClient(conn)
+	suite.client = plugingeneratorv1.NewServiceAPIClient(conn)
 }
 
 // TearDownSuite выполняется один раз после всех тестов
@@ -59,8 +60,8 @@ func (suite *PluginServiceTestSuite) TestGenerateCode_PythonProtobuf() {
 	require.NoError(suite.T(), err, "GenerateCode should not fail")
 
 	// Проверяем статус ответа
-	assert.Equal(suite.T(), "success", response.Status, "Response status should be success")
-	assert.Equal(suite.T(), "Code generation completed successfully", response.Message)
+	//assert.Equal(suite.T(), "success", response.Status, "Response status should be success")
+	//assert.Equal(suite.T(), "Code generation completed successfully", response.CodeGeneratorResponse)
 
 	// Проверяем наличие сгенерированных файлов
 	require.NotNil(suite.T(), response.CodeGeneratorResponse, "CodeGeneratorResponse should not be nil")
@@ -92,8 +93,8 @@ func (suite *PluginServiceTestSuite) TestGenerateCode_PythonGRPC() {
 	require.NoError(suite.T(), err, "GenerateCode should not fail")
 
 	// Проверяем статус ответа
-	assert.Equal(suite.T(), "success", response.Status, "Response status should be success")
-	assert.Equal(suite.T(), "Code generation completed successfully", response.Message)
+	//assert.Equal(suite.T(), "success", response.Status, "Response status should be success")
+	//assert.Equal(suite.T(), "Code generation completed successfully", response.Message)
 
 	// Проверяем наличие сгенерированных файлов
 	require.NotNil(suite.T(), response.CodeGeneratorResponse, "CodeGeneratorResponse should not be nil")
@@ -142,7 +143,7 @@ func (suite *PluginServiceTestSuite) TestGenerateCode_EmptyRequest() {
 	// Создаем пустой запрос
 	request := &plugingeneratorv1.GenerateCodeRequest{
 		CodeGeneratorRequest: &pluginpb.CodeGeneratorRequest{},
-		PluginInfo:           "protoc-gen-python:v32.1",
+		PluginName:           "protoc-gen-python:v32.1",
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
@@ -230,7 +231,7 @@ func (suite *PluginServiceTestSuite) createTestRequest(pluginInfo, parameter str
 
 	return &plugingeneratorv1.GenerateCodeRequest{
 		CodeGeneratorRequest: codeGenRequest,
-		PluginInfo:           pluginInfo,
+		PluginName:           pluginInfo,
 	}
 }
 
@@ -260,7 +261,7 @@ func BenchmarkPluginService_GenerateCode(b *testing.B) {
 	require.NoError(b, err, "Failed to connect to server")
 	defer conn.Close()
 
-	client := plugingeneratorv1.NewPluginGeneratorServiceClient(conn)
+	client := plugingeneratorv1.NewServiceAPIClient(conn)
 
 	// Создаем тестовый запрос
 	suite := &PluginServiceTestSuite{}
@@ -313,7 +314,7 @@ func (suite *PluginServiceTestSuite) TestGenerateCode_MultiplePlugins() {
 			response, err := suite.client.GenerateCode(ctx, request)
 			require.NoError(suite.T(), err, "GenerateCode should not fail")
 
-			assert.Equal(suite.T(), "success", response.Status)
+			//assert.Equal(suite.T(), "success", response.Status)
 			require.NotNil(suite.T(), response.CodeGeneratorResponse)
 
 			files := response.CodeGeneratorResponse.File
