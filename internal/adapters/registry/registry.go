@@ -99,8 +99,9 @@ func (r *Registry) Get(ctx context.Context, pluginName string) (p core.Plugin, e
 		if len(strs) > 2 || len(strs) == 0 {
 			return fmt.Errorf("%w: %s", core.ErrInvalidPluginName, pluginName)
 		}
-		if len(strs) == 1 {
-			query = "select id, name, created_at from plugins where name = $1 order by created_at desc limit 1"
+		if strs[1] == "latest" {
+			query = "SELECT id, name, created_at FROM plugins WHERE name LIKE $1 || '%' ORDER BY created_at DESC LIMIT 1"
+			pluginName = strs[0]
 		}
 
 		err := d.GetContext(ctx, &dbFormat, query, pluginName)
@@ -141,7 +142,7 @@ func (p *plugin) Generate(ctx context.Context, req *pluginpb.CodeGeneratorReques
 	}
 
 	imageName := p.domain.String() + "/" + p.Name
-	
+
 	cmd := exec.CommandContext(ctx,
 		"docker",
 		"run",

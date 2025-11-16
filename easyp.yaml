@@ -64,7 +64,7 @@ generate:
     - directory: api
 
   plugins:
-    - remote: "localhost:8080/protobuf/go:v1.36.10"
+    - remote: "localhost:8080/protobuf/go"
       out: .
       opts:
         paths: source_relative
