@@ -1,6 +1,6 @@
 # EasyP API Service
 
-A microservice for executing protobuf/gRPC code generation plugins running as Docker containers.
+A service for executing protobuf/gRPC code generation plugins running as Docker containers.
 
 **Module:** `github.com/easyp-tech/service`
 
