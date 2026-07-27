@@ -56,6 +56,7 @@ services:
       /usr/bin/mc mb --ignore-existing rustfs/loki-chunks;
       /usr/bin/mc mb --ignore-existing rustfs/loki-ruler;
       /usr/bin/mc mb --ignore-existing rustfs/pyroscope;
+      /usr/bin/mc mb --ignore-existing rustfs/easyp-plugins;
       exit 0;
       "
     networks:
@@ -192,10 +193,13 @@ services:
         condition: service_healthy
       alloy:
         condition: service_started
+      init-buckets:
+        condition: service_completed_successfully
     command: ["service", "start", "--cfg=/config.yml", "--log_level=debug"]
     volumes:
       - "./config.yml:/config.yml:ro"
-      - "./plugins:/plugins:ro"
+      # rw: the service writes lazily downloaded plugin binaries here.
+      - "./plugins:/plugins"
     environment:
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://alloy:4317"
       OTEL_SERVICE_NAME: "easyp-api-service"

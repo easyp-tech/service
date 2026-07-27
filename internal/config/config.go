@@ -44,8 +44,29 @@ type DBConfig struct {
 
 // RegistryConfig configures plugin execution.
 type RegistryConfig struct {
-	PluginsDir    string `env:"PLUGINS_DIR, default=/plugins"     yaml:"plugins_dir"`
-	MaxOutputSize int64  `env:"MAX_OUTPUT_SIZE, default=67108864" yaml:"max_output_size"`
+	PluginsDir    string   `env:"PLUGINS_DIR, default=/plugins"     yaml:"plugins_dir"`
+	MaxOutputSize int64    `env:"MAX_OUTPUT_SIZE, default=67108864" yaml:"max_output_size"`
+	S3            S3Config `env:", prefix=S3_"                      yaml:"s3"`
+}
+
+// S3Config configures S3-compatible storage for plugin binaries.
+// When Bucket is empty, S3 storage is disabled and only local plugins_dir is used.
+// Credentials may also be supplied via REGISTRY_S3_ACCESS_KEY_ID and
+// REGISTRY_S3_SECRET_ACCESS_KEY environment variables instead of YAML; when
+// both are absent, the default AWS credential chain is used.
+type S3Config struct {
+	Endpoint        string `env:"ENDPOINT"         yaml:"endpoint"`
+	Bucket          string `env:"BUCKET"           yaml:"bucket"`
+	Region          string `env:"REGION,default=us-east-1" yaml:"region"`
+	Prefix          string `env:"PREFIX"           yaml:"prefix"`
+	AccessKeyID     string `env:"ACCESS_KEY_ID"    yaml:"access_key_id"`
+	SecretAccessKey string `env:"SECRET_ACCESS_KEY" yaml:"secret_access_key"`
+	ForcePathStyle  bool   `env:"FORCE_PATH_STYLE" yaml:"force_path_style"`
+}
+
+// Enabled returns true if S3 storage is configured.
+func (c S3Config) Enabled() bool {
+	return c.Bucket != ""
 }
 
 // TelemetryConfig configures observability endpoints.
@@ -100,6 +121,17 @@ func (c *Config) Validate() error {
 
 	if c.RateLimit.Burst <= 0 {
 		return fmt.Errorf("rate_limit.burst must be positive, got %d", c.RateLimit.Burst)
+	}
+
+	if c.Registry.S3.Enabled() {
+		if c.Registry.PluginsDir == "" {
+			return fmt.Errorf("registry.plugins_dir is required as local cache directory when S3 is enabled")
+		}
+		hasKey := c.Registry.S3.AccessKeyID != ""
+		hasSecret := c.Registry.S3.SecretAccessKey != ""
+		if hasKey != hasSecret {
+			return fmt.Errorf("registry.s3.access_key_id and registry.s3.secret_access_key must be set together")
+		}
 	}
 
 	return nil

@@ -144,6 +144,9 @@ func (c *Client) ListPlugins(ctx context.Context, filter ...PluginFilter) ([]*ge
 }
 
 // CreatePlugin registers a new plugin in the service.
+// When S3 binary storage is enabled on the service, the plugin archive must
+// be pushed to storage beforehand (easyp-svc plugins push): the service
+// verifies its presence and records its sha256 checksum at registration.
 func (c *Client) CreatePlugin(
 	ctx context.Context,
 	group, name, version string,

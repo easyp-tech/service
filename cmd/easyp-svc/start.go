@@ -21,6 +21,7 @@ import (
 	adapter_audit "github.com/easyp-tech/service/internal/adapters/audit"
 	adapter_metrics "github.com/easyp-tech/service/internal/adapters/metrics"
 	"github.com/easyp-tech/service/internal/adapters/registry"
+	"github.com/easyp-tech/service/internal/adapters/storage"
 	"github.com/easyp-tech/service/internal/api"
 	"github.com/easyp-tech/service/internal/config"
 	"github.com/easyp-tech/service/internal/core"
@@ -203,7 +204,28 @@ func initInfrastructure(
 		return nil, nil, fmt.Errorf("database.NewSQL: %w", err)
 	}
 
-	repo, err := registry.New(ctx, db, cfg.Registry.PluginsDir, cfg.Registry.MaxOutputSize)
+	var bStorage core.BinaryStorage
+	if cfg.Registry.S3.Enabled() {
+		s3Store, s3Err := storage.NewS3Storage(ctx, storage.S3Options{
+			Endpoint:        cfg.Registry.S3.Endpoint,
+			Bucket:          cfg.Registry.S3.Bucket,
+			Region:          cfg.Registry.S3.Region,
+			Prefix:          cfg.Registry.S3.Prefix,
+			AccessKeyID:     cfg.Registry.S3.AccessKeyID,
+			SecretAccessKey: cfg.Registry.S3.SecretAccessKey,
+			ForcePathStyle:  cfg.Registry.S3.ForcePathStyle,
+		})
+		if s3Err != nil {
+			return nil, nil, fmt.Errorf("storage.NewS3Storage: %w", s3Err)
+		}
+		bStorage = s3Store
+		log.Info("S3 plugin storage enabled",
+			"bucket", cfg.Registry.S3.Bucket,
+			"endpoint", cfg.Registry.S3.Endpoint,
+		)
+	}
+
+	repo, err := registry.New(ctx, db, cfg.Registry.PluginsDir, cfg.Registry.MaxOutputSize, bStorage)
 	if err != nil {
 		return nil, nil, fmt.Errorf("registry.New: %w", err)
 	}

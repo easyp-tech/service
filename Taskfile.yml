@@ -35,6 +35,25 @@ tasks:
     cmds:
       - "go run ./cmd/easyp-svc/ plugins build registry --output plugins --filter '{{.FILTER}}'"
 
+  push-plugins:
+    desc: "Pack and upload built plugin archives to S3 storage (rustfs in the dev stack)"
+    dir: "{{.USER_WORKING_DIR}}"
+    env:
+      # Credentials reach the AWS SDK default chain; the service reads its own
+      # from registry.s3 in config.yml.
+      AWS_ACCESS_KEY_ID: "rustfsadmin"
+      AWS_SECRET_ACCESS_KEY: "rustfsadmin"
+    cmds:
+      # The compose config points at rustfs:9000, which is unreachable from the
+      # host — pass the published endpoint explicitly.
+      - >-
+        go run ./cmd/easyp-svc/ plugins push
+        --endpoint http://localhost:9000
+        --bucket easyp-plugins
+        --region us-east-1
+        --force-path-style
+        --non-interactive
+
   register-plugins:
     desc: "Register all built plugins via gRPC CreatePlugin API"
     dir: "{{.USER_WORKING_DIR}}"
@@ -50,6 +69,7 @@ tasks:
       - task: down
       - task: up
       - "echo 'Waiting for service to be ready...' && until curl -sf http://localhost:8082/health >/dev/null 2>&1; do sleep 2; done && echo 'Service is ready!'"
+      - task: push-plugins
       - task: register-plugins
 
   setup:
@@ -60,6 +80,7 @@ tasks:
       - task: down
       - task: up
       - "echo 'Waiting for service to be ready...' && until curl -sf http://localhost:8082/health >/dev/null 2>&1; do sleep 2; done && echo 'Service is ready!'"
+      - task: push-plugins
       - task: register-plugins
 
   run-local:

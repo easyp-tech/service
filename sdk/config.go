@@ -44,7 +44,9 @@ func defaultConfig() *config {
 		retryMaxDelay:       5 * time.Second,
 		generateCodeTimeout: 30 * time.Second,
 		listPluginsTimeout:  10 * time.Second,
-		createPluginTimeout: 30 * time.Second,
+		// CreatePlugin is slow when S3 storage is enabled: the service streams
+		// the whole plugin archive from storage to compute its checksum.
+		createPluginTimeout: 120 * time.Second,
 		healthCheckInterval: 30 * time.Second,
 	}
 }

@@ -11,6 +11,13 @@ db:
 registry:
   plugins_dir: "/plugins"
   max_output_size: 67108864
+  s3:
+    endpoint: "http://rustfs:9000"
+    bucket: "easyp-plugins"
+    region: "us-east-1"
+    access_key_id: "rustfsadmin"
+    secret_access_key: "rustfsadmin"
+    force_path_style: true
 telemetry:
   otlp_endpoint: "easyp-alloy:4317"
   pyroscope_endpoint: "http://easyp-pyroscope:4040"

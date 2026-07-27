@@ -44,13 +44,38 @@ upstream tool name set a default `ARG BINARY_NAME=…` (or take it from `build_a
 
 At runtime, the service executes `command` from the DB (after migrate: path ending in `/plugin`) via stdin/stdout (`registry.plugins_dir`).
 
+### Plugin Artifact Storage (S3)
+
+When `registry.s3` is configured, artifacts are distributed through object storage
+instead of a shared `plugins/` volume — `plugins_dir` becomes a local cache.
+
+**Storage unit:** the whole version directory (entrypoint + sidecars) packed as
+`tar.gz`, stored at `{group}/{name}/{version}/plugin.tgz`.
+
+```bash
+# Build machine / CI — needs S3 WRITE access
+easyp-svc plugins build registry
+easyp-svc plugins push plugins --cfg config.yml   # packs and uploads plugin.tgz
+easyp-svc plugins register plugins --cfg config.yml --addr localhost:8080
+```
+
+Registration is metadata-only. The service streams the pushed archive from storage,
+computes its sha256 and records it in the plugin config — a client cannot supply
+the hash. Registering before pushing fails with `FAILED_PRECONDITION`.
+
+At runtime, when the entrypoint is missing from `plugins_dir`, the service downloads
+the archive (concurrent misses collapse into one download), verifies the recorded
+sha256, and unpacks it atomically before executing anything. A storage outage
+surfaces as `UNAVAILABLE`; a checksum mismatch aborts without unpacking.
+The service itself needs only READ (plus DELETE for `DeletePlugin`) access.
+
 ### Plugin Registration
 
 Plugins must be registered in PostgreSQL before use:
 
 ```bash
 # Prefer the CLI (scans plugins/ for files named "plugin")
-easyp-svc plugins migrate plugins/ --addr localhost:8080 --plugins-prefix /plugins
+easyp-svc plugins register plugins/ --addr localhost:8080 --plugins-prefix /plugins
 
 # Or via gRPC CreatePlugin with config.command pointing at the entrypoint
 grpcurl -plaintext -d '{"group":"grpc","name":"go","version":"v1.5.1","config":{"command":["/plugins/grpc/go/v1.5.1/plugin"]}}' \
@@ -66,7 +91,7 @@ grpcurl -plaintext -d '{"group":"grpc","name":"go","version":"v1.5.1","config":{
 | service | 8080-8083 | EasyP gRPC/HTTP service |
 | postgres | 5432 | PostgreSQL database |
 | traefik | 80 | Reverse proxy |
-| rustfs | 9000-9001 | S3-compatible storage (for observability backends) |
+| rustfs | 9000-9001 | S3-compatible storage (observability backends + plugin archives) |
 | grafana | 3000 | Dashboards |
 | loki | — | Log aggregation |
 | alloy | 12345 | OpenTelemetry collector (replaces Prometheus scraper) |

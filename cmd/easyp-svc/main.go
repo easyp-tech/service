@@ -9,6 +9,8 @@ import (
 	"syscall"
 
 	"github.com/urfave/cli/v3"
+
+	"github.com/easyp-tech/service/internal/adapters/storage"
 )
 
 func main() {
@@ -83,7 +85,102 @@ func getPluginsCommand() *cli.Command {
 		Usage: "Manage plugins",
 		Commands: []*cli.Command{
 			getPluginsBuildCommand(),
+			getPluginsPushCommand(),
 			getPluginsRegisterCommand(),
+		},
+	}
+}
+
+func getPluginsPushCommand() *cli.Command {
+	return &cli.Command{
+		Name:  "push",
+		Usage: "Upload built plugin archives to S3 binary storage",
+		Description: "Packs each plugin version directory into a tar.gz and uploads it to " +
+			"{group}/{name}/{version}/plugin.tgz. Run before `plugins register`: the service " +
+			"records the archive checksum at registration time. Re-pushing an already " +
+			"registered plugin with --force invalidates its recorded checksum — re-register it.",
+		ArgsUsage: "[path]",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:  "cfg",
+				Usage: "path to service config YAML; registry.s3 is used for settings not passed as flags",
+				Value: "",
+			},
+			&cli.StringFlag{
+				Name:  "bucket",
+				Usage: "S3 bucket name (overrides registry.s3.bucket from --cfg)",
+				Value: "",
+			},
+			&cli.StringFlag{
+				Name:  "endpoint",
+				Usage: "S3 endpoint URL, e.g. http://localhost:9000 for MinIO/RustFS",
+				Value: "",
+			},
+			&cli.StringFlag{
+				Name:  "region",
+				Usage: "S3 region",
+				Value: "",
+			},
+			&cli.StringFlag{
+				Name:  "prefix",
+				Usage: "S3 key prefix",
+				Value: "",
+			},
+			&cli.BoolFlag{
+				Name:  "force-path-style",
+				Usage: "use path-style addressing (required by MinIO/RustFS)",
+				Value: false,
+			},
+			&cli.StringFlag{
+				Name:  "filter",
+				Usage: "glob filter pattern for plugins (e.g. 'protocolbuffers/*' or 'grpc/go:v1.6.2')",
+				Value: "",
+			},
+			&cli.BoolFlag{
+				Name:  "force",
+				Usage: "re-upload even if the archive already exists in storage",
+				Value: false,
+			},
+			&cli.BoolFlag{
+				Name:  "dry-run",
+				Usage: "print the upload plan without contacting storage",
+				Value: false,
+			},
+			&cli.BoolFlag{
+				Name:  "non-interactive",
+				Usage: "disable interactive UI and dynamic progress bars",
+				Value: false,
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			scanPath := defaultPluginsScanPath
+			if args := cmd.Args().Slice(); len(args) >= 1 {
+				scanPath = args[0]
+			}
+
+			s3Opts, err := resolveS3Options(
+				cmd.String("cfg"),
+				storage.S3Options{
+					Endpoint:       cmd.String("endpoint"),
+					Bucket:         cmd.String("bucket"),
+					Region:         cmd.String("region"),
+					Prefix:         cmd.String("prefix"),
+					ForcePathStyle: cmd.Bool("force-path-style"),
+				},
+				cmd.IsSet("force-path-style"),
+			)
+			if err != nil {
+				return err
+			}
+
+			return runPluginsPush(ctx, pushOptions{
+				scanPath:       scanPath,
+				filter:         cmd.String("filter"),
+				s3:             s3Opts,
+				force:          cmd.Bool("force"),
+				dryRun:         cmd.Bool("dry-run"),
+				nonInteractive: cmd.Bool("non-interactive"),
+			})
 		},
 	}
 }

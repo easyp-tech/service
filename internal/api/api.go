@@ -209,6 +209,10 @@ func ErrorToStatus(err error) *status.Status {
 		code = codes.ResourceExhausted
 	case errors.Is(err, core.ErrShuttingDown):
 		code = codes.Unavailable
+	case errors.Is(err, core.ErrStorageUnavailable):
+		code = codes.Unavailable
+	case errors.Is(err, core.ErrBinaryNotUploaded):
+		code = codes.FailedPrecondition
 	case errors.Is(err, core.ErrFeatureDenied):
 		code = codes.PermissionDenied
 	case errors.Is(err, context.DeadlineExceeded):

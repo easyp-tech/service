@@ -11,6 +11,15 @@ db:
 registry:
   plugins_dir: "./plugins"
   max_output_size: 67108864
+  # S3 binary storage is disabled by default in local mode (up-minimal starts
+  # postgres only). To enable, start rustfs and uncomment:
+  # s3:
+  #   endpoint: "http://localhost:9000"
+  #   bucket: "easyp-plugins"
+  #   region: "us-east-1"
+  #   access_key_id: "rustfsadmin"
+  #   secret_access_key: "rustfsadmin"
+  #   force_path_style: true
 telemetry:
   otlp_endpoint: "localhost:4317"
   pyroscope_endpoint: "http://localhost:4040"

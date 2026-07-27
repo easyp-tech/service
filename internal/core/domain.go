@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"time"
 
 	"github.com/gofrs/uuid/v5"
@@ -21,6 +22,8 @@ var (
 	ErrAlreadyExists      = errors.New("already exists")
 	ErrMaxPluginsExceeded = errors.New("max plugins exceeded")
 	ErrFeatureDenied      = errors.New("feature denied")
+	ErrStorageUnavailable = errors.New("binary storage unavailable")
+	ErrBinaryNotUploaded  = errors.New("plugin archive not found in binary storage")
 )
 
 // Feature identifies a service capability for licensing and feature-gating.
@@ -221,6 +224,22 @@ type (
 	LicenseClient interface {
 		// ValidateLicense fetches and returns the current LicenseClaims.
 		ValidateLicense(ctx context.Context) (LicenseClaims, error)
+	}
+
+	// BinaryStorage provides read access to plugin archives in remote object
+	// storage. Archives are uploaded out-of-band (easyp-svc plugins push);
+	// the service only downloads, inspects, and deletes them.
+	BinaryStorage interface {
+		// Download retrieves a plugin archive from remote storage and
+		// atomically writes it to localPath.
+		Download(ctx context.Context, key string, localPath string) error
+		// Open returns a stream of the object under key and its size.
+		// The caller must close the returned reader.
+		Open(ctx context.Context, key string) (io.ReadCloser, int64, error)
+		// Exists reports whether an object exists in remote storage.
+		Exists(ctx context.Context, key string) (bool, error)
+		// Delete removes an object from remote storage.
+		Delete(ctx context.Context, key string) error
 	}
 )
 

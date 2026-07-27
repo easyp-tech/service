@@ -76,6 +76,31 @@ EasyP API Service provides centralized management and execution of protobuf/gRPC
 
 The service executes plugins as local binaries, passing protobuf data through stdin/stdout.
 
+### Plugin Artifact Delivery
+
+The unit of delivery is the **plugin version directory**, not a single file: the contract requires `plugins/{group}/{name}/{version}/plugin` as the entrypoint and allows sidecars next to it (jars, shared libraries, scripts). It is packed as a `tar.gz` and stored at `{group}/{name}/{version}/plugin.tgz`.
+
+```
+build machine / CI                       service
+──────────────────                       ───────
+plugins build   → plugins/{g}/{n}/{v}/…
+plugins push    → s3://…/plugin.tgz
+plugins register ──── CreatePlugin ────→ streams the archive from S3,
+                      (metadata only)    computes sha256, stores it in the DB
+
+                      GenerateCode ────→ entrypoint missing locally?
+                                         download archive → verify sha256
+                                         → unpack → execute
+```
+
+Key properties:
+
+- **Push before register.** Registering a plugin whose archive is absent fails with `FAILED_PRECONDITION` — a registered plugin always has its artifact.
+- **The service computes the checksum**, reading the object itself, so a client cannot register a bogus hash. It is re-verified after every download, before anything is executed.
+- **Credentials split:** the build pipeline needs S3 write access; the service only needs read (plus delete for `DeletePlugin`). Clients of the gRPC API need no S3 access at all.
+- **Concurrent misses collapse** into a single download (singleflight); `plugins_dir` acts as a local cache.
+- With S3 disabled, nothing changes from the classic flow: artifacts are read straight from `plugins_dir`.
+
 ## Project Structure
 
 ```
@@ -277,6 +302,14 @@ DB_MIGRATE_DIR="migrate"
 # Registry
 REGISTRY_PLUGINS_DIR="./plugins"
 REGISTRY_MAX_OUTPUT_SIZE=67108864
+
+# S3 binary storage (optional; enabled when bucket is set)
+REGISTRY_S3_ENDPOINT="http://rustfs:9000"
+REGISTRY_S3_BUCKET="easyp-plugins"
+REGISTRY_S3_REGION="us-east-1"
+REGISTRY_S3_ACCESS_KEY_ID="rustfsadmin"
+REGISTRY_S3_SECRET_ACCESS_KEY="rustfsadmin"
+REGISTRY_S3_FORCE_PATH_STYLE=true
 ```
 
 ### Configuration Files
@@ -301,6 +334,16 @@ db:
 registry:
   plugins_dir: "./plugins"
   max_output_size: 67108864
+  # Optional S3-compatible binary storage. When enabled, plugin archives
+  # pushed by `easyp-svc plugins push` are lazily downloaded into plugins_dir
+  # (acting as a local cache) and sha256-verified before unpacking.
+  s3:
+    endpoint: "http://localhost:9000"
+    bucket: "easyp-plugins"
+    region: "us-east-1"
+    access_key_id: "rustfsadmin"
+    secret_access_key: "rustfsadmin"
+    force_path_style: true
 worker_pool:
   workers: 4
   queue_size: 16
@@ -492,6 +535,9 @@ task build-plugins
 
 # Start infrastructure
 task up
+
+# Upload plugin archives to S3 storage
+task push-plugins
 
 # Register plugins
 task register-plugins

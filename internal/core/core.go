@@ -307,6 +307,10 @@ func errorCode(err error) string {
 		return "MAX_PLUGINS_EXCEEDED"
 	case errors.Is(err, ErrFeatureDenied):
 		return "FEATURE_DENIED"
+	case errors.Is(err, ErrStorageUnavailable):
+		return "STORAGE_UNAVAILABLE"
+	case errors.Is(err, ErrBinaryNotUploaded):
+		return "BINARY_NOT_UPLOADED"
 	default:
 		return "INTERNAL"
 	}

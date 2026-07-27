@@ -95,16 +95,21 @@ go test ./...            # Standard tests
 - `api.ErrorToStatus()` maps domain errors → gRPC status codes
 - **Plugin name format:** `{group}/{name}:{version}` — validated by `^[a-z][a-z0-9-]*/[a-z][a-z0-9-]*:(v\d+\.\d+\.\d+|latest)$`
 - **Plugin execution:** local binary execution from `plugins/` directory (built by `easyp-svc plugins build`)
-- **Plugin registration:** via gRPC `CreatePlugin` API (automated by `easyp-svc plugins register`)
-- **Testing:** standard `go test`, no external framework; mocks defined in test files
+- **Plugin registration:** via gRPC `CreatePlugin` API (automated by `easyp-svc plugins register`) — metadata only; with S3 enabled the service streams the already-pushed archive from storage, computes its sha256 and records it in the plugin config
+- **Artifact unit:** the whole version directory packed as `tar.gz` (`internal/plugarchive`), stored at `{group}/{name}/{version}/plugin.tgz` — the entrypoint plus any sidecars, never a bare binary
+- **Binary storage:** `core.BinaryStorage` interface (read-only: Download/Open/Exists/Delete), S3 implementation in `internal/adapters/storage`; uploads happen out-of-band via `easyp-svc plugins push`
+- **Testing:** standard `go test` with `stretchr/testify` assertions (`assert`/`require`); mocks defined in test files
 - **Config priority:** CLI flags > env vars > YAML file. See [docs/configuration.md](docs/configuration.md)
 - **Comments:** English only; every exported symbol must have a godoc comment starting with its name; no inline comments on `if`/`for`/`return` lines unless genuinely non-obvious. See [.spec/CODE_STYLE.md](.spec/CODE_STYLE.md) §11.
 
 ## Pitfalls & Gotchas
 
 - **Plugins are local binaries** — service executes plugins from `plugins/` directory, not Docker containers at runtime
+- **S3 mode** — with `registry.s3` configured, `plugins_dir` is a local cache: archives are pushed out-of-band (`plugins push`), then downloaded on demand (singleflight-deduplicated), sha256-verified and unpacked before execution; **push must precede register** or `CreatePlugin` fails with `FAILED_PRECONDITION`; S3 outage surfaces as `UNAVAILABLE`, not `NOT_FOUND`
+- **Pipeline order** — `build` → `push` → `register` (`task run` / `task setup` chain them); `--force` re-push of a registered plugin invalidates its recorded checksum, so re-register it
 - **Entrypoint is always named `plugin`** — build output and migrate scan require `plugins/{group}/{name}/{version}/plugin`; Dockerfiles must `COPY` the entrypoint to `/plugin` (sidecars optional)
 - **`easyp-svc plugins build <registry-path>`** — uses Docker multi-stage builds to extract image filesystems to the output directory (`plugins/` by default); supports `--filter`, `--parallel`, `--force`, `--dry-run`
+- **`easyp-svc plugins push [path]`** — packs each version directory into `plugin.tgz` and uploads it to S3; `--cfg` supplies `registry.s3`, flags override it; `--filter`, `--force`, `--dry-run`
 - **`easyp-svc plugins register [path]`** — registers built plugins via gRPC `CreatePlugin` (default path `plugins`); use `--cfg` for `registry.plugins_dir` as command prefix, `--dry-run`, `--fail-on-error` (default true)
 - **Port 5432 conflict** — if postgres already runs locally, minimal stack uses port 5433 (`EASYP_POSTGRES_PORT`)
 - **Plugin binaries must exist** — run `task build-plugins` before the service can generate code
