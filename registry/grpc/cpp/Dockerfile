@@ -5,7 +5,7 @@ ARG VERSION
 ARG TARGETARCH
 ARG BAZEL_STARTUP_OPTS="--host_jvm_args=-Djava.net.preferIPv4Stack=true"
 ARG BAZEL_JOBS=4
-ARG BAZEL_BUILD_OPTS="--spawn_strategy=local --jobs=${BAZEL_JOBS} --features=-layering_check --host_features=-layering_check --disk_cache=/build/.cache/bazel-disk --repository_cache=/build/.cache/bazel-repo"
+ARG BAZEL_BUILD_OPTS="--spawn_strategy=local --jobs=${BAZEL_JOBS} --features=-layering_check --disk_cache=/build/.cache/bazel-disk --repository_cache=/build/.cache/bazel-repo"
 
 RUN apt-get update \
  && apt-get install -y curl git cmake build-essential autoconf clang libc++-dev libtool pkg-config unzip zip
@@ -20,11 +20,16 @@ WORKDIR /build
 
 RUN git clone --depth 1 --branch ${VERSION} https://github.com/grpc/grpc
 WORKDIR /build/grpc
+# grpc pins its own Bazel toolchain via //tools/bazel: releases up to v1.55.x
+# pin Bazel 5.3.0, which has no --host_features (added in Bazel 6.5). Probe for
+# the flag at build time instead of hard-coding it, so old and new releases
+# share one Dockerfile.
 RUN --mount=type=cache,id=bazel-grpc-disk,target=/build/.cache/bazel-disk,uid=65534,gid=65534,sharing=shared \
     --mount=type=cache,id=bazel-grpc-repo,target=/build/.cache/bazel-repo,uid=65534,gid=65534,sharing=shared \
     --mount=type=cache,id=bazelisk-grpc,target=/build/.cache/bazelisk,uid=65534,gid=65534,sharing=shared \
-    bazelisk ${BAZEL_STARTUP_OPTS} build ${BAZEL_BUILD_OPTS} //src/compiler:grpc_plugin_support \
- && bazelisk ${BAZEL_STARTUP_OPTS} build ${BAZEL_BUILD_OPTS} //src/compiler:grpc_cpp_plugin
+    HOST_FEATURES_OPT="$(bazelisk ${BAZEL_STARTUP_OPTS} help build 2>/dev/null | grep -q -- --host_features && echo --host_features=-layering_check || true)"; \
+    bazelisk ${BAZEL_STARTUP_OPTS} build ${BAZEL_BUILD_OPTS} ${HOST_FEATURES_OPT} //src/compiler:grpc_plugin_support \
+ && bazelisk ${BAZEL_STARTUP_OPTS} build ${BAZEL_BUILD_OPTS} ${HOST_FEATURES_OPT} //src/compiler:grpc_cpp_plugin
 RUN cp /build/grpc/bazel-bin/src/compiler/grpc_cpp_plugin_binary /build/grpc_cpp_plugin_binary 2>/dev/null \
  || cp /build/grpc/bazel-bin/src/compiler/grpc_cpp_plugin /build/grpc_cpp_plugin_binary
 
