@@ -5,7 +5,7 @@ ARG VERSION
 ARG TARGETARCH
 ARG BAZEL_STARTUP_OPTS="--host_jvm_args=-Djava.net.preferIPv4Stack=true"
 ARG BAZEL_JOBS=4
-ARG BAZEL_BUILD_OPTS="--spawn_strategy=local --jobs=${BAZEL_JOBS} --repo_contents_cache=/tmp/bazel-repo-cache --disk_cache=/build/.cache/bazel-disk --repository_cache=/build/.cache/bazel-repo"
+ARG BAZEL_BUILD_OPTS="--spawn_strategy=local --jobs=${BAZEL_JOBS} --disk_cache=/build/.cache/bazel-disk --repository_cache=/build/.cache/bazel-repo"
 
 RUN apt-get update \
  && apt-get install -y curl git cmake build-essential autoconf clang libc++-dev libtool pkg-config unzip zip
@@ -22,15 +22,22 @@ RUN curl -fsSL -o protoc.tar.gz https://github.com/protocolbuffers/protobuf/rele
  || curl -fsSL -o protoc.tar.gz https://github.com/protocolbuffers/protobuf/releases/download/${VERSION}/protobuf-all-${VERSION#v}.tar.gz \
  && tar --strip-components=1 -zxf protoc.tar.gz \
  && rm protoc.tar.gz
+# protobuf releases from v29 on ship a .bazelversion pinning Bazel < 9, which
+# has no --repo_contents_cache. Probe the toolchain the source actually pins
+# and record the result, so old and new releases share one Dockerfile.
+RUN --mount=type=cache,id=bazelisk-protoc,target=/build/.cache/bazelisk,uid=65534,gid=65534,sharing=shared \
+    bazelisk ${BAZEL_STARTUP_OPTS} help build 2>/dev/null | grep -q -- --repo_contents_cache \
+    && echo "--repo_contents_cache=/tmp/bazel-repo-cache" > /build/.bazelopts \
+    || : > /build/.bazelopts
 RUN --mount=type=cache,id=bazel-protoc-disk,target=/build/.cache/bazel-disk,uid=65534,gid=65534,sharing=shared \
     --mount=type=cache,id=bazel-protoc-repo,target=/build/.cache/bazel-repo,uid=65534,gid=65534,sharing=shared \
     --mount=type=cache,id=bazelisk-protoc,target=/build/.cache/bazelisk,uid=65534,gid=65534,sharing=shared \
-    bazelisk ${BAZEL_STARTUP_OPTS} build ${BAZEL_BUILD_OPTS} '//:protoc_lib'
+    bazelisk ${BAZEL_STARTUP_OPTS} build ${BAZEL_BUILD_OPTS} $(cat /build/.bazelopts) '//:protoc_lib'
 COPY --link BUILD csharp.cc plugins/
 RUN --mount=type=cache,id=bazel-protoc-disk,target=/build/.cache/bazel-disk,uid=65534,gid=65534,sharing=shared \
     --mount=type=cache,id=bazel-protoc-repo,target=/build/.cache/bazel-repo,uid=65534,gid=65534,sharing=shared \
     --mount=type=cache,id=bazelisk-protoc,target=/build/.cache/bazelisk,uid=65534,gid=65534,sharing=shared \
-    bazelisk ${BAZEL_STARTUP_OPTS} build ${BAZEL_BUILD_OPTS} '//plugins:protoc-gen-csharp.stripped'
+    bazelisk ${BAZEL_STARTUP_OPTS} build ${BAZEL_BUILD_OPTS} $(cat /build/.bazelopts) '//plugins:protoc-gen-csharp.stripped'
 
 FROM mcr.microsoft.com/dotnet/sdk:8.0.421-bookworm-slim@sha256:ebecce75fb42c4c14db108f88054d20a93b0b9e6dfbacad56c8f744c342cf9ef AS dotnetrestore
 ARG VERSION
