@@ -6,7 +6,8 @@ ARG CRATE_NAME
 ARG BINARY_NAME=protoc-gen-connect-rust
 RUN apk add musl-dev upx --no-cache
 RUN cargo install ${CRATE_NAME} --version ${VERSION#v} --root /out \
-    && upx --best --lzma /out/bin/${BINARY_NAME}
+    && upx --best --lzma /out/bin/${BINARY_NAME} \
+    && cp /out/bin/${BINARY_NAME} /plugin
 
 FROM scratch
-COPY --from=build /out/bin/${BINARY_NAME} /plugin
+COPY --from=build /plugin /plugin

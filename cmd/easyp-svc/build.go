@@ -124,11 +124,12 @@ func (j buildJob) key() string {
 }
 
 // cached reports whether the plugin version has already been built.
-// The canonical artifact is always <outputDir>/plugin.
+// The canonical artifact is always a regular file at <outputDir>/plugin;
+// a directory of that name means a broken build, not a cached one.
 func (j buildJob) cached() bool {
-	_, err := os.Stat(filepath.Join(j.outputDir, pluginBinaryName))
+	info, err := os.Stat(filepath.Join(j.outputDir, pluginBinaryName))
 
-	return err == nil
+	return err == nil && info.Mode().IsRegular()
 }
 
 func runPluginsBuild(
@@ -489,7 +490,7 @@ func dockerfilePath(job buildJob) string {
 func normalizeOutput(job buildJob) (string, error) {
 	pluginFile := filepath.Join(job.outputDir, pluginBinaryName)
 	info, err := os.Stat(pluginFile)
-	if err != nil {
+	if err != nil || !info.Mode().IsRegular() {
 		return "", ErrNoOutputBinary
 	}
 	_ = os.Chmod(pluginFile, binPermissions)

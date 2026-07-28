@@ -1,6 +1,9 @@
 package main
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -196,5 +199,54 @@ func TestDockerfilePath(t *testing.T) {
 	}
 	if got, want := dockerfilePath(buildJob{pluginDir: "/r/grpc/go", dockerfile: "/abs/Dockerfile"}), "/abs/Dockerfile"; got != want {
 		t.Errorf("absolute: expected %q, got %q", want, got)
+	}
+}
+
+func TestBuildJobCached(t *testing.T) {
+	t.Parallel()
+
+	t.Run("regular file is cached", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, pluginBinaryName), []byte("bin"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if !(buildJob{outputDir: dir}).cached() {
+			t.Error("expected a regular plugin file to count as cached")
+		}
+	})
+
+	// A directory named "plugin" is what a Dockerfile produces when it copies
+	// a directory instead of the entrypoint; it must not pass for a build.
+	t.Run("directory is not cached", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		if err := os.Mkdir(filepath.Join(dir, pluginBinaryName), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if (buildJob{outputDir: dir}).cached() {
+			t.Error("expected a plugin directory not to count as cached")
+		}
+	})
+
+	t.Run("missing is not cached", func(t *testing.T) {
+		t.Parallel()
+		if (buildJob{outputDir: t.TempDir()}).cached() {
+			t.Error("expected a missing plugin not to count as cached")
+		}
+	})
+}
+
+func TestNormalizeOutputRejectsDirectory(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, pluginBinaryName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := normalizeOutput(buildJob{outputDir: dir})
+	if !errors.Is(err, ErrNoOutputBinary) {
+		t.Errorf("expected ErrNoOutputBinary, got %v", err)
 	}
 }
