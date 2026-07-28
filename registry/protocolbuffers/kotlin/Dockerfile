@@ -5,6 +5,7 @@ ARG VERSION
 ARG TARGETARCH
 ARG BAZEL_STARTUP_OPTS="--host_jvm_args=-Djava.net.preferIPv4Stack=true"
 ARG BAZEL_JOBS=4
+ARG BAZEL_FALLBACK_VERSION=7.6.1
 ARG BAZEL_BUILD_OPTS="--spawn_strategy=local --jobs=${BAZEL_JOBS} --disk_cache=/build/.cache/bazel-disk --repository_cache=/build/.cache/bazel-repo"
 
 RUN apt-get update \
@@ -22,6 +23,10 @@ RUN curl -fsSL -o protoc.tar.gz https://github.com/protocolbuffers/protobuf/rele
  || curl -fsSL -o protoc.tar.gz https://github.com/protocolbuffers/protobuf/releases/download/${VERSION}/protobuf-all-${VERSION#v}.tar.gz \
  && tar --strip-components=1 -zxf protoc.tar.gz \
  && rm protoc.tar.gz
+# Release tarballs carry no root .bazelversion, so bazelisk would pull the
+# newest Bazel, which is too new for these sources. Pin a working toolchain
+# unless the source already declares one.
+RUN [ -f .bazelversion ] || [ -f .bazeliskrc ] || echo "${BAZEL_FALLBACK_VERSION}" > .bazelversion
 # protobuf releases from v29 on ship a .bazelversion pinning Bazel < 9, which
 # has no --repo_contents_cache. Probe the toolchain the source actually pins
 # and record the result, so old and new releases share one Dockerfile.
