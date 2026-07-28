@@ -85,8 +85,62 @@ func getPluginsCommand() *cli.Command {
 		Usage: "Manage plugins",
 		Commands: []*cli.Command{
 			getPluginsBuildCommand(),
+			getPluginsPackCommand(),
 			getPluginsPushCommand(),
 			getPluginsRegisterCommand(),
+		},
+	}
+}
+
+func getPluginsPackCommand() *cli.Command {
+	return &cli.Command{
+		Name:  "pack",
+		Usage: "Pack built plugin version directories into tar.gz archives on disk",
+		Description: "Writes each plugin version directory to {out}/{group}/{name}/{version}/plugin.tgz. " +
+			"The layout mirrors the S3 object keys used by `plugins push`, so a packed tree can be " +
+			"uploaded as-is later. Existing archives are skipped unless --force is set.",
+		ArgsUsage: "[path]",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:     "out",
+				Usage:    "directory to write archives to",
+				Required: true,
+			},
+			&cli.StringFlag{
+				Name:  "filter",
+				Usage: "glob filter pattern for plugins (e.g. 'protocolbuffers/*' or 'grpc/go:v1.6.2')",
+				Value: "",
+			},
+			&cli.BoolFlag{
+				Name:  "force",
+				Usage: "re-pack even if the archive already exists",
+				Value: false,
+			},
+			&cli.BoolFlag{
+				Name:  "dry-run",
+				Usage: "print the pack plan without writing archives",
+				Value: false,
+			},
+			&cli.BoolFlag{
+				Name:  "non-interactive",
+				Usage: "disable interactive UI and dynamic progress bars",
+				Value: false,
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			scanPath := defaultPluginsScanPath
+			if args := cmd.Args().Slice(); len(args) >= 1 {
+				scanPath = args[0]
+			}
+
+			return runPluginsPack(ctx, packOptions{
+				scanPath:       scanPath,
+				outDir:         cmd.String("out"),
+				filter:         cmd.String("filter"),
+				force:          cmd.Bool("force"),
+				dryRun:         cmd.Bool("dry-run"),
+				nonInteractive: cmd.Bool("non-interactive"),
+			})
 		},
 	}
 }

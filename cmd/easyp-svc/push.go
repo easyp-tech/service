@@ -37,7 +37,7 @@ type pushOptions struct {
 
 // archiveObjectKey builds the storage object key for a plugin archive.
 func archiveObjectKey(plg pluginInfo) string {
-	return path.Join(plg.group, plg.name, plg.version, "plugin.tgz")
+	return path.Join(plg.group, plg.name, plg.version, plugarchive.ArchiveName)
 }
 
 // resolveS3Options merges S3 settings from CLI flags and the service config.

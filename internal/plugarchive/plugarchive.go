@@ -19,6 +19,10 @@ import (
 // EntrypointName is the required executable name inside every plugin archive.
 const EntrypointName = "plugin"
 
+// ArchiveName is the file name a packed plugin version directory is stored
+// under, both as an S3 object and on disk.
+const ArchiveName = "plugin.tgz"
+
 // Package errors.
 var (
 	ErrUnsafePath        = errors.New("unsafe path in archive")
