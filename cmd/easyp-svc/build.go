@@ -423,6 +423,10 @@ func buildOne(ctx context.Context, job buildJob, keepGoing bool, tracker *buildT
 		return keepOrFail(keepGoing, fmt.Errorf("build %s: %w", job.key(), normErr))
 	}
 
+	// A log left over from an earlier failure would otherwise outlive the
+	// successful rebuild and misreport this version as broken.
+	_ = os.Remove(filepath.Join(job.outputDir, buildLogName))
+
 	tracker.finish(job.key(), true, details, dur)
 
 	return nil

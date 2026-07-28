@@ -92,9 +92,33 @@ versions:
   build_args:
     BASE_IMAGE: debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc
     BAZEL_FALLBACK_VERSION: 6.5.0
-- v21.9
-- v21.8
-- v21.7
-- v21.12
-- v21.11
-- v21.10
+- version: v21.9
+  build_args:
+    BASE_IMAGE: debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc
+    BAZEL_FALLBACK_VERSION: 5.4.1
+    BAZEL_STARTUP_OPTS: "--host_jvm_args=-Djava.net.preferIPv4Stack=true --output_user_root=/tmp/bzr"
+- version: v21.8
+  build_args:
+    BASE_IMAGE: debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc
+    BAZEL_FALLBACK_VERSION: 5.4.1
+    BAZEL_STARTUP_OPTS: "--host_jvm_args=-Djava.net.preferIPv4Stack=true --output_user_root=/tmp/bzr"
+- version: v21.7
+  build_args:
+    BASE_IMAGE: debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc
+    BAZEL_FALLBACK_VERSION: 5.4.1
+    BAZEL_STARTUP_OPTS: "--host_jvm_args=-Djava.net.preferIPv4Stack=true --output_user_root=/tmp/bzr"
+- version: v21.12
+  build_args:
+    BASE_IMAGE: debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc
+    BAZEL_FALLBACK_VERSION: 5.4.1
+    BAZEL_STARTUP_OPTS: "--host_jvm_args=-Djava.net.preferIPv4Stack=true --output_user_root=/tmp/bzr"
+- version: v21.11
+  build_args:
+    BASE_IMAGE: debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc
+    BAZEL_FALLBACK_VERSION: 5.4.1
+    BAZEL_STARTUP_OPTS: "--host_jvm_args=-Djava.net.preferIPv4Stack=true --output_user_root=/tmp/bzr"
+- version: v21.10
+  build_args:
+    BASE_IMAGE: debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc
+    BAZEL_FALLBACK_VERSION: 5.4.1
+    BAZEL_STARTUP_OPTS: "--host_jvm_args=-Djava.net.preferIPv4Stack=true --output_user_root=/tmp/bzr"
