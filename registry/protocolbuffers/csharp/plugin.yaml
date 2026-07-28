@@ -38,21 +38,61 @@ versions:
 - v25.2
 - v25.1
 - v25.0
-- v24.4
-- v24.3
-- v24.2
-- v24.1
-- v24.0
-- v23.4
-- v23.3
-- v23.2
-- v23.1
-- v23.0
-- v22.4
-- v22.3
-- v22.2
-- v22.1
-- v22.0
+- version: v24.4
+  build_args:
+    BASE_IMAGE: debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc
+- version: v24.3
+  build_args:
+    BASE_IMAGE: debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc
+- version: v24.2
+  build_args:
+    BASE_IMAGE: debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc
+- version: v24.1
+  build_args:
+    BASE_IMAGE: debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc
+- version: v24.0
+  build_args:
+    BASE_IMAGE: debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc
+- version: v23.4
+  build_args:
+    BASE_IMAGE: debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc
+    BAZEL_FALLBACK_VERSION: 6.5.0
+- version: v23.3
+  build_args:
+    BASE_IMAGE: debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc
+    BAZEL_FALLBACK_VERSION: 6.5.0
+- version: v23.2
+  build_args:
+    BASE_IMAGE: debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc
+    BAZEL_FALLBACK_VERSION: 6.5.0
+- version: v23.1
+  build_args:
+    BASE_IMAGE: debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc
+    BAZEL_FALLBACK_VERSION: 6.5.0
+- version: v23.0
+  build_args:
+    BASE_IMAGE: debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc
+    BAZEL_FALLBACK_VERSION: 6.5.0
+- version: v22.4
+  build_args:
+    BASE_IMAGE: debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc
+    BAZEL_FALLBACK_VERSION: 6.5.0
+- version: v22.3
+  build_args:
+    BASE_IMAGE: debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc
+    BAZEL_FALLBACK_VERSION: 6.5.0
+- version: v22.2
+  build_args:
+    BASE_IMAGE: debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc
+    BAZEL_FALLBACK_VERSION: 6.5.0
+- version: v22.1
+  build_args:
+    BASE_IMAGE: debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc
+    BAZEL_FALLBACK_VERSION: 6.5.0
+- version: v22.0
+  build_args:
+    BASE_IMAGE: debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc
+    BAZEL_FALLBACK_VERSION: 6.5.0
 - v21.9
 - v21.8
 - v21.7
