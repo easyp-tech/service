@@ -15,7 +15,11 @@ versions:
 - v30.2
 - v30.1
 - v30.0
-- v3.14.0
+- version: v3.14.0
+  build_args:
+    BASE_IMAGE: debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc
+    BAZEL_FALLBACK_VERSION: 5.4.1
+    BAZEL_STARTUP_OPTS: "--host_jvm_args=-Djava.net.preferIPv4Stack=true --output_user_root=/tmp/bzr"
 - v29.5
 - v29.3
 - v29.2
