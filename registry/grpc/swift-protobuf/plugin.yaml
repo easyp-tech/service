@@ -7,7 +7,17 @@ versions:
 - v2.1.1
 - v2.1.0
 - v2.0.0
-- v1.3.0
-- v1.2.0
-- v1.1.0
-- v1.0.0
+# The 1.x line exposes the product as protoc-gen-grpc-swift; the -2 suffix
+# only exists from grpc-swift 2.x on.
+- version: v1.3.0
+  build_args:
+    BINARY_NAME: protoc-gen-grpc-swift
+- version: v1.2.0
+  build_args:
+    BINARY_NAME: protoc-gen-grpc-swift
+- version: v1.1.0
+  build_args:
+    BINARY_NAME: protoc-gen-grpc-swift
+- version: v1.0.0
+  build_args:
+    BINARY_NAME: protoc-gen-grpc-swift
