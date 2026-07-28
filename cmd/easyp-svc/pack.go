@@ -13,6 +13,9 @@ import (
 	"github.com/easyp-tech/service/internal/plugarchive"
 )
 
+// archivePermissions is the mode packed archives are left with on disk.
+const archivePermissions = 0o644
+
 // ErrPackFailed is returned when one or more plugin archives failed to pack.
 var ErrPackFailed = errors.New("plugin pack failed")
 
@@ -144,6 +147,14 @@ func packSinglePlugin(plg pluginInfo, opts packOptions) (bool, error) {
 	tmpPath, err := packPluginDirTo(versionDir, filepath.Dir(destPath))
 	if err != nil {
 		return false, err
+	}
+
+	// CreateTemp makes the file 0600; archives are meant to be readable by
+	// whoever consumes the packed tree.
+	if err := os.Chmod(tmpPath, archivePermissions); err != nil {
+		_ = os.Remove(tmpPath)
+
+		return false, fmt.Errorf("os.Chmod: %w", err)
 	}
 
 	if err := os.Rename(tmpPath, destPath); err != nil {
