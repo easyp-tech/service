@@ -96,6 +96,7 @@ type registerOptions struct {
 	addr           string
 	filter         string
 	pluginsPrefix  string
+	token          string
 	tls            clientTLSOptions
 	nonInteractive bool
 	dryRun         bool
@@ -126,7 +127,15 @@ func runPluginsRegister(ctx context.Context, opts registerOptions) error {
 		return err
 	}
 
-	client, err := sdk.NewClient(opts.addr, tlsOpt)
+	// CreatePlugin is a mutating method, so the call needs a token. An empty one
+	// is passed through deliberately: the server's rejection names the problem
+	// better than a client-side guess would.
+	sdkOpts := []sdk.Option{tlsOpt}
+	if opts.token != "" {
+		sdkOpts = append(sdkOpts, sdk.WithToken(opts.token))
+	}
+
+	client, err := sdk.NewClient(opts.addr, sdkOpts...)
 	if err != nil {
 		return fmt.Errorf("failed to connect to gRPC server at %s: %w", opts.addr, err)
 	}

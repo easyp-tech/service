@@ -62,3 +62,18 @@ audit:
   pre_create_months: 3          # months of partitions created ahead of time
   partition_check_interval: 6h  # period between partition maintenance passes
   partition_op_timeout: 30s     # bounds a single maintenance pass
+# Credentials for the mutating methods (CreatePlugin/UpdatePlugin/DeletePlugin).
+# Reads stay anonymous. Only sha256 digests live here, never the tokens, so this
+# section is safe to commit; the token itself belongs in your secret manager.
+# Generate a pair with: easyp-svc auth new-token --name ci
+# An empty list denies every write — a forgotten config must break registration
+# rather than leave the registry open to the internet.
+#
+# The entry below is the digest of the literal string "local-dev-token" so the
+# compose stack works out of the box. It is published in this repository and
+# therefore worthless as a secret: REPLACE IT before this config goes anywhere
+# a stranger can reach.
+auth:
+  write_tokens:
+    - name: "local-dev"
+      sha256: "0cd48eed49739dfdd99efaef37d251aae5a80866e5954763c6597943fff5ce9b"

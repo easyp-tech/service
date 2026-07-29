@@ -1,6 +1,7 @@
 package sdk
 
 import (
+	"context"
 	"crypto/tls"
 	"log/slog"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/metadata"
 )
 
 // config holds the internal configuration for the client.
@@ -75,6 +77,33 @@ func WithTransportCredentials(creds credentials.TransportCredentials) Option {
 	return optionFunc(func(c *config) {
 		c.transportCreds = creds
 	})
+}
+
+// WithToken authenticates the client with a write token.
+//
+// Reads are anonymous, so this is only needed for CreatePlugin, UpdatePlugin
+// and DeletePlugin. The token travels in the authorization header, which means
+// it is only as protected as the connection: pair it with TLS.
+func WithToken(token string) Option {
+	return optionFunc(func(c *config) {
+		c.unaryInterceptors = append(c.unaryInterceptors, bearerTokenInterceptor(token))
+	})
+}
+
+// bearerTokenInterceptor attaches the token to every outgoing call.
+func bearerTokenInterceptor(token string) grpc.UnaryClientInterceptor {
+	return func(
+		ctx context.Context,
+		method string,
+		req, reply any,
+		cc *grpc.ClientConn,
+		invoker grpc.UnaryInvoker,
+		opts ...grpc.CallOption,
+	) error {
+		authedCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+
+		return invoker(authedCtx, method, req, reply, cc, opts...)
+	}
 }
 
 // WithMaxRetries sets the maximum number of retry attempts for transient errors.

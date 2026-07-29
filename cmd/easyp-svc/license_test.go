@@ -98,3 +98,23 @@ func TestResolveLicense(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
+func TestResolveWriteToken(t *testing.T) {
+	t.Run("flag wins over environment", func(t *testing.T) {
+		t.Setenv(writeTokenEnv, "from-env")
+
+		require.Equal(t, "from-flag", resolveWriteToken("from-flag"))
+	})
+
+	t.Run("environment is the fallback", func(t *testing.T) {
+		t.Setenv(writeTokenEnv, "  from-env\n")
+
+		require.Equal(t, "from-env", resolveWriteToken(""))
+	})
+
+	t.Run("nothing configured means an unauthenticated call", func(t *testing.T) {
+		t.Setenv(writeTokenEnv, "")
+
+		require.Empty(t, resolveWriteToken(""))
+	})
+}

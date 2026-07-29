@@ -59,6 +59,7 @@ EasyP API Service provides centralized management and execution of protobuf/gRPC
 - 🌐 **gRPC + MCP** API
 - 📈 **Health checks** and metrics
 - 🔑 **Two-tier licensing** (Community / Enterprise)
+- 🔐 **Token-authenticated writes**, anonymous reads
 - 📝 **Audit logging** for all operations
 
 ## Architecture
@@ -397,6 +398,42 @@ default — plaintext is never reached by omitting a flag.
 
 `certs/` is gitignored and holds development material only. In production the
 paths point at certificates issued by your own CA.
+
+### Authentication
+
+Reads are anonymous. The three mutating methods — `CreatePlugin`,
+`UpdatePlugin`, `DeletePlugin` — require a write token:
+
+```bash
+# Generates the token and prints the config entry that authorises it
+easyp-svc auth new-token --name ci
+```
+
+The command prints the token once and a `sha256` digest. Only the digest goes
+into the configuration, so `config.yml` stays safe to commit; the token belongs
+in your secret manager:
+
+```yaml
+auth:
+  write_tokens:
+    - name: "ci"
+      sha256: "…"
+```
+
+Clients pass it with `--token`, via `EASYP_TOKEN`, or `sdk.WithToken(...)`. It
+travels in the `authorization` header, so it is only as protected as the
+connection — use it over TLS.
+
+Two properties worth knowing:
+
+- **An empty token list denies every write.** A forgotten configuration breaks
+  plugin registration rather than leaving the registry open.
+- **Any method not explicitly anonymous requires a token.** A new RPC is
+  protected until someone decides otherwise.
+
+The token's name appears in the audit log, so `SELECT metadata FROM audit_log`
+shows which credential performed an operation. Multiple tokens let you rotate
+without downtime: add the new one, deploy, remove the old.
 
 ### Licensing
 

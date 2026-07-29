@@ -21,6 +21,7 @@ type Config struct {
 	License    LicenseConfig    `env:", prefix=LICENSE_"     yaml:"license"`
 	RateLimit  RateLimitConfig  `env:", prefix=RATE_LIMIT_"  yaml:"rate_limit"`
 	Audit      AuditConfig      `env:", prefix=AUDIT_"       yaml:"audit"`
+	Auth       AuthConfig       `env:", prefix=AUTH_"        yaml:"auth"`
 }
 
 // Server holds HTTP/gRPC server settings.
@@ -212,6 +213,10 @@ func (c *Config) Validate() error {
 
 	if c.Audit.RetentionMonths < 0 {
 		return fmt.Errorf("audit.retention_months must not be negative, got %d", c.Audit.RetentionMonths)
+	}
+
+	if err := c.Auth.Validate(); err != nil {
+		return err
 	}
 
 	if c.Registry.S3.Enabled() {

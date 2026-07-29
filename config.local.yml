@@ -53,3 +53,10 @@ audit:
   pre_create_months: 3
   partition_check_interval: 6h
   partition_op_timeout: 30s
+# Local mode ships a fixed, publicly known token so `task run-local` works out of
+# the box. It is the digest of the literal string "local-dev-token" — never use
+# this anywhere reachable from a network.
+auth:
+  write_tokens:
+    - name: "local-dev"
+      sha256: "0cd48eed49739dfdd99efaef37d251aae5a80866e5954763c6597943fff5ce9b"

@@ -5,7 +5,45 @@ Authentication and licensing system for EasyP Service.
 
 ## Overview
 
-EasyP uses **PASETO v4.public** tokens for license management. There is no user authentication — the service is designed to run within a trusted network. Access control is based on **license tiers** (community vs enterprise).
+Two separate mechanisms share this document:
+
+- **Authentication** decides whether a caller may mutate the registry. Reads
+  (`GenerateCode`, `Plugins`) are anonymous; `CreatePlugin`, `UpdatePlugin` and
+  `DeletePlugin` require a write token. See [Write tokens](#write-tokens).
+- **Licensing** decides which features are available, via **PASETO v4.public**
+  tokens and **license tiers** (community vs enterprise). It is not an access
+  control mechanism and never gates the basic lock.
+
+There is no user model: the service has no users, organisations or sessions, and
+no tables for them. When identity arrives it comes from a dedicated service and
+this one only verifies what it issues — see
+[auth-roadmap.md](features/auth-roadmap.md).
+
+## Write tokens
+
+The interceptor requires credentials for every method except an explicit public
+list, so an RPC added to the proto is protected until it is deliberately made
+anonymous. A missing configuration denies all writes rather than allowing them.
+
+```yaml
+auth:
+  write_tokens:
+    - name: "ci"
+      sha256: "…"   # sha256 of the token; the token itself is never stored
+```
+
+Generate a pair with `easyp-svc auth new-token --name ci`. The digest is not a
+secret and belongs in version control or a ConfigMap; the token belongs in your
+secret manager. Clients pass it as `--token`, `EASYP_TOKEN`, or
+`sdk.WithToken(...)`, and it travels in the `authorization` header as
+`Bearer <token>` — protected only by the connection, so use it over TLS.
+
+Multiple named tokens exist so that rotation needs no downtime (add, deploy,
+remove) and so the audit log records *which* credential acted:
+`AuditEntry.Metadata["actor"]` carries the token name.
+
+Rejections are `Unauthenticated` and never say whether the token was absent or
+merely wrong; the reason is logged and counted in `easyp_auth_failures_total`.
 
 ## License Tiers
 

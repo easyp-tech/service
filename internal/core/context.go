@@ -20,3 +20,21 @@ func CallerIPFromContext(ctx context.Context) string {
 
 	return unknownValue
 }
+
+type actorKey struct{}
+
+// WithActor returns a new context carrying the name of the authenticated
+// caller. Anonymous methods leave it unset.
+func WithActor(ctx context.Context, actor string) context.Context {
+	return context.WithValue(ctx, actorKey{}, actor)
+}
+
+// ActorFromContext extracts the authenticated caller's name.
+// Returns "unknown" if the request was not authenticated.
+func ActorFromContext(ctx context.Context) string {
+	if actor, ok := ctx.Value(actorKey{}).(string); ok && actor != "" {
+		return actor
+	}
+
+	return unknownValue
+}

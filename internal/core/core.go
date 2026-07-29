@@ -320,11 +320,17 @@ func errorCode(err error) string {
 	return "INTERNAL"
 }
 
+// auditActorKey is the metadata field naming the authenticated caller. It lives
+// in Metadata rather than a column because the audit table is partitioned and
+// already carries a JSON payload.
+const auditActorKey = "actor"
+
 // auditSuccess creates and sends a success audit entry.
 func (c *Core) auditSuccess(ctx context.Context, opType, pluginName string, start time.Time, metadata map[string]any) {
 	if metadata == nil {
 		metadata = make(map[string]any)
 	}
+	metadata[auditActorKey] = ActorFromContext(ctx)
 	id, _ := uuid.NewV4()
 	c.sendAudit(ctx, AuditEntry{
 		ID:            id,
@@ -340,7 +346,7 @@ func (c *Core) auditSuccess(ctx context.Context, opType, pluginName string, star
 
 // auditError creates and sends an error audit entry.
 func (c *Core) auditError(ctx context.Context, opType, pluginName string, start time.Time, err error) {
-	metadata := make(map[string]any)
+	metadata := map[string]any{auditActorKey: ActorFromContext(ctx)}
 	id, _ := uuid.NewV4()
 	c.sendAudit(ctx, AuditEntry{
 		ID:            id,

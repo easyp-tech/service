@@ -149,3 +149,46 @@ func TestAuditErrorEntryCarriesErrorCode(t *testing.T) {
 	assert.NotEmpty(t, entry.ErrorCode)
 	assert.NotEmpty(t, entry.ErrorMessage)
 }
+
+// TestAuditRecordsActor checks the authenticated caller reaches the audit trail,
+// which is the whole point of naming tokens rather than sharing one.
+func TestAuditRecordsActor(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		actor     string
+		wantActor string
+	}{
+		{
+			name:      "authenticated call names the token",
+			actor:     "ci",
+			wantActor: "ci",
+		},
+		{
+			name:      "anonymous call is recorded as unknown",
+			actor:     "",
+			wantActor: "unknown",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+			if tt.actor != "" {
+				ctx = WithActor(ctx, tt.actor)
+			}
+
+			sink := &fakeSink{}
+			module := New(nil, failingRegistry{}, enterpriseGate(), sink, testLogger())
+
+			_, err := module.ListPlugins(ctx, PluginFilter{})
+			require.Error(t, err)
+
+			require.Equal(t, 1, sink.count())
+			assert.Equal(t, tt.wantActor, sink.entries[0].Metadata["actor"])
+		})
+	}
+}

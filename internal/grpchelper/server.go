@@ -93,7 +93,7 @@ func buildUnaryInterceptors(
 		),
 	}
 
-	return append([]grpc.UnaryServerInterceptor{
+	chain := []grpc.UnaryServerInterceptor{
 		TraceLoggingUnaryServerInterceptor(log),
 		realip.UnaryServerInterceptor(nil, nil),
 		callerIPUnaryInterceptor(),
@@ -101,8 +101,14 @@ func buildUnaryInterceptors(
 		logging.UnaryServerInterceptor(interceptorLogger(log), loggingOpts...),
 		grpc_recovery.UnaryServerInterceptor(grpc_recovery.WithRecoveryHandlerContext(recoveryFunc(metr, errInternal))),
 		grpc_validator.UnaryServerInterceptor(),
-		UnaryConvertCodesServerInterceptor(converter),
-	}, extraUnary...)
+	}
+	chain = append(chain, extraUnary...)
+
+	// The code converter goes last, which makes it the innermost interceptor and
+	// therefore the only one wrapping the handler alone. It translates domain
+	// errors into gRPC codes; interceptors already speak gRPC, so running it
+	// outside them would relabel their statuses as Internal.
+	return append(chain, UnaryConvertCodesServerInterceptor(converter))
 }
 
 func buildStreamInterceptors(
@@ -121,7 +127,7 @@ func buildStreamInterceptors(
 		),
 	}
 
-	return append([]grpc.StreamServerInterceptor{
+	chain := []grpc.StreamServerInterceptor{
 		TraceLoggingStreamServerInterceptor(log),
 		realip.StreamServerInterceptor(nil, nil),
 		callerIPStreamInterceptor(),
@@ -129,8 +135,11 @@ func buildStreamInterceptors(
 		logging.StreamServerInterceptor(interceptorLogger(log), loggingOpts...),
 		grpc_recovery.StreamServerInterceptor(grpc_recovery.WithRecoveryHandlerContext(recoveryFunc(metr, errInternal))),
 		grpc_validator.StreamServerInterceptor(),
-		StreamConvertCodesServerInterceptor(converter),
-	}, extraStream...)
+	}
+	chain = append(chain, extraStream...)
+
+	// Innermost, for the same reason as the unary chain above.
+	return append(chain, StreamConvertCodesServerInterceptor(converter))
 }
 
 func extractCallerIP(ctx context.Context) string {

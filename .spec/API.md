@@ -42,10 +42,32 @@ Order matters — applied in this sequence:
 4. **structured_logging** — slog request/response logging
 5. **panic_recovery** — Recover panics, increment `panics_total` counter
 6. **validation** — Protobuf field validation
-7. **error_code_conversion** — `ErrorToStatus()` domain→gRPC mapping
-8. **rate_limit** — Per-IP token bucket (via FeatureGate)
+7. **rate_limit** — Per-IP token bucket (via FeatureGate)
+8. **auth** — Write token check; anonymous methods pass through
 9. **license** — Feature availability check
-10. **audit** — Async audit event via channel
+10. **error_code_conversion** — `ErrorToStatus()` domain→gRPC mapping
+11. **audit** — Async audit event, emitted from the handler
+
+`error_code_conversion` is the **innermost** interceptor: it wraps the handler
+alone, so it translates domain errors without relabelling statuses that
+interceptors produce. Steps 8–10 sit outside it and must therefore return
+`status.Errorf` themselves — an unclassified error reaches the client as
+`codes.Unknown`.
+
+### Authentication per method
+
+| RPC | Credentials |
+|-----|-------------|
+| `GenerateCode` | anonymous |
+| `Plugins` | anonymous |
+| `CreatePlugin` | write token |
+| `UpdatePlugin` | write token |
+| `DeletePlugin` | write token |
+| `grpc.health.v1.Health/*` | anonymous |
+
+The list is an allow-list: any RPC not named as anonymous requires a token, so a
+new method is protected until someone decides otherwise. See
+[AUTH.md](AUTH.md#write-tokens).
 
 ## Plugin Name Format
 

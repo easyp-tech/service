@@ -24,6 +24,7 @@ const (
 	flagTLSCert        = "tls-cert"
 	flagTLSKey         = "tls-key"
 	flagInsecure       = "insecure"
+	flagToken          = "token"
 
 	argPath = "[path]"
 
@@ -60,6 +61,30 @@ func getCommands() []*cli.Command {
 	return []*cli.Command{
 		getServiceCommand(),
 		getPluginsCommand(),
+		getAuthCommand(),
+	}
+}
+
+func getAuthCommand() *cli.Command {
+	return &cli.Command{
+		Name:  "auth",
+		Usage: "Manage credentials for the mutating API methods",
+		Commands: []*cli.Command{
+			{
+				Name:  "new-token",
+				Usage: "Generate a write token and print the config entry authorising it",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:  "name",
+						Usage: "label identifying this token in logs and the audit trail",
+						Value: "unnamed",
+					},
+				},
+				Action: func(_ context.Context, cmd *cli.Command) error {
+					return runAuthNewToken(cmd.String("name"))
+				},
+			},
+		},
 	}
 }
 
@@ -231,6 +256,7 @@ func getPluginsRegisterCommand() *cli.Command {
 				addr:          cmd.String("addr"),
 				filter:        cmd.String(flagFilter),
 				pluginsPrefix: pluginsPrefix,
+				token:         resolveWriteToken(cmd.String(flagToken)),
 				tls: clientTLSOptions{
 					caFile:   cmd.String(flagTLSCA),
 					certFile: cmd.String(flagTLSCert),
@@ -330,7 +356,7 @@ func pushFlags() []cli.Flag {
 
 // registerFlags defines the flags of the corresponding subcommand.
 func registerFlags() []cli.Flag {
-	return []cli.Flag{
+	return append([]cli.Flag{
 		&cli.StringFlag{
 			Name:  "addr",
 			Usage: "gRPC server address",
@@ -366,6 +392,13 @@ func registerFlags() []cli.Flag {
 			Usage: "prefix directory for plugins on the server (overrides registry.plugins_dir from --cfg)",
 			Value: defaultPluginsPrefix,
 		},
+	}, connectionFlags()...)
+}
+
+// connectionFlags defines how a client command reaches and authenticates to the
+// service: transport security first, then the credential.
+func connectionFlags() []cli.Flag {
+	return []cli.Flag{
 		&cli.StringFlag{
 			Name:  flagTLSCA,
 			Usage: "PEM bundle of the CA that signed the server certificate (default: system trust store)",
@@ -385,6 +418,11 @@ func registerFlags() []cli.Flag {
 			Name:  flagInsecure,
 			Usage: "connect over plaintext, disabling transport security entirely (local development only)",
 			Value: false,
+		},
+		&cli.StringFlag{
+			Name:  flagToken,
+			Usage: "write token authorising CreatePlugin (falls back to " + writeTokenEnv + ")",
+			Value: "",
 		},
 	}
 }

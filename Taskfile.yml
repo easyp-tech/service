@@ -70,10 +70,14 @@ tasks:
     cmds:
       # The gRPC port is not published: the only way in is through traefik,
       # which terminates the edge certificate and re-establishes mTLS inward.
+      # CreatePlugin is a mutating method: it needs a token whose digest is
+      # listed in auth.write_tokens. The default matches the throwaway token
+      # shipped in config.yml; set EASYP_TOKEN to override it.
       - >-
         go run ./cmd/easyp-svc/ plugins register
         --addr easyp.api.localhost:${EASYP_TRAEFIK_TLS_PORT:-4443}
         --tls-ca certs/ca.crt
+        --token ${EASYP_TOKEN:-local-dev-token}
         --cfg config.yml
         --non-interactive
 
@@ -113,8 +117,10 @@ tasks:
             sleep 1
           done
           echo "Service is ready! Running plugin migration..."
-          # config.local.yml leaves server.tls empty, so this leg is plaintext.
-          go run ./cmd/easyp-svc/ plugins register --addr localhost:8080 --cfg config.local.yml --non-interactive --insecure
+          # config.local.yml leaves server.tls empty, so this leg is plaintext,
+          # and it ships the matching throwaway write token.
+          go run ./cmd/easyp-svc/ plugins register --addr localhost:8080 --cfg config.local.yml \
+            --non-interactive --insecure --token local-dev-token
         ) &
         go run ./cmd/easyp-svc/ service start --cfg config.local.yml --log_level debug
 

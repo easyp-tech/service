@@ -24,6 +24,7 @@ import (
 	"github.com/easyp-tech/service/internal/adapters/registry"
 	"github.com/easyp-tech/service/internal/adapters/storage"
 	"github.com/easyp-tech/service/internal/api"
+	"github.com/easyp-tech/service/internal/auth"
 	"github.com/easyp-tech/service/internal/config"
 	"github.com/easyp-tech/service/internal/core"
 	"github.com/easyp-tech/service/internal/database"
@@ -343,7 +344,13 @@ func initApp(
 	module := core.New(metricsAdapter, pool, gate, auditSink, log)
 	tracedCore := telemetry.NewTracingCore(module)
 
-	grpcSrv, apiSrv := buildGRPCServer(log, reg, gate, rl, tracedCore, grpcCreds)
+	authenticator := auth.NewStaticTokenAuthenticator(cfg.Auth.WriteTokens)
+	if authenticator.Empty() {
+		log.Warn("no write tokens configured: CreatePlugin, UpdatePlugin and DeletePlugin will reject every call",
+			"hint", "generate one with `easyp-svc auth new-token` and add it to auth.write_tokens")
+	}
+
+	grpcSrv, apiSrv := buildGRPCServer(log, reg, gate, rl, tracedCore, grpcCreds, authenticator)
 
 	return module, pool, gate, grpcSrv, apiSrv
 }
@@ -355,6 +362,7 @@ func buildGRPCServer(
 	rl *ratelimiter.RateLimiter,
 	tracedCore *telemetry.TracingCore,
 	creds credentials.TransportCredentials,
+	authenticator auth.Authenticator,
 ) (*grpc.Server, *api.API) {
 	serverMetrics := grpchelper.NewServerMetrics(reg, "easyp", "api")
 
@@ -365,7 +373,7 @@ func buildGRPCServer(
 	})
 	reg.MustRegister(panicsCounter)
 
-	licenseInterceptor := api.NewLicenseInterceptor(gate, log)
+	unaryExtra, streamExtra := buildExtraInterceptors(log, reg, gate, rl, authenticator)
 
 	grpcSrv, healthSrv := grpchelper.NewServer(
 		&grpcMetrics{panics: panicsCounter},
@@ -373,20 +381,39 @@ func buildGRPCServer(
 		serverMetrics,
 		api.ErrorToStatus,
 		creds,
-		[]grpc.UnaryServerInterceptor{
-			ratelimit.UnaryServerInterceptor(rl),
-			licenseInterceptor.UnaryServerInterceptor(),
-		},
-		[]grpc.StreamServerInterceptor{
-			ratelimit.StreamServerInterceptor(rl),
-			licenseInterceptor.StreamServerInterceptor(),
-		},
+		unaryExtra,
+		streamExtra,
 	)
 	serverMetrics.InitializeMetrics(grpcSrv)
 
 	apiSrv := api.New(grpcSrv, healthSrv, tracedCore, log)
 
 	return grpcSrv, apiSrv
+}
+
+// buildExtraInterceptors assembles the chain that runs after grpchelper's
+// built-in one. The order is deliberate: rate limiting sheds load before
+// authentication spends anything on it, and the licence check runs last so it
+// already sees an authenticated caller.
+func buildExtraInterceptors(
+	log *slog.Logger,
+	reg *prometheus.Registry,
+	gate *license.FeatureGate,
+	rl *ratelimiter.RateLimiter,
+	authenticator auth.Authenticator,
+) ([]grpc.UnaryServerInterceptor, []grpc.StreamServerInterceptor) {
+	authInterceptor := api.NewAuthInterceptor(authenticator, log, reg, serviceNamespace)
+	licenseInterceptor := api.NewLicenseInterceptor(gate, log)
+
+	return []grpc.UnaryServerInterceptor{
+			ratelimit.UnaryServerInterceptor(rl),
+			authInterceptor.UnaryServerInterceptor(),
+			licenseInterceptor.UnaryServerInterceptor(),
+		}, []grpc.StreamServerInterceptor{
+			ratelimit.StreamServerInterceptor(rl),
+			authInterceptor.StreamServerInterceptor(),
+			licenseInterceptor.StreamServerInterceptor(),
+		}
 }
 
 func serveApp(

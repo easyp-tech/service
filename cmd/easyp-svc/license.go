@@ -16,6 +16,21 @@ const (
 	licensePublicKeyEnv = "LICENSE_PUBLIC_KEY"
 )
 
+// writeTokenEnv carries the credential for the mutating RPCs, so it never has to
+// appear in a shell history or a Taskfile.
+const writeTokenEnv = "EASYP_TOKEN"
+
+// resolveWriteToken returns the token the client authenticates with: the flag
+// wins, otherwise the environment. Empty means the call goes out unauthenticated,
+// which is correct for the read-only commands.
+func resolveWriteToken(flagValue string) string {
+	if flagValue != "" {
+		return strings.TrimSpace(flagValue)
+	}
+
+	return strings.TrimSpace(os.Getenv(writeTokenEnv))
+}
+
 // licenseCredentials is what the licence client needs to reach a verdict: the
 // token to check and the key to check it against. Either being empty puts the
 // service in community mode.

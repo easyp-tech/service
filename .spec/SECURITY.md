@@ -3,6 +3,42 @@
 
 Security considerations for EasyP Service.
 
+## Access to the API
+
+Reads are anonymous; the three mutating RPCs require a write token. Rationale for
+the shape this takes:
+
+- **Allow-list, not deny-list.** Only `GenerateCode`, `Plugins` and health are
+  named as anonymous. An RPC added to the proto is protected until someone
+  changes that, so forgetting to update the list makes a method unavailable
+  rather than exposing it.
+- **Digests in configuration, tokens outside it.** `auth.write_tokens` stores
+  sha256 digests only, so leaking the config file does not leak access. Plain
+  sha256 with no work factor is adequate because the token is 32 random bytes,
+  not a password.
+- **Named tokens.** Rotation without downtime, and the audit log records which
+  credential acted (`AuditEntry.Metadata["actor"]`).
+- **Fail closed.** An empty token list denies every write. A forgotten
+  configuration breaks plugin registration instead of leaving the registry open.
+- **Uninformative rejections.** Failures return `Unauthenticated` without saying
+  whether the token was missing or wrong; the distinction is logged and counted
+  in `easyp_auth_failures_total{reason}` instead.
+- **Tokens require TLS.** The credential travels in the `authorization` header
+  and is only as protected as the connection. `config.local.yml` disables TLS and
+  ships a publicly known throwaway token — local use only.
+
+### Remaining unauthenticated surface
+
+- `GenerateCode` is anonymous by necessity: it is the product. Anyone reaching
+  the service can consume workers. The per-IP rate limiter (10 rps, burst 20)
+  bounds accidental floods but is not a quota and not an identity.
+- The MCP endpoint on :8083 is plaintext HTTP with no authentication. It is
+  read-only — `internal/api/mcp_tools.go` exposes only `Plugins` — but it is a
+  surface, and it is not covered by the gRPC interceptor chain.
+
+Identity beyond a shared token is deliberately out of scope; see
+[features/auth-roadmap.md](features/auth-roadmap.md).
+
 ## Plugin Isolation
 
 Plugin binaries are executed as local processes with the following characteristics:
