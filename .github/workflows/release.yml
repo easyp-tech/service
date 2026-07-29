@@ -8,8 +8,6 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
-    env:
-      GO_VERSION: "1.24"
     permissions:
       contents: write
       packages: write
@@ -33,7 +31,9 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: ${{ env.GO_VERSION }}
+          # Read the version from go.mod: the pinned 1.24 had drifted from the
+          # module's 1.26 and only worked via toolchain auto-download.
+          go-version-file: go.mod
 
       - name: Validate release tag
         run: |
