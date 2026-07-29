@@ -398,6 +398,26 @@ default — plaintext is never reached by omitting a flag.
 `certs/` is gitignored and holds development material only. In production the
 paths point at certificates issued by your own CA.
 
+### Licensing
+
+Without a token the service runs in **community** mode: no audit log, at most 4
+workers and 10 registered plugins. Enterprise needs two things — a token at
+runtime and the matching public key linked into the binary at build time:
+
+```bash
+LICENSE_PUBLIC_KEY=<hex> LICENSE_KEY=<paseto-token> task up
+```
+
+The token is taken from `license.key`, then `license.file`, then the
+`LICENSE_KEY` environment variable. The public key lives in the binary rather
+than in configuration so a deployment cannot be repointed at another signing
+authority without a rebuild; a build without it stays in community mode whatever
+token is supplied.
+
+> **Not yet implemented:** the token's PASETO signature is *not* verified. Any
+> non-empty token is accepted at face value, and the service logs a warning
+> saying so on every refresh. See [.spec/AUTH.md](.spec/AUTH.md).
+
 ## Contributing Plugins
 
 We welcome contributions of new plugins! Here's how to add your plugin to the registry:

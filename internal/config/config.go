@@ -108,9 +108,18 @@ type WorkerPoolConfig struct {
 	ShutdownTimeout   time.Duration `env:"SHUTDOWN_TIMEOUT,default=30s"    yaml:"shutdown_timeout"`
 }
 
-// LicenseConfig configures the license cache.
+// LicenseConfig points at the licence token and configures how often it is
+// re-validated. Without a token the service runs in community mode.
+//
+// The env names below are relative to the section prefix, so they resolve to
+// LICENSE_KEY, LICENSE_FILE and LICENSE_CACHE_TTL.
 type LicenseConfig struct {
-	CacheTTL time.Duration `env:"LICENSE_CACHE_TTL" yaml:"cache_ttl"`
+	// Key is an inline PASETO token. Takes priority over File.
+	Key string `env:"KEY"  yaml:"key"`
+	// File is a path to a file holding the token.
+	File string `env:"FILE" yaml:"file"`
+
+	CacheTTL time.Duration `env:"CACHE_TTL" yaml:"cache_ttl"`
 }
 
 // RateLimitConfig configures per-IP rate limiting.

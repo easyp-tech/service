@@ -37,7 +37,19 @@ type LicenseClient interface {
 }
 ```
 
-**Current implementation:** `MockLicenseClient` — always returns Enterprise claims. This is a development placeholder; will be replaced with a real gRPC client when the license server is ready.
+**Current implementation:** `MockLicenseClient`. It honours the wiring but not the
+cryptography:
+
+| Token | Embedded public key | Result |
+|-------|--------------------|--------|
+| absent | any | community |
+| present | absent | community (logs a warning) |
+| present | present | enterprise, **token accepted unverified** |
+
+The signature is never checked — that is the piece still missing, and the client
+logs a warning on every refresh to say so. It will be replaced with a real gRPC
+client, or with local PASETO verification against `license.PublicKey()`, when
+the license server is ready.
 
 ### Manager (`internal/license`)
 
@@ -69,10 +81,31 @@ gRPC interceptor that checks feature availability before request processing. App
 
 ```yaml
 license:
-  cache_ttl: 5m    # How long to cache license claims
+  key: ""          # inline PASETO token; takes priority over file
+  file: ""         # path to a file holding the token
+  cache_ttl: 5m    # how long to cache license claims
 ```
 
-Environment: `LICENSE_CACHE_TTL`
+Environment: `LICENSE_KEY`, `LICENSE_FILE`, `LICENSE_CACHE_TTL`.
+
+`LICENSE_KEY` is also consulted directly as a last resort, because the `--cfg`
+startup path decodes YAML and skips envconfig entirely — without that fallback a
+token passed to the container through the environment would be dropped. Order of
+precedence: `license.key` → contents of `license.file` → `LICENSE_KEY`.
+
+### Verification key
+
+The Ed25519 public key is linked into the binary rather than read at runtime, so
+a running deployment cannot be pointed at a different signing authority without a
+rebuild:
+
+```bash
+go build -ldflags "-X github.com/easyp-tech/service/internal/license.publicKeyHex=<hex>"
+# or, through the image:
+docker build --build-arg LICENSE_PUBLIC_KEY=<hex> .
+```
+
+A build with no key cannot honour any token and stays in community mode.
 
 ## PASETO Token Format
 

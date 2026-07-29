@@ -38,6 +38,7 @@ worker_pool:
 license:
   key: ""
   file: ""
+  cache_ttl: 5m
 rate_limit:
   requests_per_second: 10.0
   burst: 20

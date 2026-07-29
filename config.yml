@@ -35,9 +35,13 @@ worker_pool:
   generation_timeout: 120s
   max_retries: 3
   shutdown_timeout: 30s
+# Without a token the service runs in community mode: no audit, at most 4
+# workers and 10 registered plugins. Leaving both fields empty falls back to the
+# LICENSE_KEY environment variable, which is how docker-compose passes it.
 license:
-  key: ""    # inline PASETO token (takes priority over file)
-  file: ""   # path to license file
+  key: ""        # inline PASETO token (takes priority over file)
+  file: ""       # path to a file holding the token
+  cache_ttl: 5m  # how often the token is re-validated
 rate_limit:
   requests_per_second: 10.0  # token refill rate (tokens/sec)
   burst: 20                   # max tokens (burst size)

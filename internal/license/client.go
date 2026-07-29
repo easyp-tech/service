@@ -2,21 +2,56 @@ package license
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/easyp-tech/service/internal/core"
 )
 
-// MockLicenseClient is a temporary implementation of core.LicenseClient.
-// TODO: replace with a real gRPC client when the license server is available.
-type MockLicenseClient struct{}
-
-// NewMockLicenseClient creates a MockLicenseClient.
-func NewMockLicenseClient() *MockLicenseClient {
-	return &MockLicenseClient{}
+// MockLicenseClient stands in for the licence server that does not exist yet.
+//
+// It honours the wiring but not the cryptography: a deployment with no token,
+// or one built without an embedded public key, runs in community mode, while
+// any non-empty token is taken at face value.
+//
+// TODO: replace with a real client that verifies the PASETO signature against
+// PublicKey() and reads tier, limits and expiry from the token's claims.
+type MockLicenseClient struct {
+	token     string
+	publicKey string
+	logger    *slog.Logger
 }
 
-// ValidateLicense always returns an Enterprise license without any network call.
+// NewMockLicenseClient creates a MockLicenseClient for the given token and
+// verification key. An empty token means no licence was configured; an empty
+// publicKey means the build has nothing to verify one against. Production code
+// passes PublicKey() here — it is a parameter so tests need not mutate it.
+func NewMockLicenseClient(token, publicKey string, logger *slog.Logger) *MockLicenseClient {
+	return &MockLicenseClient{
+		token:     token,
+		publicKey: publicKey,
+		logger:    logger,
+	}
+}
+
+// ValidateLicense reports the claims implied by the configured token.
 func (m *MockLicenseClient) ValidateLicense(_ context.Context) (core.LicenseClaims, error) {
+	if m.token == "" {
+		return core.CommunityLicenseClaims(), nil
+	}
+
+	if m.publicKey == "" {
+		m.logger.Warn(
+			"licence token supplied but this build carries no public key to verify it against; " +
+				"running in community mode. Rebuild with LICENSE_PUBLIC_KEY set.")
+
+		return core.CommunityLicenseClaims(), nil
+	}
+
+	// Everything below is the part that is still missing: the token is trusted
+	// on sight. Until the signature is actually checked, possession of any
+	// non-empty string grants Enterprise.
+	m.logger.Warn("licence token accepted WITHOUT signature verification: PASETO validation is not implemented yet")
+
 	return core.LicenseClaims{
 		Tier: core.LicenseTierEnterprise,
 		Features: []core.Feature{

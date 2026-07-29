@@ -10,9 +10,17 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 COPY . .
 
+# Ed25519 public key used to verify licence tokens. It is linked into the binary
+# rather than read at runtime so a deployment cannot be pointed at a different
+# signing authority without a rebuild. Empty means no token can be honoured and
+# the service stays in community mode.
+ARG LICENSE_PUBLIC_KEY=""
+
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o easyp-svc ./cmd/easyp-svc/
+    CGO_ENABLED=0 go build -trimpath \
+      -ldflags="-s -w -X github.com/easyp-tech/service/internal/license.publicKeyHex=${LICENSE_PUBLIC_KEY}" \
+      -o easyp-svc ./cmd/easyp-svc/
 
 FROM debian:bookworm-slim
 
