@@ -62,6 +62,32 @@ func getCommands() []*cli.Command {
 		getServiceCommand(),
 		getPluginsCommand(),
 		getAuthCommand(),
+		getAPICommand(),
+	}
+}
+
+func getAPICommand() *cli.Command {
+	return &cli.Command{
+		Name:  "api",
+		Usage: "Inspect the gRPC API contract",
+		Commands: []*cli.Command{
+			{
+				Name: "descriptor",
+				Usage: "Write a FileDescriptorSet for the API, for use with " +
+					"`grpcurl -protoset` (the server does not serve reflection)",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:    "output",
+						Aliases: []string{"o"},
+						Usage:   "file to write to; \"-\" writes to stdout",
+						Value:   "-",
+					},
+				},
+				Action: func(_ context.Context, cmd *cli.Command) error {
+					return runAPIDescriptor(cmd.String("output"))
+				},
+			},
+		},
 	}
 }
 

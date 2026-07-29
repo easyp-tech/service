@@ -77,6 +77,36 @@ func TestExtraInterceptorPassesThrough(t *testing.T) {
 	require.Equal(t, codes.OK, callHealth(t, []grpc.UnaryServerInterceptor{passing}))
 }
 
+// TestReflectionIsNotRegistered guards the decision to keep the API surface
+// undiscoverable. Reflection lists every method and message type to any caller,
+// which is exactly what a listener facing the internet must not do — and it is
+// one line to reintroduce by accident.
+func TestReflectionIsNotRegistered(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := grpchelper.NewServer(
+		panicMetrics{counter: prometheus.NewCounter(prometheus.CounterOpts{ //nolint:exhaustruct
+			Name: "panics_total",
+			Help: "Panics recovered during the test.",
+		})},
+		slog.New(slog.DiscardHandler),
+		grpc_prometheus.NewServerMetrics(),
+		convertDomain,
+		insecure.NewCredentials(),
+		nil,
+		nil,
+	)
+	defer srv.Stop()
+
+	services := srv.GetServiceInfo()
+
+	for name := range services {
+		require.NotContains(t, name, "ServerReflection", "reflection must stay unregistered")
+	}
+
+	require.Contains(t, services, "grpc.health.v1.Health", "health is still expected")
+}
+
 // callHealth builds a real server with the given extra interceptors and calls
 // its built-in health service over an in-memory connection, so the assertions
 // cover the chain grpc actually assembles rather than a reimplementation of it.

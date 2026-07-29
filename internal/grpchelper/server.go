@@ -18,7 +18,6 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/peer"
-	"google.golang.org/grpc/reflection"
 
 	"github.com/easyp-tech/service/internal/core"
 )
@@ -69,7 +68,9 @@ func NewServer(
 		),
 	)
 
-	reflection.Register(server)
+	// Server reflection is deliberately not registered: it enumerates every
+	// method and message type to anyone who asks, and this listener faces the
+	// internet. Clients use the generated stubs; ad-hoc tooling passes --proto.
 
 	healthServer := health.NewServer()
 	healthpb.RegisterHealthServer(server, healthServer)

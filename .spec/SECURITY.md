@@ -26,6 +26,10 @@ the shape this takes:
 - **Tokens require TLS.** The credential travels in the `authorization` header
   and is only as protected as the connection. `config.local.yml` disables TLS and
   ships a publicly known throwaway token — local use only.
+- **No server reflection.** `grpc.reflection.v1.ServerReflection` is not
+  registered, so the method and message inventory cannot be read off the
+  network. Clients use the generated stubs; ad-hoc tooling gets the schema from
+  `easyp-svc api descriptor -o api.protoset` and passes `grpcurl -protoset`.
 
 ### Remaining unauthenticated surface
 

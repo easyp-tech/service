@@ -685,11 +685,16 @@ task build-plugins
 # Re-register plugins
 task register-plugins
 
-# Check registered plugins via grpcurl.
+# Check registered plugins via grpcurl. The server does not serve reflection, so
+# the schema comes from a descriptor set. Generate it once:
+easyp-svc api descriptor -o api.protoset
+
 # Compose stack (TLS through traefik):
-grpcurl -cacert certs/ca.crt easyp.api.localhost:4443 api.generator.v1.ServiceAPI/Plugins
+grpcurl -protoset api.protoset -cacert certs/ca.crt \
+  easyp.api.localhost:4443 api.generator.v1.ServiceAPI/Plugins
 # Service run from source with config.local.yml (plaintext):
-grpcurl -plaintext localhost:8080 api.generator.v1.ServiceAPI/Plugins
+grpcurl -protoset api.protoset -plaintext \
+  localhost:8080 api.generator.v1.ServiceAPI/Plugins
 ```
 
 ### Database Issues

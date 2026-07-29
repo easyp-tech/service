@@ -80,7 +80,12 @@ easyp-svc plugins register plugins/ --plugins-prefix /plugins \
   --addr easyp.api.localhost:4443 --tls-ca certs/ca.crt
 
 # Or via gRPC CreatePlugin with config.command pointing at the entrypoint
-grpcurl -cacert certs/ca.crt -d '{"group":"grpc","name":"go","version":"v1.5.1","config":{"command":["/plugins/grpc/go/v1.5.1/plugin"]}}' \
+# The server does not serve reflection, so the schema comes from a descriptor
+# set built with `easyp-svc api descriptor -o api.protoset`. CreatePlugin is a
+# mutating method, so the call also needs a write token.
+grpcurl -protoset api.protoset -cacert certs/ca.crt \
+  -H "authorization: Bearer $EASYP_TOKEN" \
+  -d '{"group":"grpc","name":"go","version":"v1.5.1","config":{"command":["/plugins/grpc/go/v1.5.1/plugin"]}}' \
   easyp.api.localhost:4443 api.generator.v1.ServiceAPI/CreatePlugin
 ```
 
