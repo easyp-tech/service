@@ -391,12 +391,15 @@ func serveApp(
 		return fmt.Errorf("invalid health port: %w", err)
 	}
 
-	services := []func(context.Context) error{
+	const builtinServices = 4
+
+	services := make([]func(context.Context) error, 0, builtinServices+len(jobs))
+	services = append(services,
 		serve.Metrics(log.With("module", "metric"), cfg.Server.Host, uint16(metricPort), reg),
 		serve.GRPC(log.With("module", "gRPC"), cfg.Server.Host, uint16(grpcPort), grpcServer),
 		serve.HTTP(log.With("module", "mcp"), cfg.Server.Host, uint16(mcpPort), mcpMux),
 		serve.HTTP(log.With("module", "health"), cfg.Server.Host, uint16(healthPort), healthMux),
-	}
+	)
 
 	// Background jobs are supervised alongside the servers so they are
 	// guaranteed to have stopped before run() closes the DB pool.

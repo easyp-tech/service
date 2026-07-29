@@ -113,7 +113,9 @@ func runPluginsRegister(
 	}
 
 	if dryRun {
-		return runPluginsRegisterDryRun(plugins, pluginsPrefix)
+		runPluginsRegisterDryRun(plugins, pluginsPrefix)
+
+		return nil
 	}
 
 	client, err := sdk.NewClient(addr, sdk.WithInsecure())
@@ -122,6 +124,19 @@ func runPluginsRegister(
 	}
 	defer func() { _ = client.Close() }()
 
+	return registerAll(ctx, client, plugins, pluginsPrefix, nonInteractive, failOnError)
+}
+
+// registerAll registers every scanned plugin, reporting progress as it goes.
+func registerAll(
+	ctx context.Context,
+	client *sdk.Client,
+	plugins []pluginInfo,
+	pluginsPrefix string,
+	nonInteractive bool,
+	failOnError bool,
+) error {
+	total := len(plugins)
 	isInteractive := !nonInteractive && term.IsTerminal(int(os.Stdout.Fd()))
 
 	var registered, skipped, failed int
@@ -129,39 +144,23 @@ func runPluginsRegister(
 	spinIdx := 0
 
 	for idx, plg := range plugins {
-		if err := ctx.Err(); err != nil {
-			return interruptRegister(isInteractive, total, registered, skipped, failed, err)
+		ctxErr := ctx.Err()
+		if ctxErr != nil {
+			return interruptRegister(isInteractive, total, registered, skipped, failed, ctxErr)
 		}
 
 		pName := pluginDisplayName(plg)
-
-		if isInteractive {
-			pct := int(float64(idx) / float64(total) * percentMultiplier)
-			progressBar := renderProgressBar(pct, progressBarWidth)
-			_, _ = fmt.Fprintf(
-				os.Stdout,
-				"\r\033[K%s %s Registering %s... %d%% (%d/%d)",
-				spinners[spinIdx],
-				progressBar,
-				pName,
-				pct,
-				idx,
-				total,
-			)
-			spinIdx = (spinIdx + 1) % len(spinners)
-		} else {
-			_, _ = fmt.Fprintf(os.Stdout, "Registering %s...\n", pName)
-		}
+		spinIdx = reportRegisterProgress(isInteractive, spinners, spinIdx, pName, idx, total)
 
 		isSkipped, errReg := registerSinglePlugin(ctx, client, plg, pluginsPrefix)
-		if errReg != nil && isContextAbort(errReg, ctx) {
-			return interruptRegister(isInteractive, total, registered, skipped, failed, contextAbortErr(errReg, ctx))
+		if errReg != nil && isContextAbort(ctx, errReg) {
+			return interruptRegister(isInteractive, total, registered, skipped, failed, contextAbortErr(ctx, errReg))
 		}
 		processRegistrationResult(pName, errReg, isSkipped, isInteractive, &registered, &skipped, &failed)
 	}
 
 	if isInteractive {
-		progressBar := renderProgressBar(percentMultiplier, progressBarWidth)
+		progressBar := renderProgressBar(percentMultiplier)
 		_, _ = fmt.Fprintf(
 			os.Stdout,
 			"\r\033[K%s %s Done! 100%% (%d/%d)\n",
@@ -186,7 +185,7 @@ func registrationBatchError(failOnError bool, failed int) error {
 	return nil
 }
 
-func runPluginsRegisterDryRun(plugins []pluginInfo, pluginsPrefix string) error {
+func runPluginsRegisterDryRun(plugins []pluginInfo, pluginsPrefix string) {
 	_, _ = fmt.Fprintln(os.Stdout, "Dry-run: would register the following plugins")
 	_, _ = fmt.Fprintln(os.Stdout, strings.Repeat("-", separatorLength))
 	for _, plg := range plugins {
@@ -195,11 +194,9 @@ func runPluginsRegisterDryRun(plugins []pluginInfo, pluginsPrefix string) error 
 	}
 	_, _ = fmt.Fprintln(os.Stdout, strings.Repeat("-", separatorLength))
 	_, _ = fmt.Fprintf(os.Stdout, "Would register: %d plugin(s)\n", len(plugins))
-
-	return nil
 }
 
-func isContextAbort(err error, ctx context.Context) bool {
+func isContextAbort(ctx context.Context, err error) bool {
 	if ctx.Err() != nil {
 		return true
 	}
@@ -207,9 +204,10 @@ func isContextAbort(err error, ctx context.Context) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
-func contextAbortErr(err error, ctx context.Context) error {
-	if ctx.Err() != nil {
-		return ctx.Err()
+func contextAbortErr(ctx context.Context, err error) error {
+	ctxErr := ctx.Err()
+	if ctxErr != nil {
+		return fmt.Errorf("ctx.Err: %w", ctxErr)
 	}
 
 	return err
@@ -324,7 +322,7 @@ func registerSinglePlugin(ctx context.Context, client *sdk.Client, plg pluginInf
 	_, registerErr := client.CreatePlugin(ctx, plg.group, plg.name, plg.version, configMap, nil)
 	if registerErr != nil {
 		if errors.Is(registerErr, context.Canceled) || errors.Is(registerErr, context.DeadlineExceeded) {
-			return false, registerErr
+			return false, fmt.Errorf("sdk.Client.CreatePlugin: %w", registerErr)
 		}
 
 		st, ok := status.FromError(registerErr)
@@ -332,7 +330,7 @@ func registerSinglePlugin(ctx context.Context, client *sdk.Client, plg pluginInf
 			return true, nil
 		}
 		if ok && (st.Code() == codes.Canceled || st.Code() == codes.DeadlineExceeded) {
-			return false, registerErr
+			return false, fmt.Errorf("sdk.Client.CreatePlugin: %w", registerErr)
 		}
 
 		return false, fmt.Errorf("sdk.Client.CreatePlugin: %w", registerErr)
@@ -374,10 +372,34 @@ func matchFilter(group string, name string, version string, pattern string) bool
 	return err == nil && matched
 }
 
-func renderProgressBar(percent int, width int) string {
+func renderProgressBar(percent int) string {
+	width := progressBarWidth
 	filled := int(float64(percent) / 100.0 * float64(width))
 	filled = min(filled, width)
 	empty := width - filled
 
 	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", empty) + "]"
+}
+
+// reportRegisterProgress renders the progress line and returns the next spinner index.
+func reportRegisterProgress(isInteractive bool, spinners []string, spinIdx int, pName string, idx, total int) int {
+	if !isInteractive {
+		_, _ = fmt.Fprintf(os.Stdout, "Registering %s...\n", pName)
+
+		return spinIdx
+	}
+
+	pct := int(float64(idx) / float64(total) * percentMultiplier)
+	_, _ = fmt.Fprintf(
+		os.Stdout,
+		"\r\033[K%s %s Registering %s... %d%% (%d/%d)",
+		spinners[spinIdx],
+		renderProgressBar(pct),
+		pName,
+		pct,
+		idx,
+		total,
+	)
+
+	return (spinIdx + 1) % len(spinners)
 }

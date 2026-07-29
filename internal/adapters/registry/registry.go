@@ -189,69 +189,6 @@ func archiveKey(group, name, version string) string {
 	return path.Join(group, name, version, "plugin.tgz")
 }
 
-// ensureBinary makes the plugin entrypoint available locally. When it is
-// missing and binary storage is configured, the plugin archive is downloaded
-// (concurrent requests for the same plugin are collapsed into a single
-// download), its checksum recorded at registration is verified, and the
-// archive is unpacked into the plugin version directory before anything is
-// ever executed.
-func (r *Registry) ensureBinary(ctx context.Context, plug *plugin) error {
-	if r.storage == nil || len(plug.pluginConfig.Command) == 0 {
-		return nil
-	}
-
-	binPath := plug.pluginConfig.Command[0]
-	_, statErr := os.Stat(binPath)
-	if statErr == nil || !os.IsNotExist(statErr) {
-		return nil
-	}
-
-	key := archiveKey(plug.GroupName, plug.Name, plug.Version)
-	versionDir := filepath.Dir(binPath)
-
-	_, err, _ := r.downloads.Do(key, func() (any, error) {
-		if _, reStatErr := os.Stat(binPath); reStatErr == nil {
-			return nil, nil
-		}
-
-		return nil, r.fetchAndUnpack(ctx, key, versionDir, plug.pluginConfig.Sha256)
-	})
-	if err != nil {
-		return fmt.Errorf("ensureBinary: %w", err)
-	}
-
-	return nil
-}
-
-// fetchAndUnpack downloads the plugin archive, verifies its checksum, and
-// unpacks it into versionDir.
-func (r *Registry) fetchAndUnpack(ctx context.Context, key, versionDir, expectedSha256 string) error {
-	tmpArchive, err := os.CreateTemp("", "plugin-archive-*.tgz")
-	if err != nil {
-		return fmt.Errorf("os.CreateTemp: %w", err)
-	}
-	tmpPath := tmpArchive.Name()
-	_ = tmpArchive.Close()
-	defer func() { _ = os.Remove(tmpPath) }()
-
-	downloadErr := r.storage.Download(ctx, key, tmpPath)
-	if downloadErr != nil {
-		return fmt.Errorf("%w: download %s: %w", core.ErrStorageUnavailable, key, downloadErr)
-	}
-
-	verifyErr := verifyChecksum(tmpPath, expectedSha256)
-	if verifyErr != nil {
-		return verifyErr
-	}
-
-	unpackErr := plugarchive.Unpack(tmpPath, versionDir)
-	if unpackErr != nil {
-		return fmt.Errorf("plugarchive.Unpack: %w", unpackErr)
-	}
-
-	return nil
-}
-
 // verifyChecksum compares the sha256 of the file at binPath with the expected
 // hex-encoded checksum. An empty expected checksum skips verification
 // (plugins registered without a binary have no recorded checksum).
@@ -560,39 +497,6 @@ func (r *Registry) Create(ctx context.Context, req core.CreatePluginRequest) (*c
 	}, nil
 }
 
-// attachArchiveChecksum verifies that the plugin archive has been pushed to
-// binary storage, streams it to compute its sha256 checksum, and returns the
-// plugin config with the checksum recorded. Registration fails when the
-// archive is absent, so a registered plugin always has its artifact.
-func (r *Registry) attachArchiveChecksum(ctx context.Context, req core.CreatePluginRequest) (json.RawMessage, error) {
-	key := archiveKey(req.Group, req.Name, req.Version)
-
-	reader, _, err := r.storage.Open(ctx, key)
-	if err != nil {
-		exists, existsErr := r.storage.Exists(ctx, key)
-		if existsErr == nil && !exists {
-			return nil, fmt.Errorf("%w: %s (run `easyp-svc plugins push` first)", core.ErrBinaryNotUploaded, key)
-		}
-
-		return nil, fmt.Errorf("%w: open %s: %w", core.ErrStorageUnavailable, key, err)
-	}
-	defer func() { _ = reader.Close() }()
-
-	hasher := sha256.New()
-	_, err = io.Copy(hasher, reader)
-	if err != nil {
-		return nil, fmt.Errorf("%w: read %s: %w", core.ErrStorageUnavailable, key, err)
-	}
-	checksumHex := hex.EncodeToString(hasher.Sum(nil))
-
-	config, err := configWithChecksum(req.Config, checksumHex)
-	if err != nil {
-		return nil, fmt.Errorf("configWithChecksum: %w", err)
-	}
-
-	return config, nil
-}
-
 // configWithChecksum returns config JSON with the sha256 field set, preserving
 // all other fields as-is.
 func configWithChecksum(config json.RawMessage, checksumHex string) (json.RawMessage, error) {
@@ -711,4 +615,104 @@ func (p *plugin) Info(_ context.Context) *core.PluginInfo {
 		Tags:      []string(p.Tags),
 		CreatedAt: p.CreatedAt,
 	}
+}
+
+// ensureBinary makes the plugin entrypoint available locally. When it is
+// missing and binary storage is configured, the plugin archive is downloaded
+// (concurrent requests for the same plugin are collapsed into a single
+// download), its checksum recorded at registration is verified, and the
+// archive is unpacked into the plugin version directory before anything is
+// ever executed.
+func (r *Registry) ensureBinary(ctx context.Context, plug *plugin) error {
+	if r.storage == nil || len(plug.pluginConfig.Command) == 0 {
+		return nil
+	}
+
+	binPath := plug.pluginConfig.Command[0]
+	_, statErr := os.Stat(binPath)
+	if statErr == nil || !os.IsNotExist(statErr) {
+		return nil
+	}
+
+	key := archiveKey(plug.GroupName, plug.Name, plug.Version)
+	versionDir := filepath.Dir(binPath)
+
+	// singleflight collapses concurrent misses; the value is unused, only the
+	// error matters. struct{}{} rather than nil so this is not a nil-nil return.
+	_, err, _ := r.downloads.Do(key, func() (any, error) {
+		// Another caller in this flight may already have unpacked it.
+		_, reStatErr := os.Stat(binPath)
+		if reStatErr == nil {
+			return struct{}{}, nil
+		}
+
+		return struct{}{}, r.fetchAndUnpack(ctx, key, versionDir, plug.pluginConfig.Sha256)
+	})
+	if err != nil {
+		return fmt.Errorf("ensureBinary: %w", err)
+	}
+
+	return nil
+}
+
+// fetchAndUnpack downloads the plugin archive, verifies its checksum, and
+// unpacks it into versionDir.
+func (r *Registry) fetchAndUnpack(ctx context.Context, key, versionDir, expectedSha256 string) error {
+	tmpArchive, err := os.CreateTemp("", "plugin-archive-*.tgz")
+	if err != nil {
+		return fmt.Errorf("os.CreateTemp: %w", err)
+	}
+	tmpPath := tmpArchive.Name()
+	_ = tmpArchive.Close()
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	downloadErr := r.storage.Download(ctx, key, tmpPath)
+	if downloadErr != nil {
+		return fmt.Errorf("%w: download %s: %w", core.ErrStorageUnavailable, key, downloadErr)
+	}
+
+	verifyErr := verifyChecksum(tmpPath, expectedSha256)
+	if verifyErr != nil {
+		return verifyErr
+	}
+
+	unpackErr := plugarchive.Unpack(tmpPath, versionDir)
+	if unpackErr != nil {
+		return fmt.Errorf("plugarchive.Unpack: %w", unpackErr)
+	}
+
+	return nil
+}
+
+// attachArchiveChecksum verifies that the plugin archive has been pushed to
+// binary storage, streams it to compute its sha256 checksum, and returns the
+// plugin config with the checksum recorded. Registration fails when the
+// archive is absent, so a registered plugin always has its artifact.
+func (r *Registry) attachArchiveChecksum(ctx context.Context, req core.CreatePluginRequest) (json.RawMessage, error) {
+	key := archiveKey(req.Group, req.Name, req.Version)
+
+	reader, _, err := r.storage.Open(ctx, key)
+	if err != nil {
+		exists, existsErr := r.storage.Exists(ctx, key)
+		if existsErr == nil && !exists {
+			return nil, fmt.Errorf("%w: %s (run `easyp-svc plugins push` first)", core.ErrBinaryNotUploaded, key)
+		}
+
+		return nil, fmt.Errorf("%w: open %s: %w", core.ErrStorageUnavailable, key, err)
+	}
+	defer func() { _ = reader.Close() }()
+
+	hasher := sha256.New()
+	_, err = io.Copy(hasher, reader)
+	if err != nil {
+		return nil, fmt.Errorf("%w: read %s: %w", core.ErrStorageUnavailable, key, err)
+	}
+	checksumHex := hex.EncodeToString(hasher.Sum(nil))
+
+	config, err := configWithChecksum(req.Config, checksumHex)
+	if err != nil {
+		return nil, fmt.Errorf("configWithChecksum: %w", err)
+	}
+
+	return config, nil
 }

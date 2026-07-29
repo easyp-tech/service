@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync/atomic"
 	"time"
@@ -254,7 +255,7 @@ func (w *Worker) saveWithRetry(ctx context.Context, entries []core.AuditEntry) e
 
 	span.SetStatus(codes.Error, err.Error())
 
-	return err
+	return fmt.Errorf("w.store.SaveBatch: %w", err)
 }
 
 // Shutdown closes the queue and waits for the worker to drain it.

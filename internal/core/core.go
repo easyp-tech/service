@@ -293,30 +293,31 @@ func (c *Core) DeletePlugin(ctx context.Context, group, name, version string) er
 
 // errorCode classifies an error into a domain error code string.
 func errorCode(err error) string {
-	switch {
-	case errors.Is(err, ErrNotFound):
-		return "NOT_FOUND"
-	case errors.Is(err, ErrInvalidPluginName):
-		return "INVALID_PLUGIN_NAME"
-	case errors.Is(err, ErrGenerationFailed):
-		return "GENERATION_FAILED"
-	case errors.Is(err, ErrServerOverloaded):
-		return "SERVER_OVERLOADED"
-	case errors.Is(err, ErrShuttingDown):
-		return "SHUTTING_DOWN"
-	case errors.Is(err, ErrAlreadyExists):
-		return "ALREADY_EXISTS"
-	case errors.Is(err, ErrMaxPluginsExceeded):
-		return "MAX_PLUGINS_EXCEEDED"
-	case errors.Is(err, ErrFeatureDenied):
-		return "FEATURE_DENIED"
-	case errors.Is(err, ErrStorageUnavailable):
-		return "STORAGE_UNAVAILABLE"
-	case errors.Is(err, ErrBinaryNotUploaded):
-		return "BINARY_NOT_UPLOADED"
-	default:
-		return "INTERNAL"
+	// Sentinel-to-code table. Order matters only for errors wrapping more than
+	// one sentinel.
+	errorCodes := []struct {
+		err  error
+		code string
+	}{
+		{ErrNotFound, "NOT_FOUND"},
+		{ErrInvalidPluginName, "INVALID_PLUGIN_NAME"},
+		{ErrGenerationFailed, "GENERATION_FAILED"},
+		{ErrServerOverloaded, "SERVER_OVERLOADED"},
+		{ErrShuttingDown, "SHUTTING_DOWN"},
+		{ErrAlreadyExists, "ALREADY_EXISTS"},
+		{ErrMaxPluginsExceeded, "MAX_PLUGINS_EXCEEDED"},
+		{ErrFeatureDenied, "FEATURE_DENIED"},
+		{ErrStorageUnavailable, "STORAGE_UNAVAILABLE"},
+		{ErrBinaryNotUploaded, "BINARY_NOT_UPLOADED"},
 	}
+
+	for _, mapping := range errorCodes {
+		if errors.Is(err, mapping.err) {
+			return mapping.code
+		}
+	}
+
+	return "INTERNAL"
 }
 
 // auditSuccess creates and sends a success audit entry.

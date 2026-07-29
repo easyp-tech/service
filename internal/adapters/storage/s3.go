@@ -20,6 +20,14 @@ import (
 	"github.com/easyp-tech/service/internal/monitor"
 )
 
+// cacheDirPermissions is the mode of the local plugin cache directory. It is
+// deliberately traversable by other users: the plugin unpacked into it has to
+// stay executable even when the service runs under a different account.
+const cacheDirPermissions = 0o755
+
+// ErrBucketRequired is returned when no bucket was configured.
+var ErrBucketRequired = errors.New("s3 bucket cannot be empty")
+
 var _ core.BinaryStorage = &S3Storage{}
 
 // S3Options configures an S3-compatible binary storage backend.
@@ -51,7 +59,7 @@ type S3Storage struct {
 // NewS3Storage creates a new S3Storage instance.
 func NewS3Storage(ctx context.Context, opts S3Options) (*S3Storage, error) {
 	if opts.Bucket == "" {
-		return nil, fmt.Errorf("s3 bucket cannot be empty")
+		return nil, ErrBucketRequired
 	}
 
 	loadOpts := []func(*awsconfig.LoadOptions) error{
@@ -88,12 +96,6 @@ func NewS3Storage(ctx context.Context, opts S3Options) (*S3Storage, error) {
 	}, nil
 }
 
-func (s *S3Storage) formatKey(key string) string {
-	cleanKey := strings.TrimPrefix(key, "/")
-
-	return s.prefix + cleanKey
-}
-
 // Download retrieves an object from S3 and atomically writes it to localPath.
 func (s *S3Storage) Download(ctx context.Context, key string, localPath string) error {
 	fullKey := s.formatKey(key)
@@ -106,13 +108,14 @@ func (s *S3Storage) Download(ctx context.Context, key string, localPath string) 
 		return fmt.Errorf("s3.GetObject: %w", err)
 	}
 	defer func() {
-		if closeErr := output.Body.Close(); closeErr != nil {
+		closeErr := output.Body.Close()
+		if closeErr != nil {
 			monitor.FromContext(ctx).Error("output.Body.Close", "error", closeErr)
 		}
 	}()
 
 	dir := filepath.Dir(localPath)
-	err = os.MkdirAll(dir, 0o755)
+	err = os.MkdirAll(dir, cacheDirPermissions)
 	if err != nil {
 		return fmt.Errorf("os.MkdirAll: %w", err)
 	}
@@ -219,4 +222,11 @@ func (s *S3Storage) Delete(ctx context.Context, key string) error {
 	}
 
 	return nil
+}
+
+// formatKey applies the configured prefix to an object key.
+func (s *S3Storage) formatKey(key string) string {
+	cleanKey := strings.TrimPrefix(key, "/")
+
+	return s.prefix + cleanKey
 }

@@ -47,9 +47,6 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
-    # Not blocking yet: the tree still carries pre-existing findings. Drop this
-    # line once they are cleared, so new ones fail the build.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 

@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"sync"
 	"testing"
@@ -83,7 +82,7 @@ func communityGate() fakeGate {
 }
 
 func testLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+	return slog.New(slog.DiscardHandler)
 }
 
 func TestAuditIsGatedByLicense(t *testing.T) {

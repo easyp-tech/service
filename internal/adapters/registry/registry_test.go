@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -32,12 +33,6 @@ func newFakeStorage() *fakeStorage {
 	return &fakeStorage{objects: make(map[string][]byte)}
 }
 
-func (f *fakeStorage) put(key string, data []byte) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.objects[key] = bytes.Clone(data)
-}
-
 func (f *fakeStorage) Download(_ context.Context, key string, localPath string) error {
 	f.downloads.Add(1)
 
@@ -54,10 +49,15 @@ func (f *fakeStorage) Download(_ context.Context, key string, localPath string) 
 
 	err := os.MkdirAll(filepath.Dir(localPath), 0o755)
 	if err != nil {
-		return err
+		return fmt.Errorf("os.MkdirAll: %w", err)
 	}
 
-	return os.WriteFile(localPath, data, 0o644)
+	err = os.WriteFile(localPath, data, 0o644)
+	if err != nil {
+		return fmt.Errorf("os.WriteFile: %w", err)
+	}
+
+	return nil
 }
 
 func (f *fakeStorage) Open(_ context.Context, key string) (io.ReadCloser, int64, error) {
@@ -140,7 +140,7 @@ func TestConfigWithChecksum(t *testing.T) {
 	assert.Equal(t, "abc123", raw["sha256"])
 	assert.Equal(t, []any{"/plugins/grpc/go/v1.6.2/plugin"}, raw["command"])
 	assert.Equal(t, map[string]any{"HOME": "/tmp"}, raw["env"])
-	assert.Equal(t, float64(42), raw["custom_field"], "unknown fields must be preserved")
+	assert.InDelta(t, 42, raw["custom_field"], 0, "unknown fields must be preserved")
 }
 
 func TestVerifyChecksum(t *testing.T) {
@@ -341,11 +341,9 @@ func TestEnsureBinary(t *testing.T) {
 		var wg sync.WaitGroup
 		errs := make([]error, workers)
 		for i := range workers {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				errs[i] = r.ensureBinary(ctx, newPlugin(binPath, sha256Hex(archive)))
-			}()
+			})
 		}
 		wg.Wait()
 
@@ -359,4 +357,11 @@ func TestEnsureBinary(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, entrypoint, string(got))
 	})
+}
+
+// put seeds the fake with an object.
+func (f *fakeStorage) put(key string, data []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.objects[key] = bytes.Clone(data)
 }

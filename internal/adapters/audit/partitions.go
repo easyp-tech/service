@@ -293,17 +293,9 @@ func (m *Maintainer) DropExpiredPartitions(ctx context.Context, cutoff time.Time
 			return nil
 		}
 
-		// DROP takes ACCESS EXCLUSIVE on the parent, which blocks audit inserts
-		// while it waits. Bound the wait so maintenance can never become an
-		// outage; a skipped drop is retried on the next tick.
-		_, err := tx.ExecContext(ctx, "SET LOCAL lock_timeout = "+pq.QuoteLiteral(dropLockTimeout))
+		err := boundDropLocks(ctx, tx)
 		if err != nil {
-			return fmt.Errorf("set lock_timeout: %w", err)
-		}
-
-		_, err = tx.ExecContext(ctx, "SET LOCAL statement_timeout = "+pq.QuoteLiteral(dropStatementTimeout))
-		if err != nil {
-			return fmt.Errorf("set statement_timeout: %w", err)
+			return err
 		}
 
 		names, err := listPartitions(ctx, tx)
@@ -316,13 +308,9 @@ func (m *Maintainer) DropExpiredPartitions(ctx context.Context, cutoff time.Time
 			return ErrRetentionWouldEmptyTable
 		}
 
-		for _, name := range expired {
-			_, err = tx.ExecContext(ctx, "DROP TABLE IF EXISTS "+pq.QuoteIdentifier(name))
-			if err != nil {
-				return fmt.Errorf("drop partition %s: %w", name, err)
-			}
-
-			dropped = append(dropped, name)
+		dropped, err = dropPartitions(ctx, tx, expired)
+		if err != nil {
+			return err
 		}
 
 		m.partitions.Set(float64(len(monthlyPartitions(names)) - len(dropped)))
@@ -336,8 +324,41 @@ func (m *Maintainer) DropExpiredPartitions(ctx context.Context, cutoff time.Time
 	return dropped, nil
 }
 
-func (m *Maintainer) retentionEnabled() bool { //nolint:funcorder // small predicate used by Maintain above
+func (m *Maintainer) retentionEnabled() bool {
 	return m.cfg.RetentionMonths > 0
+}
+
+// boundDropLocks caps how long a DROP waits for its lock. DROP takes ACCESS
+// EXCLUSIVE on the parent, which blocks audit inserts while it waits, so a
+// skipped drop retried next tick is far better than a stalled write path.
+func boundDropLocks(ctx context.Context, tx *sqlx.Tx) error {
+	_, err := tx.ExecContext(ctx, "SET LOCAL lock_timeout = "+pq.QuoteLiteral(dropLockTimeout))
+	if err != nil {
+		return fmt.Errorf("set lock_timeout: %w", err)
+	}
+
+	_, err = tx.ExecContext(ctx, "SET LOCAL statement_timeout = "+pq.QuoteLiteral(dropStatementTimeout))
+	if err != nil {
+		return fmt.Errorf("set statement_timeout: %w", err)
+	}
+
+	return nil
+}
+
+// dropPartitions drops the named partitions and reports the ones removed.
+func dropPartitions(ctx context.Context, tx *sqlx.Tx, names []string) ([]string, error) {
+	dropped := make([]string, 0, len(names))
+
+	for _, name := range names {
+		_, err := tx.ExecContext(ctx, "DROP TABLE IF EXISTS "+pq.QuoteIdentifier(name))
+		if err != nil {
+			return nil, fmt.Errorf("drop partition %s: %w", name, err)
+		}
+
+		dropped = append(dropped, name)
+	}
+
+	return dropped, nil
 }
 
 // acquireLock takes the transaction-scoped maintenance lock, reporting whether

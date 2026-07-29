@@ -51,26 +51,7 @@ func resolveS3Options(cfgPath string, flagOpts storage.S3Options, pathStyleSet b
 			return storage.S3Options{}, fmt.Errorf("config.LoadAndValidate: %w", err)
 		}
 
-		s3Cfg := cfg.Registry.S3
-		if opts.Bucket == "" {
-			opts.Bucket = s3Cfg.Bucket
-		}
-		if opts.Endpoint == "" {
-			opts.Endpoint = s3Cfg.Endpoint
-		}
-		if opts.Region == "" {
-			opts.Region = s3Cfg.Region
-		}
-		if opts.Prefix == "" {
-			opts.Prefix = s3Cfg.Prefix
-		}
-		if opts.AccessKeyID == "" && opts.SecretAccessKey == "" {
-			opts.AccessKeyID = s3Cfg.AccessKeyID
-			opts.SecretAccessKey = s3Cfg.SecretAccessKey
-		}
-		if !pathStyleSet {
-			opts.ForcePathStyle = s3Cfg.ForcePathStyle
-		}
+		fillFromConfig(&opts, cfg.Registry.S3, pathStyleSet)
 	}
 
 	if opts.Region == "" {
@@ -78,6 +59,33 @@ func resolveS3Options(cfgPath string, flagOpts storage.S3Options, pathStyleSet b
 	}
 
 	return opts, nil
+}
+
+// fillFromConfig fills the fields left empty by CLI flags from registry.s3.
+func fillFromConfig(opts *storage.S3Options, s3Cfg config.S3Config, pathStyleSet bool) {
+	if opts.Bucket == "" {
+		opts.Bucket = s3Cfg.Bucket
+	}
+	if opts.Endpoint == "" {
+		opts.Endpoint = s3Cfg.Endpoint
+	}
+	if opts.Region == "" {
+		opts.Region = s3Cfg.Region
+	}
+	if opts.Prefix == "" {
+		opts.Prefix = s3Cfg.Prefix
+	}
+
+	// Credentials travel as a pair: a flag-supplied key must not be silently
+	// combined with a config-supplied secret.
+	if opts.AccessKeyID == "" && opts.SecretAccessKey == "" {
+		opts.AccessKeyID = s3Cfg.AccessKeyID
+		opts.SecretAccessKey = s3Cfg.SecretAccessKey
+	}
+
+	if !pathStyleSet {
+		opts.ForcePathStyle = s3Cfg.ForcePathStyle
+	}
 }
 
 func runPluginsPush(ctx context.Context, opts pushOptions) error {
@@ -106,6 +114,12 @@ func runPluginsPush(ctx context.Context, opts pushOptions) error {
 		return fmt.Errorf("storage.NewS3Storage: %w", err)
 	}
 
+	return pushAll(ctx, store, plugins, opts)
+}
+
+// pushAll uploads every plugin archive, reporting progress as it goes.
+func pushAll(ctx context.Context, store *storage.S3Storage, plugins []pluginInfo, opts pushOptions) error {
+	total := len(plugins)
 	isInteractive := !opts.nonInteractive && term.IsTerminal(int(os.Stdout.Fd()))
 
 	var pushed, skipped, failed int
@@ -113,56 +127,25 @@ func runPluginsPush(ctx context.Context, opts pushOptions) error {
 	spinIdx := 0
 
 	for idx, plg := range plugins {
-		if ctxErr := ctx.Err(); ctxErr != nil {
+		ctxErr := ctx.Err()
+		if ctxErr != nil {
 			printPushSummary(total, pushed, skipped, failed)
 
-			return ctxErr
+			return fmt.Errorf("ctx.Err: %w", ctxErr)
 		}
 
 		pName := pluginDisplayName(plg)
-
-		if isInteractive {
-			pct := int(float64(idx) / float64(total) * percentMultiplier)
-			_, _ = fmt.Fprintf(
-				os.Stdout,
-				"\r\033[K%s %s Pushing %s... %d%% (%d/%d)",
-				spinners[spinIdx],
-				renderProgressBar(pct, progressBarWidth),
-				pName,
-				pct,
-				idx,
-				total,
-			)
-			spinIdx = (spinIdx + 1) % len(spinners)
-		} else {
-			_, _ = fmt.Fprintf(os.Stdout, "Pushing %s...\n", pName)
-		}
+		spinIdx = reportPushProgress(isInteractive, spinners, spinIdx, pName, idx, total)
 
 		wasSkipped, pushErr := pushSinglePlugin(ctx, store, plg, opts)
-		switch {
-		case pushErr != nil:
-			failed++
-			if !isInteractive {
-				_, _ = fmt.Fprintf(os.Stderr, "Error pushing %s: %v\n", pName, pushErr)
-			}
-		case wasSkipped:
-			skipped++
-			if !isInteractive {
-				_, _ = fmt.Fprintf(os.Stdout, "Skipped (already in storage): %s\n", pName)
-			}
-		default:
-			pushed++
-			if !isInteractive {
-				_, _ = fmt.Fprintf(os.Stdout, "Successfully pushed %s\n", pName)
-			}
-		}
+		recordPushResult(isInteractive, pName, wasSkipped, pushErr, &pushed, &skipped, &failed)
 	}
 
 	if isInteractive {
 		_, _ = fmt.Fprintf(
 			os.Stdout,
 			"\r\033[K✓ %s Done! 100%% (%d/%d)\n",
-			renderProgressBar(percentMultiplier, progressBarWidth),
+			renderProgressBar(percentMultiplier),
 			total,
 			total,
 		)
@@ -266,4 +249,48 @@ func printPushSummary(total, pushed, skipped, failed int) {
 	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Skipped (already exists)", skipped)
 	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Failed", failed)
 	_, _ = fmt.Fprintln(os.Stdout, strings.Repeat("-", separatorLength))
+}
+
+// reportPushProgress renders the progress line and returns the next spinner index.
+func reportPushProgress(isInteractive bool, spinners []string, spinIdx int, pName string, idx, total int) int {
+	if !isInteractive {
+		_, _ = fmt.Fprintf(os.Stdout, "Pushing %s...\n", pName)
+
+		return spinIdx
+	}
+
+	pct := int(float64(idx) / float64(total) * percentMultiplier)
+	_, _ = fmt.Fprintf(
+		os.Stdout,
+		"\r\033[K%s %s Pushing %s... %d%% (%d/%d)",
+		spinners[spinIdx],
+		renderProgressBar(pct),
+		pName,
+		pct,
+		idx,
+		total,
+	)
+
+	return (spinIdx + 1) % len(spinners)
+}
+
+// recordPushResult tallies one plugin's outcome and reports it when not interactive.
+func recordPushResult(isInteractive bool, pName string, wasSkipped bool, pushErr error, pushed, skipped, failed *int) {
+	switch {
+	case pushErr != nil:
+		*failed++
+		if !isInteractive {
+			_, _ = fmt.Fprintf(os.Stderr, "Error pushing %s: %v\n", pName, pushErr)
+		}
+	case wasSkipped:
+		*skipped++
+		if !isInteractive {
+			_, _ = fmt.Fprintf(os.Stdout, "Skipped (already in storage): %s\n", pName)
+		}
+	default:
+		*pushed++
+		if !isInteractive {
+			_, _ = fmt.Fprintf(os.Stdout, "Successfully pushed %s\n", pName)
+		}
+	}
 }

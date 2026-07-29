@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -46,12 +47,12 @@ func (m *memoryStorage) Download(ctx context.Context, key string, localPath stri
 	dir := filepath.Dir(localPath)
 	err := os.MkdirAll(dir, 0o755)
 	if err != nil {
-		return err
+		return fmt.Errorf("os.MkdirAll: %w", err)
 	}
 
 	tmpFile, err := os.CreateTemp(dir, "plugin-*.tmp")
 	if err != nil {
-		return err
+		return fmt.Errorf("os.CreateTemp: %w", err)
 	}
 	tmpPath := tmpFile.Name()
 
@@ -62,16 +63,15 @@ func (m *memoryStorage) Download(ctx context.Context, key string, localPath stri
 	if err != nil {
 		_ = os.Remove(tmpPath)
 
-		return err
+		return fmt.Errorf("tmpFile.Write: %w", err)
 	}
 
-	return os.Rename(tmpPath, localPath)
-}
+	err = os.Rename(tmpPath, localPath)
+	if err != nil {
+		return fmt.Errorf("os.Rename: %w", err)
+	}
 
-func (m *memoryStorage) put(key string, data []byte) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.files[key] = bytes.Clone(data)
+	return nil
 }
 
 func (m *memoryStorage) Exists(ctx context.Context, key string) (bool, error) {
@@ -90,50 +90,64 @@ func (m *memoryStorage) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
+const testStorageKey = "grpc/go/v1.5.1/plugin"
+
+// seededStore returns a store already holding content under testStorageKey, so
+// each subtest is independent and can run in parallel.
+func seededStore(content []byte) *memoryStorage {
+	store := newMemoryStorage()
+	store.put(testStorageKey, content)
+
+	return store
+}
+
 func TestMemoryStorage(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
-	store := newMemoryStorage()
-	tmpDir := t.TempDir()
-
 	content := []byte("binary-content")
-	key := "grpc/go/v1.5.1/plugin"
 
 	t.Run("put_and_exists", func(t *testing.T) {
-		store.put(key, content)
+		t.Parallel()
 
-		exists, err := store.Exists(ctx, key)
+		exists, err := seededStore(content).Exists(t.Context(), testStorageKey)
 		require.NoError(t, err)
 		assert.True(t, exists)
 	})
 
 	t.Run("open", func(t *testing.T) {
-		reader, size, err := store.Open(ctx, key)
+		t.Parallel()
+
+		reader, size, err := seededStore(content).Open(t.Context(), testStorageKey)
 		require.NoError(t, err)
 		defer func() { _ = reader.Close() }()
 
 		gotContent, err := io.ReadAll(reader)
 		require.NoError(t, err)
-		assert.True(t, bytes.Equal(content, gotContent))
+		assert.Equal(t, content, gotContent)
 		assert.Equal(t, int64(len(content)), size)
 	})
 
 	t.Run("download", func(t *testing.T) {
-		destFile := filepath.Join(tmpDir, "downloaded_plugin")
-		err := store.Download(ctx, key, destFile)
+		t.Parallel()
+
+		destFile := filepath.Join(t.TempDir(), "downloaded_plugin")
+		err := seededStore(content).Download(t.Context(), testStorageKey, destFile)
 		require.NoError(t, err)
 
 		gotContent, err := os.ReadFile(destFile)
 		require.NoError(t, err)
-		assert.True(t, bytes.Equal(content, gotContent))
+		assert.Equal(t, content, gotContent)
 	})
 
 	t.Run("delete", func(t *testing.T) {
-		err := store.Delete(ctx, key)
+		t.Parallel()
+
+		store := seededStore(content)
+
+		err := store.Delete(t.Context(), testStorageKey)
 		require.NoError(t, err)
 
-		exists, err := store.Exists(ctx, key)
+		exists, err := store.Exists(t.Context(), testStorageKey)
 		require.NoError(t, err)
 		assert.False(t, exists)
 	})
@@ -159,11 +173,9 @@ func TestConcurrentDownloadSamePath(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make([]error, workers)
 	for i := range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			errs[i] = store.Download(ctx, key, destFile)
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -202,4 +214,11 @@ func TestFormatKey(t *testing.T) {
 			assert.Equal(t, tt.want, s.formatKey(tt.key))
 		})
 	}
+}
+
+// put seeds the fake with an object.
+func (m *memoryStorage) put(key string, data []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.files[key] = bytes.Clone(data)
 }

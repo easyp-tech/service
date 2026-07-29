@@ -59,56 +59,25 @@ func runPluginsPack(ctx context.Context, opts packOptions) error {
 	spinIdx := 0
 
 	for idx, plg := range plugins {
-		if ctxErr := ctx.Err(); ctxErr != nil {
+		ctxErr := ctx.Err()
+		if ctxErr != nil {
 			printPackSummary(total, packed, skipped, failed)
 
-			return ctxErr
+			return fmt.Errorf("ctx.Err: %w", ctxErr)
 		}
 
 		pName := pluginDisplayName(plg)
-
-		if isInteractive {
-			pct := int(float64(idx) / float64(total) * percentMultiplier)
-			_, _ = fmt.Fprintf(
-				os.Stdout,
-				"\r\033[K%s %s Packing %s... %d%% (%d/%d)",
-				spinners[spinIdx],
-				renderProgressBar(pct, progressBarWidth),
-				pName,
-				pct,
-				idx,
-				total,
-			)
-			spinIdx = (spinIdx + 1) % len(spinners)
-		} else {
-			_, _ = fmt.Fprintf(os.Stdout, "Packing %s...\n", pName)
-		}
+		spinIdx = reportPackProgress(isInteractive, spinners, spinIdx, pName, idx, total)
 
 		wasSkipped, packErr := packSinglePlugin(plg, opts)
-		switch {
-		case packErr != nil:
-			failed++
-			if !isInteractive {
-				_, _ = fmt.Fprintf(os.Stderr, "Error packing %s: %v\n", pName, packErr)
-			}
-		case wasSkipped:
-			skipped++
-			if !isInteractive {
-				_, _ = fmt.Fprintf(os.Stdout, "Skipped (already packed): %s\n", pName)
-			}
-		default:
-			packed++
-			if !isInteractive {
-				_, _ = fmt.Fprintf(os.Stdout, "Successfully packed %s\n", pName)
-			}
-		}
+		recordPackResult(isInteractive, pName, wasSkipped, packErr, &packed, &skipped, &failed)
 	}
 
 	if isInteractive {
 		_, _ = fmt.Fprintf(
 			os.Stdout,
 			"\r\033[K✓ %s Done! 100%% (%d/%d)\n",
-			renderProgressBar(percentMultiplier, progressBarWidth),
+			renderProgressBar(percentMultiplier),
 			total,
 			total,
 		)
@@ -129,14 +98,17 @@ func packSinglePlugin(plg pluginInfo, opts packOptions) (bool, error) {
 	destPath := archiveLocalPath(opts.outDir, plg)
 
 	if !opts.force {
-		if _, err := os.Stat(destPath); err == nil {
+		_, err := os.Stat(destPath)
+		switch {
+		case err == nil:
 			return true, nil
-		} else if !errors.Is(err, os.ErrNotExist) {
+		case !errors.Is(err, os.ErrNotExist):
 			return false, fmt.Errorf("os.Stat %s: %w", destPath, err)
 		}
 	}
 
-	if err := os.MkdirAll(filepath.Dir(destPath), dirPermissions); err != nil {
+	err := os.MkdirAll(filepath.Dir(destPath), dirPermissions)
+	if err != nil {
 		return false, fmt.Errorf("os.MkdirAll: %w", err)
 	}
 
@@ -151,13 +123,15 @@ func packSinglePlugin(plg pluginInfo, opts packOptions) (bool, error) {
 
 	// CreateTemp makes the file 0600; archives are meant to be readable by
 	// whoever consumes the packed tree.
-	if err := os.Chmod(tmpPath, archivePermissions); err != nil {
+	err = os.Chmod(tmpPath, archivePermissions)
+	if err != nil {
 		_ = os.Remove(tmpPath)
 
 		return false, fmt.Errorf("os.Chmod: %w", err)
 	}
 
-	if err := os.Rename(tmpPath, destPath); err != nil {
+	err = os.Rename(tmpPath, destPath)
+	if err != nil {
 		_ = os.Remove(tmpPath)
 
 		return false, fmt.Errorf("os.Rename: %w", err)
@@ -214,4 +188,48 @@ func printPackSummary(total, packed, skipped, failed int) {
 	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Skipped (already packed)", skipped)
 	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Failed", failed)
 	_, _ = fmt.Fprintln(os.Stdout, strings.Repeat("-", separatorLength))
+}
+
+// reportPackProgress renders the progress line and returns the next spinner index.
+func reportPackProgress(isInteractive bool, spinners []string, spinIdx int, pName string, idx, total int) int {
+	if !isInteractive {
+		_, _ = fmt.Fprintf(os.Stdout, "Packing %s...\n", pName)
+
+		return spinIdx
+	}
+
+	pct := int(float64(idx) / float64(total) * percentMultiplier)
+	_, _ = fmt.Fprintf(
+		os.Stdout,
+		"\r\033[K%s %s Packing %s... %d%% (%d/%d)",
+		spinners[spinIdx],
+		renderProgressBar(pct),
+		pName,
+		pct,
+		idx,
+		total,
+	)
+
+	return (spinIdx + 1) % len(spinners)
+}
+
+// recordPackResult tallies one plugin's outcome and reports it when not interactive.
+func recordPackResult(isInteractive bool, pName string, wasSkipped bool, packErr error, packed, skipped, failed *int) {
+	switch {
+	case packErr != nil:
+		*failed++
+		if !isInteractive {
+			_, _ = fmt.Fprintf(os.Stderr, "Error packing %s: %v\n", pName, packErr)
+		}
+	case wasSkipped:
+		*skipped++
+		if !isInteractive {
+			_, _ = fmt.Fprintf(os.Stdout, "Skipped (already packed): %s\n", pName)
+		}
+	default:
+		*packed++
+		if !isInteractive {
+			_, _ = fmt.Fprintf(os.Stdout, "Successfully packed %s\n", pName)
+		}
+	}
 }

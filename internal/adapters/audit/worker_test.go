@@ -3,7 +3,6 @@ package audit
 import (
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -84,7 +83,7 @@ func (s *fakeStore) totalSaved() int {
 }
 
 func discardLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+	return slog.New(slog.DiscardHandler)
 }
 
 func testConfig() Config {
@@ -101,18 +100,19 @@ func entry(op string) core.AuditEntry {
 	return core.AuditEntry{OperationType: op, Status: core.AuditStatusSuccess, CreatedAt: time.Now()}
 }
 
-// counterValue reads a single counter's value.
-func counterValue(t *testing.T, c prometheus.Counter) float64 {
+// counterValue reads a counter as an int. Every counter here holds an event
+// count, so an exact integer comparison is the meaningful one.
+func counterValue(t *testing.T, c prometheus.Counter) int {
 	t.Helper()
 
 	var m dto.Metric
 	require.NoError(t, c.Write(&m))
 
-	return m.GetCounter().GetValue()
+	return int(m.GetCounter().GetValue())
 }
 
 // lostValue reads the lost-events counter for one reason.
-func lostValue(t *testing.T, w *Worker, reason string) float64 {
+func lostValue(t *testing.T, w *Worker, reason string) int {
 	t.Helper()
 
 	return counterValue(t, w.eventsLost.WithLabelValues(reason))
@@ -186,9 +186,9 @@ func TestWorkerRetriesFailedBatch(t *testing.T) {
 		maxRetries int
 		failTimes  int64
 		wantSaved  int
-		wantLost   float64
+		wantLost   int
 		// wantFailures is how many attempts are expected to have failed.
-		wantFailures float64
+		wantFailures int
 	}{
 		{
 			name:         "recovers_on_second_attempt",
@@ -285,7 +285,7 @@ func TestWorkerSendCancelledIsCounted(t *testing.T) {
 
 	worker.Send(ctx, entry(core.OperationGenerateCode))
 
-	assert.Equal(t, float64(1), lostValue(t, worker, reasonSendCancelled),
+	assert.Equal(t, 1, lostValue(t, worker, reasonSendCancelled),
 		"an event dropped because the context was cancelled must be counted as lost")
 }
 
@@ -297,7 +297,7 @@ func TestWorkerSkippedIsCounted(t *testing.T) {
 	worker.Skipped()
 	worker.Skipped()
 
-	assert.Equal(t, float64(2), counterValue(t, worker.eventsSkipped))
+	assert.Equal(t, 2, counterValue(t, worker.eventsSkipped))
 	assert.Zero(t, lostValue(t, worker, reasonSaveFailed),
 		"a licence-skipped event is normal behaviour, not a loss")
 }

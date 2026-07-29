@@ -66,15 +66,15 @@ func (s *Store) SaveBatch(ctx context.Context, entries []core.AuditEntry) error 
 
 // buildInsert renders a multi-row INSERT with positional placeholders and the
 // matching argument list.
-func (s *Store) buildInsert(entries []core.AuditEntry) (string, []any) { //nolint:funcorder // helper of the Save methods above
+func (s *Store) buildInsert(entries []core.AuditEntry) (string, []any) {
 	var query strings.Builder
 
 	query.WriteString(insertPrefix)
 
 	args := make([]any, 0, len(entries)*columnsPerEntry)
 
-	for i, entry := range entries {
-		if i > 0 {
+	for row, entry := range entries {
+		if row > 0 {
 			query.WriteString(", ")
 		}
 
@@ -86,7 +86,7 @@ func (s *Store) buildInsert(entries []core.AuditEntry) (string, []any) { //nolin
 			}
 
 			query.WriteString("$")
-			query.WriteString(strconv.Itoa(i*columnsPerEntry + col + 1))
+			query.WriteString(strconv.Itoa(row*columnsPerEntry + col + 1))
 		}
 
 		query.WriteString(")")

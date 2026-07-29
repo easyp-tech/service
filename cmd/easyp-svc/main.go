@@ -13,6 +13,19 @@ import (
 	"github.com/easyp-tech/service/internal/adapters/storage"
 )
 
+// Flag and argument names shared by several plugin subcommands.
+const (
+	flagCfg            = "cfg"
+	flagFilter         = "filter"
+	flagForce          = "force"
+	flagDryRun         = "dry-run"
+	flagNonInteractive = "non-interactive"
+
+	argPath = "[path]"
+
+	usageNonInteractive = "disable interactive UI and dynamic progress bars"
+)
+
 func main() {
 	ctx, cancel := signal.NotifyContext(
 		context.Background(),
@@ -56,7 +69,7 @@ func getServiceCommand() *cli.Command {
 				Usage: "Start the gRPC/MCP service",
 				Flags: []cli.Flag{
 					&cli.StringFlag{
-						Name:  "cfg",
+						Name:  flagCfg,
 						Usage: "path to config file",
 						Value: "",
 					},
@@ -67,7 +80,7 @@ func getServiceCommand() *cli.Command {
 					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					cfgPath := cmd.String("cfg")
+					cfgPath := cmd.String(flagCfg)
 					logLvl := cmd.String("log_level")
 
 					_, _ = fmt.Fprintf(os.Stdout, "Starting easyp-svc with config: %q, log level: %q\n", cfgPath, logLvl)
@@ -99,7 +112,7 @@ func getPluginsPackCommand() *cli.Command {
 		Description: "Writes each plugin version directory to {out}/{group}/{name}/{version}/plugin.tgz. " +
 			"The layout mirrors the S3 object keys used by `plugins push`, so a packed tree can be " +
 			"uploaded as-is later. Existing archives are skipped unless --force is set.",
-		ArgsUsage: "[path]",
+		ArgsUsage: argPath,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:     "out",
@@ -107,23 +120,23 @@ func getPluginsPackCommand() *cli.Command {
 				Required: true,
 			},
 			&cli.StringFlag{
-				Name:  "filter",
+				Name:  flagFilter,
 				Usage: "glob filter pattern for plugins (e.g. 'protocolbuffers/*' or 'grpc/go:v1.6.2')",
 				Value: "",
 			},
 			&cli.BoolFlag{
-				Name:  "force",
+				Name:  flagForce,
 				Usage: "re-pack even if the archive already exists",
 				Value: false,
 			},
 			&cli.BoolFlag{
-				Name:  "dry-run",
+				Name:  flagDryRun,
 				Usage: "print the pack plan without writing archives",
 				Value: false,
 			},
 			&cli.BoolFlag{
-				Name:  "non-interactive",
-				Usage: "disable interactive UI and dynamic progress bars",
+				Name:  flagNonInteractive,
+				Usage: usageNonInteractive,
 				Value: false,
 			},
 		},
@@ -136,10 +149,10 @@ func getPluginsPackCommand() *cli.Command {
 			return runPluginsPack(ctx, packOptions{
 				scanPath:       scanPath,
 				outDir:         cmd.String("out"),
-				filter:         cmd.String("filter"),
-				force:          cmd.Bool("force"),
-				dryRun:         cmd.Bool("dry-run"),
-				nonInteractive: cmd.Bool("non-interactive"),
+				filter:         cmd.String(flagFilter),
+				force:          cmd.Bool(flagForce),
+				dryRun:         cmd.Bool(flagDryRun),
+				nonInteractive: cmd.Bool(flagNonInteractive),
 			})
 		},
 	}
@@ -153,59 +166,8 @@ func getPluginsPushCommand() *cli.Command {
 			"{group}/{name}/{version}/plugin.tgz. Run before `plugins register`: the service " +
 			"records the archive checksum at registration time. Re-pushing an already " +
 			"registered plugin with --force invalidates its recorded checksum — re-register it.",
-		ArgsUsage: "[path]",
-		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:  "cfg",
-				Usage: "path to service config YAML; registry.s3 is used for settings not passed as flags",
-				Value: "",
-			},
-			&cli.StringFlag{
-				Name:  "bucket",
-				Usage: "S3 bucket name (overrides registry.s3.bucket from --cfg)",
-				Value: "",
-			},
-			&cli.StringFlag{
-				Name:  "endpoint",
-				Usage: "S3 endpoint URL, e.g. http://localhost:9000 for MinIO/RustFS",
-				Value: "",
-			},
-			&cli.StringFlag{
-				Name:  "region",
-				Usage: "S3 region",
-				Value: "",
-			},
-			&cli.StringFlag{
-				Name:  "prefix",
-				Usage: "S3 key prefix",
-				Value: "",
-			},
-			&cli.BoolFlag{
-				Name:  "force-path-style",
-				Usage: "use path-style addressing (required by MinIO/RustFS)",
-				Value: false,
-			},
-			&cli.StringFlag{
-				Name:  "filter",
-				Usage: "glob filter pattern for plugins (e.g. 'protocolbuffers/*' or 'grpc/go:v1.6.2')",
-				Value: "",
-			},
-			&cli.BoolFlag{
-				Name:  "force",
-				Usage: "re-upload even if the archive already exists in storage",
-				Value: false,
-			},
-			&cli.BoolFlag{
-				Name:  "dry-run",
-				Usage: "print the upload plan without contacting storage",
-				Value: false,
-			},
-			&cli.BoolFlag{
-				Name:  "non-interactive",
-				Usage: "disable interactive UI and dynamic progress bars",
-				Value: false,
-			},
-		},
+		ArgsUsage: argPath,
+		Flags:     pushFlags(),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			scanPath := defaultPluginsScanPath
 			if args := cmd.Args().Slice(); len(args) >= 1 {
@@ -213,7 +175,7 @@ func getPluginsPushCommand() *cli.Command {
 			}
 
 			s3Opts, err := resolveS3Options(
-				cmd.String("cfg"),
+				cmd.String(flagCfg),
 				storage.S3Options{
 					Endpoint:       cmd.String("endpoint"),
 					Bucket:         cmd.String("bucket"),
@@ -229,11 +191,11 @@ func getPluginsPushCommand() *cli.Command {
 
 			return runPluginsPush(ctx, pushOptions{
 				scanPath:       scanPath,
-				filter:         cmd.String("filter"),
+				filter:         cmd.String(flagFilter),
 				s3:             s3Opts,
-				force:          cmd.Bool("force"),
-				dryRun:         cmd.Bool("dry-run"),
-				nonInteractive: cmd.Bool("non-interactive"),
+				force:          cmd.Bool(flagForce),
+				dryRun:         cmd.Bool(flagDryRun),
+				nonInteractive: cmd.Bool(flagNonInteractive),
 			})
 		},
 	}
@@ -243,44 +205,8 @@ func getPluginsRegisterCommand() *cli.Command {
 	return &cli.Command{
 		Name:      "register",
 		Usage:     "Register built plugin binaries with a running service via CreatePlugin",
-		ArgsUsage: "[path]",
-		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:  "addr",
-				Usage: "gRPC server address",
-				Value: "localhost:8080",
-			},
-			&cli.StringFlag{
-				Name:  "cfg",
-				Usage: "path to service config YAML; registry.plugins_dir is used as --plugins-prefix when that flag is not set",
-				Value: "",
-			},
-			&cli.StringFlag{
-				Name:  "filter",
-				Usage: "glob filter pattern for plugins (e.g. 'connectrpc/*')",
-				Value: "",
-			},
-			&cli.BoolFlag{
-				Name:  "non-interactive",
-				Usage: "disable interactive UI and dynamic progress bars",
-				Value: false,
-			},
-			&cli.BoolFlag{
-				Name:  "dry-run",
-				Usage: "scan and print planned CreatePlugin commands without contacting the server",
-				Value: false,
-			},
-			&cli.BoolFlag{
-				Name:  "fail-on-error",
-				Usage: "exit with error if any plugin failed registration",
-				Value: true,
-			},
-			&cli.StringFlag{
-				Name:  "plugins-prefix",
-				Usage: "prefix directory for plugins on the server (overrides registry.plugins_dir from --cfg)",
-				Value: defaultPluginsPrefix,
-			},
-		},
+		ArgsUsage: argPath,
+		Flags:     registerFlags(),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			scanPath := defaultPluginsScanPath
 			if args := cmd.Args().Slice(); len(args) >= 1 {
@@ -288,7 +214,7 @@ func getPluginsRegisterCommand() *cli.Command {
 			}
 
 			pluginsPrefix, err := resolvePluginsPrefix(
-				cmd.String("cfg"),
+				cmd.String(flagCfg),
 				cmd.String("plugins-prefix"),
 				cmd.IsSet("plugins-prefix"),
 			)
@@ -300,10 +226,10 @@ func getPluginsRegisterCommand() *cli.Command {
 				ctx,
 				scanPath,
 				cmd.String("addr"),
-				cmd.String("filter"),
+				cmd.String(flagFilter),
 				pluginsPrefix,
-				cmd.Bool("non-interactive"),
-				cmd.Bool("dry-run"),
+				cmd.Bool(flagNonInteractive),
+				cmd.Bool(flagDryRun),
 				cmd.Bool("fail-on-error"),
 			)
 		},
@@ -315,45 +241,7 @@ func getPluginsBuildCommand() *cli.Command {
 		Name:      "build",
 		Usage:     "Build plugin binaries from registry Dockerfiles",
 		ArgsUsage: "<registry-path>",
-		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:    "output",
-				Aliases: []string{"o"},
-				Usage:   "output directory for built plugin binaries",
-				Value:   "plugins",
-			},
-			&cli.StringFlag{
-				Name:  "filter",
-				Usage: "glob filter pattern for plugins (e.g. 'protocolbuffers/*' or 'grpc/go:v1.5.1')",
-				Value: "",
-			},
-			&cli.IntFlag{
-				Name:    "parallel",
-				Aliases: []string{"p"},
-				Usage:   "number of concurrent docker builds",
-				Value:   defaultBuildParallel,
-			},
-			&cli.BoolFlag{
-				Name:  "force",
-				Usage: "rebuild even if the binary already exists",
-				Value: false,
-			},
-			&cli.BoolFlag{
-				Name:  "dry-run",
-				Usage: "list what would be built without building",
-				Value: false,
-			},
-			&cli.BoolFlag{
-				Name:  "non-interactive",
-				Usage: "disable interactive UI and dynamic progress bars",
-				Value: false,
-			},
-			&cli.BoolFlag{
-				Name:  "keep-going",
-				Usage: "continue building remaining plugins after a failure",
-				Value: true,
-			},
-		},
+		Flags:     buildFlags(),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			args := cmd.Args().Slice()
 			if len(args) < 1 {
@@ -364,13 +252,153 @@ func getPluginsBuildCommand() *cli.Command {
 				ctx,
 				args[0],
 				cmd.String("output"),
-				cmd.String("filter"),
+				cmd.String(flagFilter),
 				cmd.Int("parallel"),
-				cmd.Bool("force"),
-				cmd.Bool("dry-run"),
-				cmd.Bool("non-interactive"),
+				cmd.Bool(flagForce),
+				cmd.Bool(flagDryRun),
+				cmd.Bool(flagNonInteractive),
 				cmd.Bool("keep-going"),
 			)
+		},
+	}
+}
+
+// pushFlags defines the flags of the corresponding subcommand.
+func pushFlags() []cli.Flag {
+	return []cli.Flag{
+		&cli.StringFlag{
+			Name:  flagCfg,
+			Usage: "path to service config YAML; registry.s3 is used for settings not passed as flags",
+			Value: "",
+		},
+		&cli.StringFlag{
+			Name:  "bucket",
+			Usage: "S3 bucket name (overrides registry.s3.bucket from --cfg)",
+			Value: "",
+		},
+		&cli.StringFlag{
+			Name:  "endpoint",
+			Usage: "S3 endpoint URL, e.g. http://localhost:9000 for MinIO/RustFS",
+			Value: "",
+		},
+		&cli.StringFlag{
+			Name:  "region",
+			Usage: "S3 region",
+			Value: "",
+		},
+		&cli.StringFlag{
+			Name:  "prefix",
+			Usage: "S3 key prefix",
+			Value: "",
+		},
+		&cli.BoolFlag{
+			Name:  "force-path-style",
+			Usage: "use path-style addressing (required by MinIO/RustFS)",
+			Value: false,
+		},
+		&cli.StringFlag{
+			Name:  flagFilter,
+			Usage: "glob filter pattern for plugins (e.g. 'protocolbuffers/*' or 'grpc/go:v1.6.2')",
+			Value: "",
+		},
+		&cli.BoolFlag{
+			Name:  flagForce,
+			Usage: "re-upload even if the archive already exists in storage",
+			Value: false,
+		},
+		&cli.BoolFlag{
+			Name:  flagDryRun,
+			Usage: "print the upload plan without contacting storage",
+			Value: false,
+		},
+		&cli.BoolFlag{
+			Name:  flagNonInteractive,
+			Usage: usageNonInteractive,
+			Value: false,
+		},
+	}
+}
+
+// registerFlags defines the flags of the corresponding subcommand.
+func registerFlags() []cli.Flag {
+	return []cli.Flag{
+		&cli.StringFlag{
+			Name:  "addr",
+			Usage: "gRPC server address",
+			Value: "localhost:8080",
+		},
+		&cli.StringFlag{
+			Name:  flagCfg,
+			Usage: "path to service config YAML; registry.plugins_dir is used as --plugins-prefix when that flag is not set",
+			Value: "",
+		},
+		&cli.StringFlag{
+			Name:  flagFilter,
+			Usage: "glob filter pattern for plugins (e.g. 'connectrpc/*')",
+			Value: "",
+		},
+		&cli.BoolFlag{
+			Name:  flagNonInteractive,
+			Usage: usageNonInteractive,
+			Value: false,
+		},
+		&cli.BoolFlag{
+			Name:  flagDryRun,
+			Usage: "scan and print planned CreatePlugin commands without contacting the server",
+			Value: false,
+		},
+		&cli.BoolFlag{
+			Name:  "fail-on-error",
+			Usage: "exit with error if any plugin failed registration",
+			Value: true,
+		},
+		&cli.StringFlag{
+			Name:  "plugins-prefix",
+			Usage: "prefix directory for plugins on the server (overrides registry.plugins_dir from --cfg)",
+			Value: defaultPluginsPrefix,
+		},
+	}
+}
+
+// buildFlags defines the flags of the corresponding subcommand.
+func buildFlags() []cli.Flag {
+	return []cli.Flag{
+		&cli.StringFlag{
+			Name:    "output",
+			Aliases: []string{"o"},
+			Usage:   "output directory for built plugin binaries",
+			Value:   "plugins",
+		},
+		&cli.StringFlag{
+			Name:  flagFilter,
+			Usage: "glob filter pattern for plugins (e.g. 'protocolbuffers/*' or 'grpc/go:v1.5.1')",
+			Value: "",
+		},
+		&cli.IntFlag{
+			Name:    "parallel",
+			Aliases: []string{"p"},
+			Usage:   "number of concurrent docker builds",
+			Value:   defaultBuildParallel,
+		},
+		&cli.BoolFlag{
+			Name:  flagForce,
+			Usage: "rebuild even if the binary already exists",
+			Value: false,
+		},
+		&cli.BoolFlag{
+			Name:  flagDryRun,
+			Usage: "list what would be built without building",
+			Value: false,
+		},
+		&cli.BoolFlag{
+			Name:  flagNonInteractive,
+			Usage: usageNonInteractive,
+			Value: false,
+		},
+		&cli.BoolFlag{
+			Name:  "keep-going",
+			Usage: "continue building remaining plugins after a failure",
+			Value: true,
 		},
 	}
 }

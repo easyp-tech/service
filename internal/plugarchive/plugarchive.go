@@ -23,6 +23,22 @@ const EntrypointName = "plugin"
 // under, both as an S3 object and on disk.
 const ArchiveName = "plugin.tgz"
 
+// Permissions of an unpacked plugin.
+//
+// gosec wants 0750/0600 or less, but these are deliberately world-readable and
+// traversable: the service may run under a different user than the one that
+// unpacked the archive, and a plugin is useless unless its directory can be
+// traversed and its entrypoint executed. This matches the layout that
+// `plugins build` produces. The same reasoning covers the file modes restored
+// verbatim from the archive.
+const (
+	dirPermissions        = 0o755
+	entrypointPermissions = 0o755
+	// ownerAccess is OR-ed into restored directory modes so the extracting
+	// process can always descend into what it just created.
+	ownerAccess = 0o700
+)
+
 // Package errors.
 var (
 	ErrUnsafePath        = errors.New("unsafe path in archive")
@@ -44,50 +60,7 @@ func PackDir(dirPath string, w io.Writer) error {
 			return nil
 		}
 
-		rel, err := filepath.Rel(dirPath, path)
-		if err != nil {
-			return fmt.Errorf("filepath.Rel: %w", err)
-		}
-		rel = filepath.ToSlash(rel)
-
-		var linkTarget string
-		if info.Mode()&os.ModeSymlink != 0 {
-			linkTarget, err = os.Readlink(path)
-			if err != nil {
-				return fmt.Errorf("os.Readlink: %w", err)
-			}
-		}
-
-		header, err := tar.FileInfoHeader(info, linkTarget)
-		if err != nil {
-			return fmt.Errorf("tar.FileInfoHeader: %w", err)
-		}
-		header.Name = rel
-		if info.IsDir() {
-			header.Name += "/"
-		}
-
-		err = tarWriter.WriteHeader(header)
-		if err != nil {
-			return fmt.Errorf("tarWriter.WriteHeader: %w", err)
-		}
-
-		if !info.Mode().IsRegular() {
-			return nil
-		}
-
-		file, err := os.Open(path)
-		if err != nil {
-			return fmt.Errorf("os.Open: %w", err)
-		}
-		defer func() { _ = file.Close() }()
-
-		_, err = io.Copy(tarWriter, file)
-		if err != nil {
-			return fmt.Errorf("io.Copy: %w", err)
-		}
-
-		return nil
+		return packEntry(tarWriter, dirPath, path, info)
 	})
 	if walkErr != nil {
 		return fmt.Errorf("filepath.Walk: %w", walkErr)
@@ -105,6 +78,57 @@ func PackDir(dirPath string, w io.Writer) error {
 	return nil
 }
 
+// packEntry writes one file, directory or symlink into the archive.
+func packEntry(tarWriter *tar.Writer, dirPath string, path string, info os.FileInfo) error {
+	rel, err := filepath.Rel(dirPath, path)
+	if err != nil {
+		return fmt.Errorf("filepath.Rel: %w", err)
+	}
+	rel = filepath.ToSlash(rel)
+
+	var linkTarget string
+	if info.Mode()&os.ModeSymlink != 0 {
+		linkTarget, err = os.Readlink(path)
+		if err != nil {
+			return fmt.Errorf("os.Readlink: %w", err)
+		}
+	}
+
+	header, err := tar.FileInfoHeader(info, linkTarget)
+	if err != nil {
+		return fmt.Errorf("tar.FileInfoHeader: %w", err)
+	}
+	header.Name = rel
+	if info.IsDir() {
+		header.Name += "/"
+	}
+
+	err = tarWriter.WriteHeader(header)
+	if err != nil {
+		return fmt.Errorf("tarWriter.WriteHeader: %w", err)
+	}
+
+	if !info.Mode().IsRegular() {
+		return nil
+	}
+
+	// gosec flags Walk-derived paths for symlink TOCTOU. dirPath is a plugin
+	// version directory this process just built or unpacked itself, not
+	// attacker-supplied, and entries are only read — never written through.
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("os.Open: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+
+	_, err = io.Copy(tarWriter, file)
+	if err != nil {
+		return fmt.Errorf("io.Copy: %w", err)
+	}
+
+	return nil
+}
+
 // Unpack extracts the tar.gz archive at archivePath into destDir, replacing
 // destDir atomically: entries are extracted into a unique sibling temp
 // directory which is then renamed over destDir. The archive must contain the
@@ -115,7 +139,7 @@ func PackDir(dirPath string, w io.Writer) error {
 // existing symlinks (each parent directory is created as a real directory).
 func Unpack(archivePath string, destDir string) error {
 	parent := filepath.Dir(destDir)
-	err := os.MkdirAll(parent, 0o755)
+	err := os.MkdirAll(parent, dirPermissions)
 	if err != nil {
 		return fmt.Errorf("os.MkdirAll: %w", err)
 	}
@@ -127,7 +151,7 @@ func Unpack(archivePath string, destDir string) error {
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	// MkdirTemp creates 0700; match the 0755 layout produced by plugins build.
-	err = os.Chmod(tmpDir, 0o755)
+	err = os.Chmod(tmpDir, dirPermissions)
 	if err != nil {
 		return fmt.Errorf("os.Chmod tmpdir: %w", err)
 	}
@@ -143,7 +167,7 @@ func Unpack(archivePath string, destDir string) error {
 		return fmt.Errorf("%w: %s", ErrMissingEntrypoint, archivePath)
 	}
 	if info.Mode().IsRegular() {
-		err = os.Chmod(entrypoint, 0o755)
+		err = os.Chmod(entrypoint, entrypointPermissions)
 		if err != nil {
 			return fmt.Errorf("os.Chmod entrypoint: %w", err)
 		}
@@ -202,42 +226,64 @@ func extractTo(archivePath string, destDir string) error {
 func extractEntry(tarReader *tar.Reader, header *tar.Header, target string) error {
 	switch header.Typeflag {
 	case tar.TypeDir:
-		err := os.MkdirAll(target, os.FileMode(header.Mode).Perm()|0o700)
+		err := os.MkdirAll(target, header.FileInfo().Mode().Perm()|ownerAccess)
 		if err != nil {
 			return fmt.Errorf("os.MkdirAll: %w", err)
 		}
 	case tar.TypeReg:
-		err := os.MkdirAll(filepath.Dir(target), 0o755)
-		if err != nil {
-			return fmt.Errorf("os.MkdirAll: %w", err)
-		}
-
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, os.FileMode(header.Mode).Perm())
-		if err != nil {
-			return fmt.Errorf("os.OpenFile: %w", err)
-		}
-
-		_, err = io.Copy(out, tarReader) //nolint:gosec // archive integrity is sha256-verified before unpacking
-		closeErr := out.Close()
-		if err != nil {
-			return fmt.Errorf("io.Copy: %w", err)
-		}
-		if closeErr != nil {
-			return fmt.Errorf("out.Close: %w", closeErr)
-		}
+		return extractRegular(tarReader, header, target)
 	case tar.TypeSymlink:
-		err := os.MkdirAll(filepath.Dir(target), 0o755)
-		if err != nil {
-			return fmt.Errorf("os.MkdirAll: %w", err)
-		}
-		_ = os.Remove(target)
-		err = os.Symlink(header.Linkname, target)
-		if err != nil {
-			return fmt.Errorf("os.Symlink: %w", err)
-		}
+		return extractSymlink(header, target)
 	default:
 		// Skip devices, fifos, hard links and other special entries: plugin
 		// artifacts never need them and materializing them is a risk.
+	}
+
+	return nil
+}
+
+// extractRegular writes a regular file entry, never following an existing
+// symlink at the target path.
+func extractRegular(tarReader *tar.Reader, header *tar.Header, target string) error {
+	err := os.MkdirAll(filepath.Dir(target), dirPermissions)
+	if err != nil {
+		return fmt.Errorf("os.MkdirAll: %w", err)
+	}
+
+	out, err := os.OpenFile(
+		target,
+		os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW,
+		header.FileInfo().Mode().Perm(),
+	)
+	if err != nil {
+		return fmt.Errorf("os.OpenFile: %w", err)
+	}
+
+	_, err = io.Copy(out, tarReader)
+	closeErr := out.Close()
+
+	if err != nil {
+		return fmt.Errorf("io.Copy: %w", err)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("out.Close: %w", closeErr)
+	}
+
+	return nil
+}
+
+// extractSymlink recreates a symlink entry verbatim.
+func extractSymlink(header *tar.Header, target string) error {
+	err := os.MkdirAll(filepath.Dir(target), dirPermissions)
+	if err != nil {
+		return fmt.Errorf("os.MkdirAll: %w", err)
+	}
+
+	_ = os.Remove(target)
+
+	err = os.Symlink(header.Linkname, target)
+	if err != nil {
+		return fmt.Errorf("os.Symlink: %w", err)
 	}
 
 	return nil

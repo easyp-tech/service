@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -78,13 +79,13 @@ type versionEntry struct {
 }
 
 func (v *versionEntry) UnmarshalYAML(node *yaml.Node) error {
-	switch node.Kind {
+	switch node.Kind { //nolint:exhaustive // only scalar and mapping entries are valid here; the rest is the default
 	case yaml.ScalarNode:
 		v.version = node.Value
 
 		return nil
 	case yaml.MappingNode:
-		var m struct {
+		var entry struct {
 			Version    string            `yaml:"version"`
 			Binary     string            `yaml:"binary"` // deprecated, ignored
 			BuildArgs  map[string]string `yaml:"build_args"`
@@ -92,14 +93,15 @@ func (v *versionEntry) UnmarshalYAML(node *yaml.Node) error {
 			Args       []string          `yaml:"args"`
 			Skip       bool              `yaml:"skip"`
 		}
-		if err := node.Decode(&m); err != nil {
+		err := node.Decode(&entry)
+		if err != nil {
 			return fmt.Errorf("decode version entry: %w", err)
 		}
-		v.version = m.Version
-		v.buildArgs = m.BuildArgs
-		v.dockerfile = m.Dockerfile
-		v.args = m.Args
-		v.skip = m.Skip
+		v.version = entry.Version
+		v.buildArgs = entry.BuildArgs
+		v.dockerfile = entry.Dockerfile
+		v.args = entry.Args
+		v.skip = entry.Skip
 
 		return nil
 	default:
@@ -143,7 +145,8 @@ func runPluginsBuild(
 	nonInteractive bool,
 	keepGoing bool,
 ) error {
-	if err := validateRegistryDir(registryPath); err != nil {
+	err := validateRegistryDir(registryPath)
+	if err != nil {
 		return err
 	}
 
@@ -162,19 +165,12 @@ func runPluginsBuild(
 	toBuild, cached := splitCached(jobs, force)
 	printBuildPlan(registryPath, filter, total, len(toBuild), cached, len(skipped), parallel)
 
-	if dryRun {
-		printDryRun(toBuild, skipped)
-
-		return nil
-	}
-	if len(toBuild) == 0 {
-		_, _ = fmt.Fprintln(os.Stdout, "Nothing to build, all cached!")
-		printSkipped(skipped)
-
+	if reportNothingToBuild(toBuild, skipped, dryRun) {
 		return nil
 	}
 
-	if err := checkDocker(ctx); err != nil {
+	err = checkDocker(ctx)
+	if err != nil {
 		return err
 	}
 
@@ -192,6 +188,25 @@ func runPluginsBuild(
 	}
 
 	return nil
+}
+
+// reportNothingToBuild handles the dry-run and fully-cached cases, reporting
+// whether runPluginsBuild is already finished.
+func reportNothingToBuild(toBuild []buildJob, skipped []string, dryRun bool) bool {
+	if dryRun {
+		printDryRun(toBuild, skipped)
+
+		return true
+	}
+
+	if len(toBuild) == 0 {
+		_, _ = fmt.Fprintln(os.Stdout, "Nothing to build, all cached!")
+		printSkipped(skipped)
+
+		return true
+	}
+
+	return false
 }
 
 func validateRegistryDir(path string) error {
@@ -264,7 +279,9 @@ func jobsFromConfigFile(configPath string, outputDir string, filter string) ([]b
 // parsePluginConfig parses plugin.yaml bytes into a pluginConfig without file I/O.
 func parsePluginConfig(data []byte) (pluginConfig, error) {
 	var cfg pluginConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+
+	err := yaml.Unmarshal(data, &cfg)
+	if err != nil {
 		return pluginConfig{}, fmt.Errorf("parse plugin.yaml: %w", err)
 	}
 
@@ -285,24 +302,24 @@ func jobsFromConfig(
 		jobs    []buildJob
 		skipped []string
 	)
-	for _, v := range cfg.Versions {
-		if v.version == "" || !matchFilter(group, name, v.version, filter) {
+	for _, ver := range cfg.Versions {
+		if ver.version == "" || !matchFilter(group, name, ver.version, filter) {
 			continue
 		}
-		if v.skip {
-			skipped = append(skipped, fmt.Sprintf("%s/%s:%s", group, name, v.version))
+		if ver.skip {
+			skipped = append(skipped, fmt.Sprintf("%s/%s:%s", group, name, ver.version))
 
 			continue
 		}
 		jobs = append(jobs, buildJob{
 			group:      group,
 			name:       name,
-			version:    v.version,
-			buildArgs:  mergeBuildArgs(cfg.BuildArgs, v.buildArgs),
-			dockerfile: overrideString(cfg.Dockerfile, v.dockerfile),
-			args:       mergeArgs(cfg.Args, v.args),
+			version:    ver.version,
+			buildArgs:  mergeBuildArgs(cfg.BuildArgs, ver.buildArgs),
+			dockerfile: overrideString(cfg.Dockerfile, ver.dockerfile),
+			args:       mergeArgs(cfg.Args, ver.args),
 			pluginDir:  pluginDir,
-			outputDir:  filepath.Join(outputDir, group, name, v.version),
+			outputDir:  filepath.Join(outputDir, group, name, ver.version),
 		})
 	}
 
@@ -326,12 +343,8 @@ func mergeBuildArgs(base map[string]string, override map[string]string) map[stri
 	}
 
 	out := make(map[string]string, len(base)+len(override))
-	for k, val := range base {
-		out[k] = val
-	}
-	for k, val := range override {
-		out[k] = val
-	}
+	maps.Copy(out, base)
+	maps.Copy(out, override)
 
 	return out
 }
@@ -356,25 +369,28 @@ func splitCached(jobs []buildJob, force bool) ([]buildJob, int) {
 
 	toBuild := make([]buildJob, 0, len(jobs))
 	cached := 0
-	for _, j := range jobs {
-		if j.cached() {
+	for _, job := range jobs {
+		if job.cached() {
 			cached++
 
 			continue
 		}
-		toBuild = append(toBuild, j)
+		toBuild = append(toBuild, job)
 	}
 
 	return toBuild, cached
 }
 
 func checkDocker(ctx context.Context) error {
-	if _, err := exec.LookPath("docker"); err != nil {
+	_, err := exec.LookPath("docker")
+	if err != nil {
 		return ErrDockerNotFound
 	}
 
 	cmd := exec.CommandContext(ctx, "docker", "info")
-	if err := cmd.Run(); err != nil {
+
+	err = cmd.Run()
+	if err != nil {
 		return fmt.Errorf("%w: %w", ErrDockerUnavailable, err)
 	}
 
@@ -398,7 +414,8 @@ func executeBuilds(ctx context.Context, jobs []buildJob, parallel int, keepGoing
 func buildOne(ctx context.Context, job buildJob, keepGoing bool, tracker *buildTracker) error {
 	start := time.Now()
 
-	if err := os.MkdirAll(job.outputDir, dirPermissions); err != nil {
+	err := os.MkdirAll(job.outputDir, dirPermissions)
+	if err != nil {
 		tracker.finish(job.key(), false, "mkdir failed", time.Since(start).Round(time.Second))
 
 		return keepOrFail(keepGoing, fmt.Errorf("mkdir %s: %w", job.outputDir, err))
@@ -441,10 +458,14 @@ func keepOrFail(keepGoing bool, err error) error {
 }
 
 func runDockerBuild(ctx context.Context, job buildJob) ([]byte, error) {
-	args := []string{
+	// 3 fixed flags + a pair per build arg + per-version extras + output/-f/context.
+	const fixedArgs, tailArgs, argsPerBuildArg = 4, 5, 2
+
+	args := make([]string, 0, fixedArgs+argsPerBuildArg*len(job.buildArgs)+len(job.args)+tailArgs)
+	args = append(args,
 		"build", "--progress=plain",
-		"--build-arg", "VERSION=" + job.version,
-	}
+		"--build-arg", "VERSION="+job.version,
+	)
 
 	keys := make([]string, 0, len(job.buildArgs))
 	for k := range job.buildArgs {
@@ -569,35 +590,35 @@ func printSkipped(skipped []string) {
 	}
 }
 
-func printBuildSummary(t *buildTracker, total int, cached int, skipped []string) {
-	if t.interactive {
-		t.clear()
+func printBuildSummary(tracker *buildTracker, total int, cached int, skipped []string) {
+	if tracker.interactive {
+		tracker.clear()
 	}
 
 	_, _ = fmt.Fprintln(os.Stdout, "\nРезультаты сборки:")
 	_, _ = fmt.Fprintln(os.Stdout, strings.Repeat("-", separatorLength))
 	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Всего версий найдено", total)
-	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Собрано", t.succeeded)
+	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Собрано", tracker.succeeded)
 	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Пропущено (кэш)", cached)
 	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Пропущено (skip)", len(skipped))
-	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Ошибка сборки", t.failed)
+	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Ошибка сборки", tracker.failed)
 	_, _ = fmt.Fprintln(os.Stdout, strings.Repeat("-", separatorLength))
 	printSkipped(skipped)
 }
 
-func formatSize(b int64) string {
+func formatSize(size int64) string {
 	const unit = 1024
-	if b < unit {
-		return fmt.Sprintf("%d B", b)
+	if size < unit {
+		return fmt.Sprintf("%d B", size)
 	}
 
 	div, exp := int64(unit), 0
-	for n := b / unit; n >= unit; n /= unit {
+	for n := size / unit; n >= unit; n /= unit {
 		div *= unit
 		exp++
 	}
 
-	return fmt.Sprintf("%.1f%cB", float64(b)/float64(div), "KMGTPE"[exp])
+	return fmt.Sprintf("%.1f%cB", float64(size)/float64(div), "KMGTPE"[exp])
 }
 
 // buildTracker keeps concurrency-safe state of active and completed builds.
@@ -720,7 +741,7 @@ func (t *buildTracker) renderPanelLocked() int {
 	t.spinIdx++
 
 	pct := int(float64(t.completed) / float64(t.total) * percentMultiplier)
-	bar := renderProgressBar(pct, progressBarWidth)
+	bar := renderProgressBar(pct)
 	header := fmt.Sprintf(
 		"%s %s %d/%d (%d%%) | ✅ %d  ❌ %d  | active: %d",
 		spinner, bar, t.completed, t.total, pct, t.succeeded, t.failed, len(t.active),
