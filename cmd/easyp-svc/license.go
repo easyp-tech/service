@@ -8,13 +8,38 @@ import (
 	"github.com/easyp-tech/service/internal/config"
 )
 
-// licenseTokenEnv is consulted directly because the --cfg path decodes YAML and
-// skips envconfig entirely, so a token handed to the container through the
-// environment would otherwise be dropped on the floor.
-const licenseTokenEnv = "LICENSE_KEY"
+// These variables are consulted directly because the --cfg path decodes YAML
+// and skips envconfig entirely, so licence settings handed to the container
+// through the environment would otherwise be dropped on the floor.
+const (
+	licenseTokenEnv     = "LICENSE_KEY"
+	licensePublicKeyEnv = "LICENSE_PUBLIC_KEY"
+)
+
+// licenseCredentials is what the licence client needs to reach a verdict: the
+// token to check and the key to check it against. Either being empty puts the
+// service in community mode.
+type licenseCredentials struct {
+	token     string
+	publicKey string
+}
+
+// resolveLicense collects the licence token and the verification key from
+// configuration, falling back to the environment for each.
+func resolveLicense(cfg config.LicenseConfig) (licenseCredentials, error) {
+	token, err := resolveLicenseToken(cfg)
+	if err != nil {
+		return licenseCredentials{}, err //nolint:exhaustruct // the error is the result
+	}
+
+	return licenseCredentials{
+		token:     token,
+		publicKey: resolveLicensePublicKey(cfg),
+	}, nil
+}
 
 // resolveLicenseToken returns the licence token, or an empty string when none
-// is configured — which puts the service in community mode.
+// is configured.
 //
 // Precedence: license.key, then the contents of license.file, then LICENSE_KEY
 // from the environment.
@@ -33,4 +58,16 @@ func resolveLicenseToken(cfg config.LicenseConfig) (string, error) {
 	}
 
 	return strings.TrimSpace(os.Getenv(licenseTokenEnv)), nil
+}
+
+// resolveLicensePublicKey returns the Ed25519 verification key, or an empty
+// string when none is configured.
+//
+// Precedence: license.public_key, then LICENSE_PUBLIC_KEY from the environment.
+func resolveLicensePublicKey(cfg config.LicenseConfig) string {
+	if cfg.PublicKey != "" {
+		return strings.TrimSpace(cfg.PublicKey)
+	}
+
+	return strings.TrimSpace(os.Getenv(licensePublicKeyEnv))
 }

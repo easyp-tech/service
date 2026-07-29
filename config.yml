@@ -35,13 +35,17 @@ worker_pool:
   generation_timeout: 120s
   max_retries: 3
   shutdown_timeout: 30s
-# Without a token the service runs in community mode: no audit, at most 4
-# workers and 10 registered plugins. Leaving both fields empty falls back to the
-# LICENSE_KEY environment variable, which is how docker-compose passes it.
+# Enterprise needs both a token and the public key it is verified against.
+# Without them the service runs in community mode: no audit, at most 4 workers
+# and 10 registered plugins. Empty fields fall back to the LICENSE_KEY and
+# LICENSE_PUBLIC_KEY environment variables, which is how docker-compose passes
+# them. Note that keeping the public key here makes the trust anchor editable:
+# whoever can change this file decides which authority may issue licences.
 license:
-  key: ""        # inline PASETO token (takes priority over file)
-  file: ""       # path to a file holding the token
-  cache_ttl: 5m  # how often the token is re-validated
+  key: ""         # inline PASETO token (takes priority over file)
+  file: ""        # path to a file holding the token
+  public_key: ""  # hex-encoded Ed25519 verification key
+  cache_ttl: 5m   # how often the token is re-validated
 rate_limit:
   requests_per_second: 10.0  # token refill rate (tokens/sec)
   burst: 20                   # max tokens (burst size)

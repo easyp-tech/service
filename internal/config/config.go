@@ -108,16 +108,23 @@ type WorkerPoolConfig struct {
 	ShutdownTimeout   time.Duration `env:"SHUTDOWN_TIMEOUT,default=30s"    yaml:"shutdown_timeout"`
 }
 
-// LicenseConfig points at the licence token and configures how often it is
-// re-validated. Without a token the service runs in community mode.
+// LicenseConfig points at the licence token and the key it is verified against,
+// and configures how often it is re-validated. Without both a token and a
+// public key the service runs in community mode.
 //
 // The env names below are relative to the section prefix, so they resolve to
-// LICENSE_KEY, LICENSE_FILE and LICENSE_CACHE_TTL.
+// LICENSE_KEY, LICENSE_FILE, LICENSE_PUBLIC_KEY and LICENSE_CACHE_TTL.
 type LicenseConfig struct {
 	// Key is an inline PASETO token. Takes priority over File.
 	Key string `env:"KEY"  yaml:"key"`
 	// File is a path to a file holding the token.
 	File string `env:"FILE" yaml:"file"`
+
+	// PublicKey is the hex-encoded Ed25519 key that licence tokens are verified
+	// against. Note that this makes the trust anchor configuration rather than a
+	// property of the build: whoever can edit this file — or set
+	// LICENSE_PUBLIC_KEY — decides which authority may issue licences.
+	PublicKey string `env:"PUBLIC_KEY" yaml:"public_key"`
 
 	CacheTTL time.Duration `env:"CACHE_TTL" yaml:"cache_ttl"`
 }

@@ -189,8 +189,6 @@ services:
     build:
       context: .
       dockerfile: ./Dockerfile
-      args:
-        LICENSE_PUBLIC_KEY: "${LICENSE_PUBLIC_KEY:-}"
     container_name: easyp-api-service
     restart: always
     # The image runs as 65532, but ./plugins below is a bind mount whose owner
@@ -217,6 +215,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://alloy:4317"
       OTEL_SERVICE_NAME: "easyp-api-service"
       LICENSE_KEY: "${LICENSE_KEY:-}"
+      LICENSE_PUBLIC_KEY: "${LICENSE_PUBLIC_KEY:-}"
     # The gRPC port is deliberately not published: it is reachable only from
     # inside easyp_network, and from outside only through traefik, which is the
     # single party holding a client certificate. The remaining ports serve

@@ -40,16 +40,16 @@ type LicenseClient interface {
 **Current implementation:** `MockLicenseClient`. It honours the wiring but not the
 cryptography:
 
-| Token | Embedded public key | Result |
-|-------|--------------------|--------|
+| Token | Configured public key | Result |
+|-------|----------------------|--------|
 | absent | any | community |
 | present | absent | community (logs a warning) |
 | present | present | enterprise, **token accepted unverified** |
 
 The signature is never checked — that is the piece still missing, and the client
 logs a warning on every refresh to say so. It will be replaced with a real gRPC
-client, or with local PASETO verification against `license.PublicKey()`, when
-the license server is ready.
+client, or with local PASETO verification against the configured public key,
+when the license server is ready.
 
 ### Manager (`internal/license`)
 
@@ -83,29 +83,28 @@ gRPC interceptor that checks feature availability before request processing. App
 license:
   key: ""          # inline PASETO token; takes priority over file
   file: ""         # path to a file holding the token
+  public_key: ""   # hex-encoded Ed25519 verification key
   cache_ttl: 5m    # how long to cache license claims
 ```
 
-Environment: `LICENSE_KEY`, `LICENSE_FILE`, `LICENSE_CACHE_TTL`.
+Environment: `LICENSE_KEY`, `LICENSE_FILE`, `LICENSE_PUBLIC_KEY`,
+`LICENSE_CACHE_TTL`.
 
-`LICENSE_KEY` is also consulted directly as a last resort, because the `--cfg`
-startup path decodes YAML and skips envconfig entirely — without that fallback a
-token passed to the container through the environment would be dropped. Order of
-precedence: `license.key` → contents of `license.file` → `LICENSE_KEY`.
+`LICENSE_KEY` and `LICENSE_PUBLIC_KEY` are also consulted directly as a last
+resort, because the `--cfg` startup path decodes YAML and skips envconfig
+entirely — without that fallback values passed to the container through the
+environment would be dropped. Order of precedence:
 
-### Verification key
+- token: `license.key` → contents of `license.file` → `LICENSE_KEY`
+- key: `license.public_key` → `LICENSE_PUBLIC_KEY`
 
-The Ed25519 public key is linked into the binary rather than read at runtime, so
-a running deployment cannot be pointed at a different signing authority without a
-rebuild:
+Both are read at runtime. A deployment with no public key cannot honour any
+token and stays in community mode.
 
-```bash
-go build -ldflags "-X github.com/easyp-tech/service/internal/license.publicKeyHex=<hex>"
-# or, through the image:
-docker build --build-arg LICENSE_PUBLIC_KEY=<hex> .
-```
-
-A build with no key cannot honour any token and stays in community mode.
+> **Threat model.** Because the verification key is configuration rather than a
+> property of the build, anyone able to edit `config.yml` or set
+> `LICENSE_PUBLIC_KEY` can substitute their own signing authority and issue
+> themselves a licence. Protect the config file accordingly.
 
 ## PASETO Token Format
 

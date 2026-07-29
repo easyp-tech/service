@@ -56,3 +56,45 @@ func TestResolveLicenseToken(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
+func TestResolveLicensePublicKey(t *testing.T) {
+	t.Run("nothing configured means no verification key", func(t *testing.T) {
+		t.Setenv(licensePublicKeyEnv, "")
+
+		require.Empty(t, resolveLicensePublicKey(config.LicenseConfig{})) //nolint:exhaustruct
+	})
+
+	t.Run("config wins over environment", func(t *testing.T) {
+		t.Setenv(licensePublicKeyEnv, "from-env")
+
+		key := resolveLicensePublicKey(config.LicenseConfig{PublicKey: "from-config"}) //nolint:exhaustruct
+		require.Equal(t, "from-config", key)
+	})
+
+	t.Run("environment is the fallback the --cfg path relies on", func(t *testing.T) {
+		t.Setenv(licensePublicKeyEnv, " from-env\n")
+
+		require.Equal(t, "from-env", resolveLicensePublicKey(config.LicenseConfig{})) //nolint:exhaustruct
+	})
+}
+
+func TestResolveLicense(t *testing.T) {
+	t.Run("collects both halves", func(t *testing.T) {
+		t.Setenv(licenseTokenEnv, "env-token")
+		t.Setenv(licensePublicKeyEnv, "env-key")
+
+		creds, err := resolveLicense(config.LicenseConfig{}) //nolint:exhaustruct
+		require.NoError(t, err)
+		require.Equal(t, "env-token", creds.token)
+		require.Equal(t, "env-key", creds.publicKey)
+	})
+
+	t.Run("a bad token file fails the whole resolution", func(t *testing.T) {
+		t.Setenv(licensePublicKeyEnv, "env-key")
+
+		_, err := resolveLicense(config.LicenseConfig{ //nolint:exhaustruct
+			File: filepath.Join(t.TempDir(), "absent"),
+		})
+		require.Error(t, err)
+	})
+}

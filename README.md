@@ -401,18 +401,20 @@ paths point at certificates issued by your own CA.
 ### Licensing
 
 Without a token the service runs in **community** mode: no audit log, at most 4
-workers and 10 registered plugins. Enterprise needs two things — a token at
-runtime and the matching public key linked into the binary at build time:
+workers and 10 registered plugins. Enterprise needs two things — a token and the
+public key it is verified against:
 
 ```bash
 LICENSE_PUBLIC_KEY=<hex> LICENSE_KEY=<paseto-token> task up
 ```
 
-The token is taken from `license.key`, then `license.file`, then the
-`LICENSE_KEY` environment variable. The public key lives in the binary rather
-than in configuration so a deployment cannot be repointed at another signing
-authority without a rebuild; a build without it stays in community mode whatever
-token is supplied.
+Both are read at runtime. The token comes from `license.key`, then
+`license.file`, then `LICENSE_KEY`; the public key from `license.public_key`,
+then `LICENSE_PUBLIC_KEY`. Without a public key no token is honoured.
+
+Because the verification key is configuration, whoever can edit `config.yml` can
+point the service at a different signing authority — protect that file the way
+you protect the database password next to it.
 
 > **Not yet implemented:** the token's PASETO signature is *not* verified. Any
 > non-empty token is accepted at face value, and the service logs a warning

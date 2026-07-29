@@ -14,7 +14,7 @@ import (
 // any non-empty token is taken at face value.
 //
 // TODO: replace with a real client that verifies the PASETO signature against
-// PublicKey() and reads tier, limits and expiry from the token's claims.
+// the configured public key and reads tier, limits and expiry from the claims.
 type MockLicenseClient struct {
 	token     string
 	publicKey string
@@ -23,8 +23,8 @@ type MockLicenseClient struct {
 
 // NewMockLicenseClient creates a MockLicenseClient for the given token and
 // verification key. An empty token means no licence was configured; an empty
-// publicKey means the build has nothing to verify one against. Production code
-// passes PublicKey() here — it is a parameter so tests need not mutate it.
+// publicKey means there is nothing to verify one against. Both come from the
+// license section of the configuration.
 func NewMockLicenseClient(token, publicKey string, logger *slog.Logger) *MockLicenseClient {
 	return &MockLicenseClient{
 		token:     token,
@@ -41,8 +41,8 @@ func (m *MockLicenseClient) ValidateLicense(_ context.Context) (core.LicenseClai
 
 	if m.publicKey == "" {
 		m.logger.Warn(
-			"licence token supplied but this build carries no public key to verify it against; " +
-				"running in community mode. Rebuild with LICENSE_PUBLIC_KEY set.")
+			"licence token supplied but no public key is configured to verify it against; " +
+				"running in community mode. Set license.public_key or LICENSE_PUBLIC_KEY.")
 
 		return core.CommunityLicenseClaims(), nil
 	}

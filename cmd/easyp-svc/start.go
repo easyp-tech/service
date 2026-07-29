@@ -135,12 +135,12 @@ func run(ctx context.Context, cfg config.Config, reg *prometheus.Registry) error
 		return fmt.Errorf("grpchelper.BuildServerCreds: %w", err)
 	}
 
-	licenseToken, err := resolveLicenseToken(cfg.License)
+	licenseCreds, err := resolveLicense(cfg.License)
 	if err != nil {
-		return fmt.Errorf("resolveLicenseToken: %w", err)
+		return fmt.Errorf("resolveLicense: %w", err)
 	}
 
-	_, pool, _, grpcServer, apiSrv := initApp(ctx, cfg, repo, reg, namespace, auditWorker, grpcCreds, licenseToken)
+	_, pool, _, grpcServer, apiSrv := initApp(ctx, cfg, repo, reg, namespace, auditWorker, grpcCreds, licenseCreds)
 
 	defer func() {
 		lost := pool.Shutdown(cfg.WorkerPool.ShutdownTimeout)
@@ -301,11 +301,11 @@ func initApp(
 	namespace string,
 	auditSink core.AuditSink,
 	grpcCreds credentials.TransportCredentials,
-	licenseToken string,
+	licenseCreds licenseCredentials,
 ) (*core.Core, *core.WorkerPool, *license.FeatureGate, *grpc.Server, *api.API) {
 	log := monitor.FromContext(ctx)
 
-	licenseClient := license.NewMockLicenseClient(licenseToken, license.PublicKey(), log)
+	licenseClient := license.NewMockLicenseClient(licenseCreds.token, licenseCreds.publicKey, log)
 	lm, err := license.NewManager(ctx, licenseClient, license.Config{
 		CacheTTL: cfg.License.CacheTTL,
 	}, log, reg, namespace)

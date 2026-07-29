@@ -29,7 +29,7 @@ func TestMockLicenseClientValidate(t *testing.T) {
 		require.NotContains(t, claims.Features, core.FeatureAudit)
 	})
 
-	t.Run("a token without an embedded public key means community", func(t *testing.T) {
+	t.Run("a token without a configured public key means community", func(t *testing.T) {
 		t.Parallel()
 
 		claims, err := NewMockLicenseClient("some-token", "", discardLogger()).ValidateLicense(t.Context())
@@ -47,14 +47,6 @@ func TestMockLicenseClientValidate(t *testing.T) {
 		require.Contains(t, claims.Features, core.FeatureAudit)
 		require.Equal(t, -1, claims.MaxWorkers)
 	})
-}
-
-// TestPublicKeyDefaultsEmpty documents that a plain `go build` produces a binary
-// with no verification key, so no licence can be honoured by accident.
-func TestPublicKeyDefaultsEmpty(t *testing.T) {
-	t.Parallel()
-
-	require.Empty(t, PublicKey())
 }
 
 // TestCommunityGateDeniesAudit pins the property the whole gate exists for:
