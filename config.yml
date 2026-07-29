@@ -34,3 +34,15 @@ rate_limit:
   requests_per_second: 10.0  # token refill rate (tokens/sec)
   burst: 20                   # max tokens (burst size)
   cleanup_interval: 10m       # stale client cleanup interval
+# Audit is an Enterprise feature: without a license nothing is written,
+# whatever these settings say. Defaults from env tags do NOT apply on the YAML
+# path, so every field has to be spelled out here.
+audit:
+  buffer_size: 1000             # queue between the request path and the writer
+  batch_size: 100               # rows per INSERT
+  flush_interval: 1s            # forces a write of a partially filled batch
+  max_save_retries: 3           # extra attempts before a batch is given up on
+  retention_months: 12          # months of history to keep; 0 keeps everything
+  pre_create_months: 3          # months of partitions created ahead of time
+  partition_check_interval: 6h  # period between partition maintenance passes
+  partition_op_timeout: 30s     # bounds a single maintenance pass

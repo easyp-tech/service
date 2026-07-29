@@ -184,8 +184,18 @@ type (
 
 	// AuditLog определяет интерфейс для записи аудит-событий.
 	AuditLog interface {
-		// Save сохраняет аудит-запись в хранилище.
-		Save(ctx context.Context, entry AuditEntry) error
+		// SaveBatch сохраняет группу аудит-записей за одну операцию.
+		SaveBatch(ctx context.Context, entries []AuditEntry) error
+	}
+
+	// AuditSink принимает аудит-события от Core и отвечает за их доставку
+	// в хранилище, включая учёт потерь.
+	AuditSink interface {
+		// Send передаёт событие на запись. Блокируется, пока событие не принято
+		// или не отменён контекст.
+		Send(ctx context.Context, entry AuditEntry)
+		// Skipped отмечает событие, не отправленное из-за отсутствия лицензии.
+		Skipped()
 	}
 
 	// FeatureGate определяет интерфейс проверки доступности функций.

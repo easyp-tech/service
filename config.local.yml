@@ -36,3 +36,12 @@ rate_limit:
   requests_per_second: 10.0
   burst: 20
   cleanup_interval: 10m
+audit:
+  buffer_size: 1000
+  batch_size: 100
+  flush_interval: 1s
+  max_save_retries: 3
+  retention_months: 12
+  pre_create_months: 3
+  partition_check_interval: 6h
+  partition_op_timeout: 30s

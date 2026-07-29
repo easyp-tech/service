@@ -17,30 +17,33 @@ type Core struct {
 	metrics     Metrics
 	registry    Registry
 	featureGate FeatureGate
-	auditCh     chan<- AuditEntry
+	auditSink   AuditSink
 	logger      *slog.Logger
 }
 
 // New creates a new Core instance.
 // If featureGate is nil, all features are considered available (backward compatibility).
-func New(metrics Metrics, registry Registry, featureGate FeatureGate, auditCh chan<- AuditEntry, logger *slog.Logger) *Core {
+func New(metrics Metrics, registry Registry, featureGate FeatureGate, auditSink AuditSink, logger *slog.Logger) *Core {
 	return &Core{
 		metrics:     metrics,
 		registry:    registry,
 		featureGate: featureGate,
-		auditCh:     auditCh,
+		auditSink:   auditSink,
 		logger:      logger,
 	}
 }
 
-// sendAudit sends an audit entry to the audit channel.
-// Blocks until the entry is sent or the context is cancelled.
+// sendAudit hands an audit entry to the sink.
+// Audit is an Enterprise feature: without it the entry never leaves Core, so
+// nothing is written to storage. A nil gate means all features are available.
 func (c *Core) sendAudit(ctx context.Context, entry AuditEntry) { //nolint:funcorder,lll // sendAudit is a helper used by public methods above it
-	select {
-	case c.auditCh <- entry:
-	case <-ctx.Done():
-		c.logger.Warn("audit send cancelled", "entry_id", entry.ID, "operation", entry.OperationType)
+	if c.featureGate != nil && !c.featureGate.Enabled(FeatureAudit) {
+		c.auditSink.Skipped()
+
+		return
 	}
+
+	c.auditSink.Send(ctx, entry)
 }
 
 // Generate generates code by plugin.

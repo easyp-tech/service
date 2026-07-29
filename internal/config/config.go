@@ -20,6 +20,7 @@ type Config struct {
 	WorkerPool WorkerPoolConfig `env:", prefix=WORKER_POOL_" yaml:"worker_pool"`
 	License    LicenseConfig    `env:", prefix=LICENSE_"     yaml:"license"`
 	RateLimit  RateLimitConfig  `env:", prefix=RATE_LIMIT_"  yaml:"rate_limit"`
+	Audit      AuditConfig      `env:", prefix=AUDIT_"       yaml:"audit"`
 }
 
 // Server holds HTTP/gRPC server settings.
@@ -96,6 +97,27 @@ type RateLimitConfig struct {
 	CleanupInterval   time.Duration `env:"CLEANUP_INTERVAL,default=10m"     yaml:"cleanup_interval"`
 }
 
+// AuditConfig configures the audit log writer. Audit is an Enterprise feature:
+// without it nothing is written regardless of these settings.
+type AuditConfig struct {
+	BufferSize     int           `env:"BUFFER_SIZE,default=1000"   yaml:"buffer_size"`
+	BatchSize      int           `env:"BATCH_SIZE,default=100"     yaml:"batch_size"`
+	FlushInterval  time.Duration `env:"FLUSH_INTERVAL,default=1s"  yaml:"flush_interval"`
+	MaxSaveRetries int           `env:"MAX_SAVE_RETRIES,default=3" yaml:"max_save_retries"`
+
+	// RetentionMonths is how many months of audit history to keep. 0 keeps everything.
+	RetentionMonths        int           `env:"RETENTION_MONTHS,default=12"         yaml:"retention_months"`
+	PreCreateMonths        int           `env:"PRE_CREATE_MONTHS,default=3"         yaml:"pre_create_months"`
+	PartitionCheckInterval time.Duration `env:"PARTITION_CHECK_INTERVAL,default=6h" yaml:"partition_check_interval"`
+	PartitionOpTimeout     time.Duration `env:"PARTITION_OP_TIMEOUT,default=30s"    yaml:"partition_op_timeout"`
+}
+
+// RetentionEnabled reports whether expired audit partitions should be dropped.
+// Zero means keep everything.
+func (c AuditConfig) RetentionEnabled() bool {
+	return c.RetentionMonths > 0
+}
+
 // Validate performs structural validation of the configuration.
 // Called by the server at startup and by "epctl config validate".
 func (c *Config) Validate() error {
@@ -121,6 +143,26 @@ func (c *Config) Validate() error {
 
 	if c.RateLimit.Burst <= 0 {
 		return fmt.Errorf("rate_limit.burst must be positive, got %d", c.RateLimit.Burst)
+	}
+
+	if c.Audit.BufferSize <= 0 {
+		return fmt.Errorf("audit.buffer_size must be positive, got %d", c.Audit.BufferSize)
+	}
+
+	if c.Audit.BatchSize <= 0 {
+		return fmt.Errorf("audit.batch_size must be positive, got %d", c.Audit.BatchSize)
+	}
+
+	if c.Audit.FlushInterval <= 0 {
+		return fmt.Errorf("audit.flush_interval must be positive, got %s", c.Audit.FlushInterval)
+	}
+
+	if c.Audit.MaxSaveRetries < 0 {
+		return fmt.Errorf("audit.max_save_retries must not be negative, got %d", c.Audit.MaxSaveRetries)
+	}
+
+	if c.Audit.RetentionMonths < 0 {
+		return fmt.Errorf("audit.retention_months must not be negative, got %d", c.Audit.RetentionMonths)
 	}
 
 	if c.Registry.S3.Enabled() {

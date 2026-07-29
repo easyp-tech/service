@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 
 	"github.com/jmoiron/sqlx"
 
@@ -29,33 +31,26 @@ func New(db *database.SQL, logger *slog.Logger) *Store {
 	}
 }
 
-// Save реализует core.AuditLog.
-func (s *Store) Save(ctx context.Context, entry core.AuditEntry) error {
-	metadata, err := json.Marshal(entry.Metadata)
-	if err != nil {
-		s.logger.Error("audit metadata marshal failed", "error", err)
-		metadata = []byte("{}")
-	}
+// columnsPerEntry is the number of columns written per audit row.
+const columnsPerEntry = 10
 
-	const query = `INSERT INTO audit_log (
+const insertPrefix = `INSERT INTO audit_log (
 	id, operation_type, plugin_name, caller_address, status,
 	error_code, error_message, duration_ms, metadata, created_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
+) VALUES `
 
-	err = s.db.NoTxContext(ctx, func(db *sqlx.DB) error {
-		_, execErr := db.ExecContext(ctx, query,
-			entry.ID,
-			entry.OperationType,
-			entry.PluginName,
-			entry.CallerAddress,
-			entry.Status,
-			entry.ErrorCode,
-			entry.ErrorMessage,
-			entry.DurationMs,
-			metadata,
-			entry.CreatedAt,
-		)
+// SaveBatch реализует core.AuditLog: пишет группу записей одним стейтментом.
+func (s *Store) SaveBatch(ctx context.Context, entries []core.AuditEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
 
+	query, args := s.buildInsert(entries)
+
+	// NoTxContext derives its metric label from the calling function, so it has
+	// to be invoked straight from the exported DAL method.
+	err := s.db.NoTxContext(ctx, func(db *sqlx.DB) error {
+		_, execErr := db.ExecContext(ctx, query, args...)
 		if execErr != nil {
 			return fmt.Errorf("db.ExecContext: %w", execErr)
 		}
@@ -67,4 +62,55 @@ func (s *Store) Save(ctx context.Context, entry core.AuditEntry) error {
 	}
 
 	return nil
+}
+
+// buildInsert renders a multi-row INSERT with positional placeholders and the
+// matching argument list.
+func (s *Store) buildInsert(entries []core.AuditEntry) (string, []any) { //nolint:funcorder // helper of the Save methods above
+	var query strings.Builder
+
+	query.WriteString(insertPrefix)
+
+	args := make([]any, 0, len(entries)*columnsPerEntry)
+
+	for i, entry := range entries {
+		if i > 0 {
+			query.WriteString(", ")
+		}
+
+		query.WriteString("(")
+
+		for col := range columnsPerEntry {
+			if col > 0 {
+				query.WriteString(", ")
+			}
+
+			query.WriteString("$")
+			query.WriteString(strconv.Itoa(i*columnsPerEntry + col + 1))
+		}
+
+		query.WriteString(")")
+
+		metadata, err := json.Marshal(entry.Metadata)
+		if err != nil {
+			s.logger.Error("audit metadata marshal failed", "error", err, "entry_id", entry.ID)
+
+			metadata = []byte("{}")
+		}
+
+		args = append(args,
+			entry.ID,
+			entry.OperationType,
+			entry.PluginName,
+			entry.CallerAddress,
+			entry.Status,
+			entry.ErrorCode,
+			entry.ErrorMessage,
+			entry.DurationMs,
+			metadata,
+			entry.CreatedAt,
+		)
+	}
+
+	return query.String(), args
 }

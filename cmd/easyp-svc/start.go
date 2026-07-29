@@ -42,8 +42,10 @@ const (
 	serviceNamespace         = "easyp"
 	exitCode                 = 2
 	configFileSize           = 1024 * 1024
-	auditChannelCapacity     = 1000
 	componentShutdownTimeout = 5 * time.Second
+	// auditFlushHeadroom keeps the worker's final write strictly inside the
+	// shutdown budget, so a slow write is reported rather than cut off.
+	auditFlushHeadroom = 500 * time.Millisecond
 )
 
 // grpcMetrics implements grpchelper.Metrics for the recovery interceptor.
@@ -125,7 +127,15 @@ func run(ctx context.Context, cfg config.Config, reg *prometheus.Registry) error
 	defer cleanupInfra()
 
 	auditStore := adapter_audit.New(repo.DB(), log)
-	auditWorker, auditCh := adapter_audit.NewWorker(auditStore, auditChannelCapacity, log, reg, namespace)
+	auditWorker := adapter_audit.NewWorker(auditStore, adapter_audit.Config{
+		BufferSize:     cfg.Audit.BufferSize,
+		BatchSize:      cfg.Audit.BatchSize,
+		FlushInterval:  cfg.Audit.FlushInterval,
+		MaxSaveRetries: cfg.Audit.MaxSaveRetries,
+		// Leave the worker room to finish its last write before Shutdown stops
+		// waiting for it.
+		ShutdownFlushTimeout: componentShutdownTimeout - auditFlushHeadroom,
+	}, log, reg, namespace)
 
 	// Since audit worker runs in background, we launch it here.
 	go auditWorker.Run(ctx)
@@ -136,7 +146,14 @@ func run(ctx context.Context, cfg config.Config, reg *prometheus.Registry) error
 		}
 	}()
 
-	_, pool, _, grpcServer, apiSrv := initApp(ctx, cfg, repo, reg, namespace, auditCh)
+	partitions := adapter_audit.NewMaintainer(repo.DB(), adapter_audit.PartitionConfig{
+		RetentionMonths:  cfg.Audit.RetentionMonths,
+		PreCreateMonths:  cfg.Audit.PreCreateMonths,
+		Interval:         cfg.Audit.PartitionCheckInterval,
+		OperationTimeout: cfg.Audit.PartitionOpTimeout,
+	}, log, reg, namespace)
+
+	_, pool, _, grpcServer, apiSrv := initApp(ctx, cfg, repo, reg, namespace, auditWorker)
 
 	defer func() {
 		lost := pool.Shutdown(cfg.WorkerPool.ShutdownTimeout)
@@ -150,7 +167,7 @@ func run(ctx context.Context, cfg config.Config, reg *prometheus.Registry) error
 		return fmt.Errorf("initHealthCheck: %w", err)
 	}
 
-	err = serveApp(ctx, log, cfg, reg, grpcServer, apiSrv.MCPHandler(), healthCheck)
+	err = serveApp(ctx, log, cfg, reg, grpcServer, apiSrv.MCPHandler(), healthCheck, partitions.Run)
 	if err != nil {
 		return fmt.Errorf("serveApp: %w", err)
 	}
@@ -252,7 +269,7 @@ func initApp(
 	repo *registry.Registry,
 	reg *prometheus.Registry,
 	namespace string,
-	auditCh chan<- core.AuditEntry,
+	auditSink core.AuditSink,
 ) (*core.Core, *core.WorkerPool, *license.FeatureGate, *grpc.Server, *api.API) {
 	log := monitor.FromContext(ctx)
 
@@ -291,7 +308,7 @@ func initApp(
 	}, log, metricsAdapter, reg, namespace)
 	pool.Start(ctx)
 
-	module := core.New(metricsAdapter, pool, gate, auditCh, log)
+	module := core.New(metricsAdapter, pool, gate, auditSink, log)
 	tracedCore := telemetry.NewTracingCore(module)
 
 	grpcSrv, apiSrv := buildGRPCServer(log, reg, gate, rl, tracedCore)
@@ -346,6 +363,7 @@ func serveApp(
 	grpcServer *grpc.Server,
 	mcpHandler http.Handler,
 	healthCheck *health.Health,
+	jobs ...func(context.Context) error,
 ) error {
 	mcpMux := http.NewServeMux()
 	mcpMux.Handle("/mcp", mcpHandler)
@@ -379,6 +397,10 @@ func serveApp(
 		serve.HTTP(log.With("module", "mcp"), cfg.Server.Host, uint16(mcpPort), mcpMux),
 		serve.HTTP(log.With("module", "health"), cfg.Server.Host, uint16(healthPort), healthMux),
 	}
+
+	// Background jobs are supervised alongside the servers so they are
+	// guaranteed to have stopped before run() closes the DB pool.
+	services = append(services, jobs...)
 
 	err = serve.Start(
 		ctx,

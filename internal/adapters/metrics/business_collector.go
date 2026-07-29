@@ -27,6 +27,7 @@ type BusinessMetricsCollector struct {
 	auditLogByStatus    *prometheus.Desc
 	pluginVersionsCount *prometheus.Desc
 	auditLogLast24h     *prometheus.Desc
+	auditLogDefaultRows *prometheus.Desc
 }
 
 // NewBusinessMetricsCollector creates a new BusinessMetricsCollector.
@@ -69,6 +70,12 @@ func NewBusinessMetricsCollector(db *sql.DB, namespace string, log *slog.Logger)
 			"Number of audit log entries in the last 24 hours.",
 			nil, nil,
 		),
+		auditLogDefaultRows: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "business", "audit_log_default_rows"),
+			"Audit rows that landed in the default partition. Must stay zero: "+
+				"a non-empty default partition blocks creating the month it overlaps.",
+			nil, nil,
+		),
 	}
 }
 
@@ -81,6 +88,7 @@ func (c *BusinessMetricsCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.auditLogByStatus
 	ch <- c.pluginVersionsCount
 	ch <- c.auditLogLast24h
+	ch <- c.auditLogDefaultRows
 }
 
 // Collect implements prometheus.Collector.
@@ -92,6 +100,8 @@ func (c *BusinessMetricsCollector) Collect(ch chan<- prometheus.Metric) {
 		"SELECT count(*) FROM audit_log")
 	c.collectScalar(ch, c.auditLogLast24h, "audit_log_last_24h",
 		"SELECT count(*) FROM audit_log WHERE created_at > now() - interval '24 hours'")
+	c.collectScalar(ch, c.auditLogDefaultRows, "audit_log_default_rows",
+		"SELECT count(*) FROM audit_log_default")
 
 	// Grouped metrics
 	c.collectGrouped(ch, c.pluginsByGroup, "plugins_by_group",
