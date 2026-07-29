@@ -1,0 +1,27 @@
+# Dynamic configuration.
+#
+# The docker provider can reference a serversTransport by name but cannot
+# declare one, so the client credentials traefik presents to the service —
+# the backend leg of the mTLS path — have to live in a file.
+http:
+  serversTransports:
+    easyp-mtls:
+      # Must match a SAN of the service certificate; traefik dials the
+      # container IP, so the name is sent via SNI rather than inferred.
+      serverName: easyp-api-service
+      rootCAs:
+        - /certs/ca.crt
+      certificates:
+        - certFile: /certs/client.crt
+          keyFile: /certs/client.key
+
+tls:
+  # The certificate traefik serves to the outside world on :443.
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /certs/edge.crt
+        keyFile: /certs/edge.key
+  certificates:
+    - certFile: /certs/edge.crt
+      keyFile: /certs/edge.key

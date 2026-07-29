@@ -35,3 +35,8 @@ providers:
   docker:
     endpoint: "unix:///var/run/docker.sock"
     exposedByDefault: false
+  # Holds the mTLS material for the service backend and the edge certificate:
+  # neither can be expressed as a docker label.
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: true

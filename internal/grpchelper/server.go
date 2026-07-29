@@ -13,7 +13,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
@@ -35,11 +35,13 @@ type Metrics interface {
 }
 
 // NewServer creates and returns a gRPC server.
+// Transport security comes from creds; build it with BuildServerCreds.
 func NewServer(
 	metr Metrics,
 	log *slog.Logger,
 	serverMetrics *grpc_prometheus.ServerMetrics,
 	converter GRPCCodesConverterHandler,
+	creds credentials.TransportCredentials,
 	extraUnary []grpc.UnaryServerInterceptor,
 	extraStream []grpc.StreamServerInterceptor,
 ) (*grpc.Server, *health.Server) {
@@ -47,7 +49,7 @@ func NewServer(
 	streamInterceptor := buildStreamInterceptors(metr, log, serverMetrics, converter, extraStream)
 
 	server := grpc.NewServer(
-		grpc.Creds(insecure.NewCredentials()),
+		grpc.Creds(creds),
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.KeepaliveParams(
 			keepalive.ServerParameters{ //nolint:exhaustruct

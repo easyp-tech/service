@@ -90,17 +90,20 @@ func getSpinners() []string {
 	return []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 }
 
-func runPluginsRegister(
-	ctx context.Context,
-	scanPath string,
-	addr string,
-	filter string,
-	pluginsPrefix string,
-	nonInteractive bool,
-	dryRun bool,
-	failOnError bool,
-) error {
-	plugins, err := scanPlugins(scanPath, filter)
+// registerOptions holds the resolved inputs of the plugins register command.
+type registerOptions struct {
+	scanPath       string
+	addr           string
+	filter         string
+	pluginsPrefix  string
+	tls            clientTLSOptions
+	nonInteractive bool
+	dryRun         bool
+	failOnError    bool
+}
+
+func runPluginsRegister(ctx context.Context, opts registerOptions) error {
+	plugins, err := scanPlugins(opts.scanPath, opts.filter)
 	if err != nil {
 		return err
 	}
@@ -112,19 +115,24 @@ func runPluginsRegister(
 		return nil
 	}
 
-	if dryRun {
-		runPluginsRegisterDryRun(plugins, pluginsPrefix)
+	if opts.dryRun {
+		runPluginsRegisterDryRun(plugins, opts.pluginsPrefix)
 
 		return nil
 	}
 
-	client, err := sdk.NewClient(addr, sdk.WithInsecure())
+	tlsOpt, err := opts.tls.sdkOption()
 	if err != nil {
-		return fmt.Errorf("failed to connect to gRPC server at %s: %w", addr, err)
+		return err
+	}
+
+	client, err := sdk.NewClient(opts.addr, tlsOpt)
+	if err != nil {
+		return fmt.Errorf("failed to connect to gRPC server at %s: %w", opts.addr, err)
 	}
 	defer func() { _ = client.Close() }()
 
-	return registerAll(ctx, client, plugins, pluginsPrefix, nonInteractive, failOnError)
+	return registerAll(ctx, client, plugins, opts.pluginsPrefix, opts.nonInteractive, opts.failOnError)
 }
 
 // registerAll registers every scanned plugin, reporting progress as it goes.

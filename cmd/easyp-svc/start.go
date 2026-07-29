@@ -16,6 +16,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/sethvargo/go-envconfig"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"gopkg.in/yaml.v3"
 
 	adapter_audit "github.com/easyp-tech/service/internal/adapters/audit"
@@ -126,34 +127,15 @@ func run(ctx context.Context, cfg config.Config, reg *prometheus.Registry) error
 	}
 	defer cleanupInfra()
 
-	auditStore := adapter_audit.New(repo.DB(), log)
-	auditWorker := adapter_audit.NewWorker(auditStore, adapter_audit.Config{
-		BufferSize:     cfg.Audit.BufferSize,
-		BatchSize:      cfg.Audit.BatchSize,
-		FlushInterval:  cfg.Audit.FlushInterval,
-		MaxSaveRetries: cfg.Audit.MaxSaveRetries,
-		// Leave the worker room to finish its last write before Shutdown stops
-		// waiting for it.
-		ShutdownFlushTimeout: componentShutdownTimeout - auditFlushHeadroom,
-	}, log, reg, namespace)
+	auditWorker, partitions, cleanupAudit := initAudit(ctx, cfg, repo, reg, namespace)
+	defer cleanupAudit()
 
-	// Since audit worker runs in background, we launch it here.
-	go auditWorker.Run(ctx)
-	defer func() {
-		lost := auditWorker.Shutdown(componentShutdownTimeout)
-		if lost > 0 {
-			log.Warn("audit events lost on shutdown", "count", lost)
-		}
-	}()
+	grpcCreds, err := grpchelper.BuildServerCreds(cfg.Server.TLS, log)
+	if err != nil {
+		return fmt.Errorf("grpchelper.BuildServerCreds: %w", err)
+	}
 
-	partitions := adapter_audit.NewMaintainer(repo.DB(), adapter_audit.PartitionConfig{
-		RetentionMonths:  cfg.Audit.RetentionMonths,
-		PreCreateMonths:  cfg.Audit.PreCreateMonths,
-		Interval:         cfg.Audit.PartitionCheckInterval,
-		OperationTimeout: cfg.Audit.PartitionOpTimeout,
-	}, log, reg, namespace)
-
-	_, pool, _, grpcServer, apiSrv := initApp(ctx, cfg, repo, reg, namespace, auditWorker)
+	_, pool, _, grpcServer, apiSrv := initApp(ctx, cfg, repo, reg, namespace, auditWorker, grpcCreds)
 
 	defer func() {
 		lost := pool.Shutdown(cfg.WorkerPool.ShutdownTimeout)
@@ -263,6 +245,49 @@ func initInfrastructure(
 	return repo, cleanupRepo, nil
 }
 
+// initAudit starts the audit writer and the partition maintainer. The returned
+// cleanup drains whatever the writer still holds; the maintainer is driven by
+// the caller through Maintainer.Run.
+func initAudit(
+	ctx context.Context,
+	cfg config.Config,
+	repo *registry.Registry,
+	reg *prometheus.Registry,
+	namespace string,
+) (*adapter_audit.Worker, *adapter_audit.Maintainer, func()) {
+	log := monitor.FromContext(ctx)
+
+	auditStore := adapter_audit.New(repo.DB(), log)
+	worker := adapter_audit.NewWorker(auditStore, adapter_audit.Config{
+		BufferSize:     cfg.Audit.BufferSize,
+		BatchSize:      cfg.Audit.BatchSize,
+		FlushInterval:  cfg.Audit.FlushInterval,
+		MaxSaveRetries: cfg.Audit.MaxSaveRetries,
+		// Leave the worker room to finish its last write before Shutdown stops
+		// waiting for it.
+		ShutdownFlushTimeout: componentShutdownTimeout - auditFlushHeadroom,
+	}, log, reg, namespace)
+
+	// Since audit worker runs in background, we launch it here.
+	go worker.Run(ctx)
+
+	partitions := adapter_audit.NewMaintainer(repo.DB(), adapter_audit.PartitionConfig{
+		RetentionMonths:  cfg.Audit.RetentionMonths,
+		PreCreateMonths:  cfg.Audit.PreCreateMonths,
+		Interval:         cfg.Audit.PartitionCheckInterval,
+		OperationTimeout: cfg.Audit.PartitionOpTimeout,
+	}, log, reg, namespace)
+
+	cleanup := func() {
+		lost := worker.Shutdown(componentShutdownTimeout)
+		if lost > 0 {
+			log.Warn("audit events lost on shutdown", "count", lost)
+		}
+	}
+
+	return worker, partitions, cleanup
+}
+
 func initApp(
 	ctx context.Context,
 	cfg config.Config,
@@ -270,6 +295,7 @@ func initApp(
 	reg *prometheus.Registry,
 	namespace string,
 	auditSink core.AuditSink,
+	grpcCreds credentials.TransportCredentials,
 ) (*core.Core, *core.WorkerPool, *license.FeatureGate, *grpc.Server, *api.API) {
 	log := monitor.FromContext(ctx)
 
@@ -311,7 +337,7 @@ func initApp(
 	module := core.New(metricsAdapter, pool, gate, auditSink, log)
 	tracedCore := telemetry.NewTracingCore(module)
 
-	grpcSrv, apiSrv := buildGRPCServer(log, reg, gate, rl, tracedCore)
+	grpcSrv, apiSrv := buildGRPCServer(log, reg, gate, rl, tracedCore, grpcCreds)
 
 	return module, pool, gate, grpcSrv, apiSrv
 }
@@ -322,6 +348,7 @@ func buildGRPCServer(
 	gate *license.FeatureGate,
 	rl *ratelimiter.RateLimiter,
 	tracedCore *telemetry.TracingCore,
+	creds credentials.TransportCredentials,
 ) (*grpc.Server, *api.API) {
 	serverMetrics := grpchelper.NewServerMetrics(reg, "easyp", "api")
 
@@ -339,6 +366,7 @@ func buildGRPCServer(
 		log,
 		serverMetrics,
 		api.ErrorToStatus,
+		creds,
 		[]grpc.UnaryServerInterceptor{
 			ratelimit.UnaryServerInterceptor(rl),
 			licenseInterceptor.UnaryServerInterceptor(),

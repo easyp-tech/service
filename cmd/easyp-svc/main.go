@@ -20,6 +20,10 @@ const (
 	flagForce          = "force"
 	flagDryRun         = "dry-run"
 	flagNonInteractive = "non-interactive"
+	flagTLSCA          = "tls-ca"
+	flagTLSCert        = "tls-cert"
+	flagTLSKey         = "tls-key"
+	flagInsecure       = "insecure"
 
 	argPath = "[path]"
 
@@ -222,16 +226,21 @@ func getPluginsRegisterCommand() *cli.Command {
 				return err
 			}
 
-			return runPluginsRegister(
-				ctx,
-				scanPath,
-				cmd.String("addr"),
-				cmd.String(flagFilter),
-				pluginsPrefix,
-				cmd.Bool(flagNonInteractive),
-				cmd.Bool(flagDryRun),
-				cmd.Bool("fail-on-error"),
-			)
+			return runPluginsRegister(ctx, registerOptions{
+				scanPath:      scanPath,
+				addr:          cmd.String("addr"),
+				filter:        cmd.String(flagFilter),
+				pluginsPrefix: pluginsPrefix,
+				tls: clientTLSOptions{
+					caFile:   cmd.String(flagTLSCA),
+					certFile: cmd.String(flagTLSCert),
+					keyFile:  cmd.String(flagTLSKey),
+					insecure: cmd.Bool(flagInsecure),
+				},
+				nonInteractive: cmd.Bool(flagNonInteractive),
+				dryRun:         cmd.Bool(flagDryRun),
+				failOnError:    cmd.Bool("fail-on-error"),
+			})
 		},
 	}
 }
@@ -356,6 +365,26 @@ func registerFlags() []cli.Flag {
 			Name:  "plugins-prefix",
 			Usage: "prefix directory for plugins on the server (overrides registry.plugins_dir from --cfg)",
 			Value: defaultPluginsPrefix,
+		},
+		&cli.StringFlag{
+			Name:  flagTLSCA,
+			Usage: "PEM bundle of the CA that signed the server certificate (default: system trust store)",
+			Value: "",
+		},
+		&cli.StringFlag{
+			Name:  flagTLSCert,
+			Usage: "client certificate presented to the server; required when the server enforces mTLS",
+			Value: "",
+		},
+		&cli.StringFlag{
+			Name:  flagTLSKey,
+			Usage: "private key for --tls-cert",
+			Value: "",
+		},
+		&cli.BoolFlag{
+			Name:  flagInsecure,
+			Usage: "connect over plaintext, disabling transport security entirely (local development only)",
+			Value: false,
 		},
 	}
 }

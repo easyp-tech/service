@@ -56,7 +56,8 @@ instead of a shared `plugins/` volume — `plugins_dir` becomes a local cache.
 # Build machine / CI — needs S3 WRITE access
 easyp-svc plugins build registry
 easyp-svc plugins push plugins --cfg config.yml   # packs and uploads plugin.tgz
-easyp-svc plugins register plugins --cfg config.yml --addr localhost:8080
+easyp-svc plugins register plugins --cfg config.yml \
+  --addr easyp.api.localhost:4443 --tls-ca certs/ca.crt
 ```
 
 Registration is metadata-only. The service streams the pushed archive from storage,
@@ -75,11 +76,12 @@ Plugins must be registered in PostgreSQL before use:
 
 ```bash
 # Prefer the CLI (scans plugins/ for files named "plugin")
-easyp-svc plugins register plugins/ --addr localhost:8080 --plugins-prefix /plugins
+easyp-svc plugins register plugins/ --plugins-prefix /plugins \
+  --addr easyp.api.localhost:4443 --tls-ca certs/ca.crt
 
 # Or via gRPC CreatePlugin with config.command pointing at the entrypoint
-grpcurl -plaintext -d '{"group":"grpc","name":"go","version":"v1.5.1","config":{"command":["/plugins/grpc/go/v1.5.1/plugin"]}}' \
-  localhost:8080 api.generator.v1.ServiceAPI/CreatePlugin
+grpcurl -cacert certs/ca.crt -d '{"group":"grpc","name":"go","version":"v1.5.1","config":{"command":["/plugins/grpc/go/v1.5.1/plugin"]}}' \
+  easyp.api.localhost:4443 api.generator.v1.ServiceAPI/CreatePlugin
 ```
 
 ## Docker Compose
@@ -88,9 +90,9 @@ grpcurl -plaintext -d '{"group":"grpc","name":"go","version":"v1.5.1","config":{
 
 | Service | Port | Description |
 |---------|------|-------------|
-| service | 8080-8083 | EasyP gRPC/HTTP service |
+| service | 8081-8083 | EasyP HTTP endpoints; gRPC (8080) is internal only |
 | postgres | 5432 | PostgreSQL database |
-| traefik | 80 | Reverse proxy |
+| traefik | 80, 4443 | Reverse proxy; terminates TLS and fronts the gRPC API |
 | rustfs | 9000-9001 | S3-compatible storage (observability backends + plugin archives) |
 | grafana | 3000 | Dashboards |
 | loki | — | Log aggregation |
@@ -171,12 +173,31 @@ All config fields have `env` tags. Prefix: section name (e.g., `SERVER_HOST`, `D
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `EASYP_POSTGRES_PORT` | 5432 | PostgreSQL host port |
-| `EASYP_GRPC_PORT` | 8080 | gRPC API host port |
 | `EASYP_METRICS_PORT` | 8081 | Metrics host port |
 | `EASYP_HEALTH_PORT` | 8082 | Health host port |
 | `EASYP_GATEWAY_PORT` | 8083 | MCP/Gateway host port |
 | `EASYP_GRAFANA_PORT` | 3000 | Grafana host port |
-| `EASYP_TRAEFIK_PORT` | 80 | Traefik host port |
+| `EASYP_TRAEFIK_PORT` | 80 | Traefik host port (HTTP) |
+| `EASYP_TRAEFIK_TLS_PORT` | 4443 | Traefik host port (HTTPS) — the only way to the gRPC API |
+
+The gRPC port has no host mapping: the listener requires a client certificate
+and traefik is the only party holding one.
+
+### Transport security
+
+`server.tls` configures the listener. `cert_file` and `key_file` must be set
+together; adding `client_ca_file` makes the listener require and verify a client
+certificate. Leaving `cert_file` empty serves plaintext and logs a warning on
+every start.
+
+Traefik holds `client.crt`/`client.key` and reaches the service over that mutual
+TLS leg via the `easyp-mtls@file` serversTransport declared in
+`configs/traefik/dynamic.yml`; the docker provider cannot declare one. Outside
+the stack traefik serves `edge.crt` on `easyp.api.localhost`.
+
+`scripts/gen-dev-certs.sh` (`task certs`) issues a throwaway CA and the three
+certificates for development. Production certificates come from your own CA and
+are mounted at the paths in `config.yml`.
 
 ## Requirements
 

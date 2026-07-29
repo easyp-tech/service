@@ -1,12 +1,20 @@
 version: "3"
 
 tasks:
+  certs:
+    desc: "Generate the development CA and the server/client/edge certificates in certs/"
+    dir: "{{.USER_WORKING_DIR}}"
+    cmds:
+      - "./scripts/gen-dev-certs.sh"
+
   up:
     desc: "Start all services. For Enterprise: LICENSE_PUBLIC_KEY=... LICENSE_KEY=... task up"
     dir: "{{.USER_WORKING_DIR}}"
     preconditions:
       - "test -f docker-compose.yml"
     cmds:
+      # The stack speaks mTLS; without certificates the service refuses to start.
+      - task: certs
       - "docker compose up --build --remove-orphans --detach"
 
   up-minimal:
@@ -57,8 +65,17 @@ tasks:
   register-plugins:
     desc: "Register all built plugins via gRPC CreatePlugin API"
     dir: "{{.USER_WORKING_DIR}}"
+    preconditions:
+      - "test -f certs/ca.crt"
     cmds:
-      - "go run ./cmd/easyp-svc/ plugins register --addr localhost:8080 --cfg config.yml --non-interactive"
+      # The gRPC port is not published: the only way in is through traefik,
+      # which terminates the edge certificate and re-establishes mTLS inward.
+      - >-
+        go run ./cmd/easyp-svc/ plugins register
+        --addr easyp.api.localhost:${EASYP_TRAEFIK_TLS_PORT:-4443}
+        --tls-ca certs/ca.crt
+        --cfg config.yml
+        --non-interactive
 
 
   run:
@@ -96,7 +113,8 @@ tasks:
             sleep 1
           done
           echo "Service is ready! Running plugin migration..."
-          go run ./cmd/easyp-svc/ plugins register --addr localhost:8080 --cfg config.local.yml --non-interactive
+          # config.local.yml leaves server.tls empty, so this leg is plaintext.
+          go run ./cmd/easyp-svc/ plugins register --addr localhost:8080 --cfg config.local.yml --non-interactive --insecure
         ) &
         go run ./cmd/easyp-svc/ service start --cfg config.local.yml --log_level debug
 

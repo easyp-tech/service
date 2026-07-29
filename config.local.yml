@@ -5,6 +5,12 @@ server:
     metric: 8081
     health: 8082
     mcp: 8083
+  # Local mode runs without TLS on purpose: clients connect with --insecure.
+  # To exercise mTLS locally, run `task certs` and fill these in.
+  tls:
+    cert_file: ""
+    key_file: ""
+    client_ca_file: ""
 db:
   driver: "postgres"
   postgres: "postgres://easyp_svc:easyp_pass@localhost:5433/easyp_db?sslmode=disable"

@@ -25,8 +25,31 @@ type Config struct {
 
 // Server holds HTTP/gRPC server settings.
 type Server struct {
-	Host string `env:"HOST, default=0.0.0.0" yaml:"host"`
-	Port Ports  `env:", prefix=PORT_"        yaml:"port"`
+	Host string    `env:"HOST, default=0.0.0.0" yaml:"host"`
+	Port Ports     `env:", prefix=PORT_"        yaml:"port"`
+	TLS  TLSConfig `env:", prefix=TLS_"         yaml:"tls"`
+}
+
+// TLSConfig configures transport security for the gRPC server.
+// An empty CertFile disables TLS entirely, which is only appropriate for local
+// development: in that mode the service speaks plaintext and anything on the
+// network can read and forge requests.
+type TLSConfig struct {
+	CertFile string `env:"CERT_FILE" yaml:"cert_file"`
+	KeyFile  string `env:"KEY_FILE"  yaml:"key_file"`
+	// ClientCAFile turns the listener into mutual TLS: clients must present a
+	// certificate signed by this CA. Empty means server-side TLS only.
+	ClientCAFile string `env:"CLIENT_CA_FILE" yaml:"client_ca_file"`
+}
+
+// Enabled reports whether the gRPC listener should serve TLS.
+func (c TLSConfig) Enabled() bool {
+	return c.CertFile != "" && c.KeyFile != ""
+}
+
+// MutualTLS reports whether clients must present a verified certificate.
+func (c TLSConfig) MutualTLS() bool {
+	return c.Enabled() && c.ClientCAFile != ""
 }
 
 // Ports defines listening ports for each protocol.
@@ -123,6 +146,16 @@ func (c AuditConfig) RetentionEnabled() bool {
 func (c *Config) Validate() error {
 	if c.Server.Port.GRPC == "" {
 		return fmt.Errorf("server.port.grpc is required")
+	}
+
+	// A certificate without its key (or the reverse) is a half-applied change
+	// that would otherwise silently fall back to plaintext.
+	if (c.Server.TLS.CertFile != "") != (c.Server.TLS.KeyFile != "") {
+		return fmt.Errorf("server.tls.cert_file and server.tls.key_file must be set together")
+	}
+
+	if c.Server.TLS.ClientCAFile != "" && !c.Server.TLS.Enabled() {
+		return fmt.Errorf("server.tls.client_ca_file requires server.tls.cert_file and server.tls.key_file")
 	}
 
 	if c.DB.Driver == "" {

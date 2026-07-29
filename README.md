@@ -232,7 +232,9 @@ open http://localhost:3000
 
 ### Generator API (Primary)
 
-**Endpoint:** `localhost:8080` (gRPC)
+**Endpoint:** `easyp.api.localhost:4443` (gRPC over TLS, through traefik) in the
+compose stack; `localhost:8080` (plaintext) when the service runs from source
+with `config.local.yml`. See [Transport security](#transport-security).
 
 ```protobuf
 service ServiceAPI {
@@ -355,6 +357,46 @@ rate_limit:
   burst: 20
   cleanup_interval: 10m
 ```
+
+### Transport security
+
+The gRPC listener is configured by `server.tls`:
+
+```yaml
+server:
+  tls:
+    cert_file: "/certs/server.crt"
+    key_file: "/certs/server.key"
+    # Present ⇒ mutual TLS: only certificates signed by this CA are accepted.
+    client_ca_file: "/certs/ca.crt"
+```
+
+Leaving `cert_file` empty serves plaintext; the service logs a warning on every
+start so that never happens unnoticed. `cert_file` and `key_file` must be set
+together, and `client_ca_file` alone is rejected at startup.
+
+In the compose stack traefik is the only client holding a certificate, and the
+gRPC port is not published to the host — the way in is `easyp.api.localhost` on
+`EASYP_TRAEFIK_TLS_PORT` (4443 by default), where traefik terminates the edge
+certificate and re-establishes mutual TLS toward the service.
+
+```bash
+# Generate a development CA plus the server, client and edge certificates.
+# `task up` runs this for you; FORCE=1 regenerates.
+task certs
+
+# Talk to the service through traefik
+easyp-svc plugins register plugins \
+  --addr easyp.api.localhost:4443 --tls-ca certs/ca.crt --cfg config.yml
+```
+
+Client-side flags: `--tls-ca` overrides the trust store, `--tls-cert`/`--tls-key`
+supply a client certificate for a server that enforces mTLS, and `--insecure`
+is the explicit opt-out used against a plaintext local service. TLS is the
+default — plaintext is never reached by omitting a flag.
+
+`certs/` is gitignored and holds development material only. In production the
+paths point at certificates issued by your own CA.
 
 ## Contributing Plugins
 
@@ -485,9 +527,12 @@ easyp --cfg easyp.local.yaml generate
 ```go
 import "github.com/easyp-tech/service/sdk"
 
-// Create client
+// Create client. The SDK defaults to TLS with the system trust store; add
+// sdk.WithTransportCredentials for a private CA, or sdk.WithInsecure() when
+// talking to a plaintext local service.
 client, err := sdk.New(
     "localhost:8080",
+    sdk.WithInsecure(),
     sdk.WithRetry(3, time.Second),
     sdk.WithHealthCheck(true),
 )
@@ -581,7 +626,10 @@ task build-plugins
 # Re-register plugins
 task register-plugins
 
-# Check registered plugins via grpcurl
+# Check registered plugins via grpcurl.
+# Compose stack (TLS through traefik):
+grpcurl -cacert certs/ca.crt easyp.api.localhost:4443 api.generator.v1.ServiceAPI/Plugins
+# Service run from source with config.local.yml (plaintext):
 grpcurl -plaintext localhost:8080 api.generator.v1.ServiceAPI/Plugins
 ```
 

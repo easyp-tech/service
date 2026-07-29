@@ -5,6 +5,14 @@ server:
     metric: 8081
     health: 8082
     mcp: 8083
+  # Transport security for the gRPC listener. Leaving cert_file empty serves
+  # plaintext, which the service logs a warning about on every start.
+  # client_ca_file turns the listener into mutual TLS: only certificates signed
+  # by that CA are accepted, which is how traefik is authenticated here.
+  tls:
+    cert_file: "/certs/server.crt"
+    key_file: "/certs/server.key"
+    client_ca_file: "/certs/ca.crt"
 db:
   driver: "postgres"
   postgres: "postgres://easyp_svc:easyp_pass@easyp-postgres:5432/easyp_db?sslmode=disable"

@@ -18,9 +18,14 @@ services:
       - "--configFile=/etc/traefik/traefik.yml"
     volumes:
       - "./configs/traefik/traefik.yml:/etc/traefik/traefik.yml:ro"
+      - "./configs/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro"
+      # Edge certificate plus the client key pair traefik presents to the
+      # service. Run `task certs` before the first `docker compose up`.
+      - "./certs:/certs:ro"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
     ports:
       - "${EASYP_TRAEFIK_PORT:-4043}:80"
+      - "${EASYP_TRAEFIK_TLS_PORT:-4443}:443"
     networks:
       - easyp_network
 
@@ -204,18 +209,32 @@ services:
     command: ["service", "start", "--cfg=/config.yml", "--log_level=debug"]
     volumes:
       - "./config.yml:/config.yml:ro"
+      # Server key pair and the CA that signs the certificates it accepts.
+      - "./certs:/certs:ro"
       # rw: the service writes lazily downloaded plugin binaries here.
       - "./plugins:/plugins"
     environment:
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://alloy:4317"
       OTEL_SERVICE_NAME: "easyp-api-service"
       LICENSE_KEY: "${LICENSE_KEY:-}"
+    # The gRPC port is deliberately not published: it is reachable only from
+    # inside easyp_network, and from outside only through traefik, which is the
+    # single party holding a client certificate. The remaining ports serve
+    # plaintext diagnostics and stay local.
     ports:
-      - "${EASYP_GRPC_PORT:-8080}:8080"
       - "${EASYP_METRICS_PORT:-8081}:8081"
       - "${EASYP_HEALTH_PORT:-8082}:8082"
       - "${EASYP_GATEWAY_PORT:-8083}:8083"
     labels:
       service: easyp-api-service
+      traefik.enable: "true"
+      traefik.http.routers.easyp-api.rule: "Host(`easyp.api.localhost`)"
+      traefik.http.routers.easyp-api.entrypoints: "websecure"
+      traefik.http.routers.easyp-api.tls: "true"
+      traefik.http.routers.easyp-api.service: "easyp-api"
+      traefik.http.services.easyp-api.loadbalancer.server.port: "8080"
+      # https + this transport is what makes the backend leg mutual TLS.
+      traefik.http.services.easyp-api.loadbalancer.server.scheme: "https"
+      traefik.http.services.easyp-api.loadbalancer.serversTransport: "easyp-mtls@file"
     networks:
       - easyp_network
