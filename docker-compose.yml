@@ -188,6 +188,12 @@ services:
         LICENSE_PUBLIC_KEY: "${LICENSE_PUBLIC_KEY:-}"
     container_name: easyp-api-service
     restart: always
+    # The image runs as 65532, but ./plugins below is a bind mount whose owner
+    # comes from the host. On Linux that makes the mount unwritable unless the
+    # container UID matches: set EASYP_UID=$(id -u) EASYP_GID=$(id -g), or chown
+    # the directory to 65532. Docker Desktop remaps ownership, so the default
+    # works there as-is.
+    user: "${EASYP_UID:-65532}:${EASYP_GID:-65532}"
     depends_on:
       postgres:
         condition: service_healthy
