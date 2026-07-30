@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -16,6 +17,9 @@ func baseConfig() config.Config {
 	cfg.DB.Driver = "postgres"
 	cfg.WorkerPool.Workers = 1
 	cfg.WorkerPool.QueueSize = 1
+	cfg.WorkerPool.MaxConcurrentGenerations = 1
+	cfg.WorkerPool.GenerationTimeout = time.Minute
+	cfg.Server.ForceShutdownAfter = 2 * time.Minute
 	cfg.RateLimit.RequestsPerSecond = 1
 	cfg.RateLimit.Burst = 1
 	cfg.Audit.BufferSize = 1

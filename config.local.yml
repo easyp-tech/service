@@ -5,6 +5,7 @@ server:
     metric: 8081
     health: 8082
     mcp: 8083
+  force_shutdown_after: 150s   # must exceed worker_pool.generation_timeout
   # Local mode runs without TLS on purpose: clients connect with --insecure.
   # To exercise mTLS locally, run `task certs` and fill these in.
   tls:
@@ -17,6 +18,7 @@ db:
 registry:
   plugins_dir: "./plugins"
   max_output_size: 67108864
+  cache_max_bytes: 21474836480   # 20 GiB of unpacked plugins; 0 disables eviction
   # S3 binary storage is disabled by default in local mode (up-minimal starts
   # postgres only). To enable, start rustfs and uncomment:
   # s3:
@@ -30,8 +32,9 @@ telemetry:
   otlp_endpoint: "localhost:4317"
   pyroscope_endpoint: "http://localhost:4040"
 worker_pool:
-  workers: 4
-  queue_size: 16
+  workers: 4                        # concurrent plugin lookups (DB, and downloads on a miss)
+  queue_size: 16                    # waiting slots, for lookups and for generations alike
+  max_concurrent_generations: 16    # concurrent plugin processes; beyond queue_size the answer is a refusal
   generation_timeout: 120s
   max_retries: 3
   shutdown_timeout: 30s
@@ -44,6 +47,7 @@ rate_limit:
   requests_per_second: 10.0
   burst: 20
   cleanup_interval: 10m
+  max_concurrent_per_ip: 2    # in-flight requests per client; 0 disables
 audit:
   buffer_size: 1000
   batch_size: 100

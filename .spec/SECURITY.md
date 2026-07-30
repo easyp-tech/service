@@ -114,8 +114,17 @@ See `BACKGROUND_JOBS.md` for audit worker details.
 
 ## WorkerPool Security
 
-The WorkerPool provides execution containment:
-- **Bounded concurrency** — limits parallel plugin executions (default: 4 workers)
-- **Non-blocking backpressure** — returns `ErrServerOverloaded` when queue is full
+The WorkerPool bounds two different resources, and the distinction matters:
+
+- **`workers` (default 4)** limits concurrent plugin *lookups* — a database read
+  and, on a cache miss, a download and unpack from object storage. A worker is
+  released as soon as the plugin is located.
+- **`max_concurrent_generations` (default 16)** limits concurrent plugin
+  *processes*. Execution happens on the caller's goroutine, after the worker is
+  done, so `workers` never constrained it.
+
+Beyond either limit a request waits up to `queue_size` deep and is then refused
+with `ErrServerOverloaded` rather than adding load the host cannot carry.
+
 - **Timeout enforcement** — per-request deadline prevents runaway processes
 - **Retry limits** — configurable max retries for transient failures

@@ -5,6 +5,10 @@ server:
     metric: 8081
     health: 8082
     mcp: 8083
+  # Hard exit this long after a termination signal. Must outlast
+  # worker_pool.generation_timeout, otherwise a rolling deploy severs work the
+  # service already accepted; startup refuses a shorter value.
+  force_shutdown_after: 150s
   # Transport security for the gRPC listener. Leaving cert_file empty serves
   # plaintext, which the service logs a warning about on every start.
   # client_ca_file turns the listener into mutual TLS: only certificates signed
@@ -19,6 +23,12 @@ db:
 registry:
   plugins_dir: "/plugins"
   max_output_size: 67108864
+  # Bound on the unpacked plugins in plugins_dir. Archives are downloaded on
+  # demand and nothing removes them on its own, so without a limit the
+  # directory grows towards the size of every plugin ever requested. Least
+  # recently used ones are dropped; the archive in S3 is left alone, so an
+  # evicted plugin simply comes down again. 0 disables eviction.
+  cache_max_bytes: 21474836480   # 20 GiB
   s3:
     endpoint: "http://rustfs:9000"
     bucket: "easyp-plugins"
@@ -30,8 +40,9 @@ telemetry:
   otlp_endpoint: "easyp-alloy:4317"
   pyroscope_endpoint: "http://easyp-pyroscope:4040"
 worker_pool:
-  workers: 4
-  queue_size: 16
+  workers: 4                        # concurrent plugin lookups (DB, and downloads on a miss)
+  queue_size: 16                    # waiting slots, for lookups and for generations alike
+  max_concurrent_generations: 16    # concurrent plugin processes; beyond queue_size the answer is a refusal
   generation_timeout: 120s
   max_retries: 3
   shutdown_timeout: 30s
@@ -50,6 +61,10 @@ rate_limit:
   requests_per_second: 10.0  # token refill rate (tokens/sec)
   burst: 20                   # max tokens (burst size)
   cleanup_interval: 10m       # stale client cleanup interval
+  # Requests one client may have in flight at once. Rate alone does not bound
+  # this: a caller staying under 10 rps can still hold every generation slot
+  # with long requests. 0 disables the check.
+  max_concurrent_per_ip: 2
 # Audit is an Enterprise feature: without a license nothing is written,
 # whatever these settings say. Defaults from env tags do NOT apply on the YAML
 # path, so every field has to be spelled out here.

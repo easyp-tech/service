@@ -72,6 +72,7 @@ type (
 		maxOutputSize int64
 		storage       core.BinaryStorage
 		downloads     singleflight.Group
+		cache         *pluginCache
 	}
 
 	// plugin is a plugin in the registry.
@@ -129,9 +130,28 @@ func ValidateConfig(config json.RawMessage, pluginsDir string) error {
 }
 
 // New build and returns a new Registry.
-func New(_ context.Context, db *database.SQL, pluginsDir string, maxOutputSize int64, bStorage core.BinaryStorage) (*Registry, error) {
+func New(
+	ctx context.Context,
+	db *database.SQL,
+	pluginsDir string,
+	maxOutputSize int64,
+	bStorage core.BinaryStorage,
+	cacheOpts CacheOptions,
+) (*Registry, error) {
 	if pluginsDir == "" {
 		return nil, ErrEmptyPluginsDir
+	}
+
+	var cache *pluginCache
+
+	// Eviction only makes sense with object storage behind it: without one the
+	// unpacked files are the only copy of the artifact, and removing them would
+	// lose the plugin rather than free a cache.
+	if bStorage != nil {
+		cache = newPluginCache(pluginsDir, cacheOpts)
+		// Scanning an existing cache walks every unpacked file, so it runs in the
+		// background rather than delaying readiness.
+		go cache.warm(ctx)
 	}
 
 	return &Registry{
@@ -139,6 +159,7 @@ func New(_ context.Context, db *database.SQL, pluginsDir string, maxOutputSize i
 		pluginsDir:    pluginsDir,
 		maxOutputSize: maxOutputSize,
 		storage:       bStorage,
+		cache:         cache,
 	}, nil
 }
 
@@ -603,6 +624,11 @@ func (r *Registry) cleanupBinary(ctx context.Context, group, name, version strin
 	if err != nil {
 		monitor.FromContext(ctx).Warn("failed to delete local plugin directory", "path", versionDir, "error", err)
 	}
+
+	// Keep the accounting honest whether or not the removal succeeded: a
+	// directory that is gone must not keep occupying the budget, and one that
+	// refused to go will be re-measured on its next download.
+	r.cache.forget(versionDir)
 }
 
 // Info implements core.Plugin.
@@ -629,13 +655,18 @@ func (r *Registry) ensureBinary(ctx context.Context, plug *plugin) error {
 	}
 
 	binPath := plug.pluginConfig.Command[0]
+	versionDir := filepath.Dir(binPath)
+
 	_, statErr := os.Stat(binPath)
 	if statErr == nil || !os.IsNotExist(statErr) {
+		// A cache hit is the signal that this plugin is in demand, and it is the
+		// only one there is: eviction order must reflect use, not download time.
+		r.cache.touch(versionDir)
+
 		return nil
 	}
 
 	key := archiveKey(plug.GroupName, plug.Name, plug.Version)
-	versionDir := filepath.Dir(binPath)
 
 	// singleflight collapses concurrent misses; the value is unused, only the
 	// error matters. struct{}{} rather than nil so this is not a nil-nil return.
@@ -643,10 +674,21 @@ func (r *Registry) ensureBinary(ctx context.Context, plug *plugin) error {
 		// Another caller in this flight may already have unpacked it.
 		_, reStatErr := os.Stat(binPath)
 		if reStatErr == nil {
+			r.cache.touch(versionDir)
+
 			return struct{}{}, nil
 		}
 
-		return struct{}{}, r.fetchAndUnpack(ctx, key, versionDir, plug.pluginConfig.Sha256)
+		unpackErr := r.fetchAndUnpack(ctx, key, versionDir, plug.pluginConfig.Sha256)
+		if unpackErr != nil {
+			return struct{}{}, unpackErr
+		}
+
+		// Accounted only once the files are actually there, so a failed download
+		// never makes the cache look larger than it is.
+		r.cache.add(ctx, versionDir)
+
+		return struct{}{}, nil
 	})
 	if err != nil {
 		return fmt.Errorf("ensureBinary: %w", err)

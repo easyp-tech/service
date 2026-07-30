@@ -116,10 +116,18 @@ inside the cluster.
 {{- end }}
 {{- end }}
 
+{{/*
+Shutdown budget, innermost first. Checking only the outer pair would let the
+process kill itself mid-generation while the grace period still looked generous.
+*/}}
 {{- $grace := int .Values.terminationGracePeriodSeconds }}
+{{- $force := int .Values.config.forceShutdownAfterSeconds }}
 {{- $gen := int .Values.config.workerPool.generationTimeoutSeconds }}
-{{- if le $grace $gen }}
-{{- fail (printf "easyp-service: terminationGracePeriodSeconds (%d) must exceed config.workerPool.generationTimeoutSeconds (%d), otherwise Kubernetes kills the pod while a generation it accepted is still running." $grace $gen) }}
+{{- if le $force $gen }}
+{{- fail (printf "easyp-service: config.forceShutdownAfterSeconds (%d) must exceed config.workerPool.generationTimeoutSeconds (%d), otherwise the process exits while a generation it accepted is still running. The service refuses to start with this combination." $force $gen) }}
+{{- end }}
+{{- if le $grace $force }}
+{{- fail (printf "easyp-service: terminationGracePeriodSeconds (%d) must exceed config.forceShutdownAfterSeconds (%d), otherwise Kubernetes sends SIGKILL before the process has used its own shutdown budget." $grace $force) }}
 {{- end }}
 
 {{- if .Values.tls.enabled }}

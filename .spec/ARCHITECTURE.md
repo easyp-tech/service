@@ -135,7 +135,8 @@ tracedCore := telemetry.NewTracingCore(module)
 ### 4.2 WorkerPool for Bounded Plugin Execution
 
 Plugin execution is resource-intensive. `WorkerPool` implements `Registry` interface, wrapping the real registry with:
-- **Bounded concurrency** — configurable number of worker goroutines
+- **Bounded lookups** — `workers` goroutines resolve plugins (DB, plus download and unpack on a miss)
+- **Bounded executions** — `max_concurrent_generations` caps how many plugin processes run at once. This is a separate limit because `Generate` runs on the caller's goroutine, not on a worker: the worker is released once the plugin is located
 - **Non-blocking backpressure** — returns `ErrServerOverloaded` immediately if queue is full
 - **Automatic retries** — transient errors (exit codes 125–127, connection refused) are retried
 - **Generation timeout** — per-request deadline for plugin execution

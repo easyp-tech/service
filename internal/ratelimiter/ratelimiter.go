@@ -50,12 +50,15 @@ func New(
 		keyExtractor = PeerIPExtractor
 	}
 
+	// Deliberately not labelled by client IP: on a public listener that is an
+	// unbounded label, and every address ever seen would become a permanent
+	// time series. The address stays in the log line instead.
 	requestsTotal := prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "easyp_rate_limit_requests_total",
 			Help: "Total number of requests processed by rate limiter",
 		},
-		[]string{"status", "client_ip"},
+		[]string{"status"},
 	)
 
 	activeClients := prometheus.NewGauge(
@@ -137,14 +140,14 @@ func (rl *RateLimiter) Limit(ctx context.Context) error {
 	// Step 7: Allowed — set headers, increment metric, return nil.
 	if allowed {
 		_ = grpc.SetHeader(ctx, md)
-		rl.requestsTotal.WithLabelValues("allowed", key).Inc()
+		rl.requestsTotal.WithLabelValues("allowed").Inc()
 
 		return nil
 	}
 
 	// Step 8: Denied — set trailing metadata, increment metric, log, return error.
 	_ = grpc.SetTrailer(ctx, md)
-	rl.requestsTotal.WithLabelValues("denied", key).Inc()
+	rl.requestsTotal.WithLabelValues("denied").Inc()
 	rl.logger.Warn("rate limit exceeded",
 		slog.String("client_ip", key),
 		slog.Int64("reset_time", resetTime),

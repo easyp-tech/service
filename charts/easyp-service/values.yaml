@@ -58,12 +58,14 @@ service:
 
 # Seconds Kubernetes waits after SIGTERM before SIGKILL.
 #
-# Must leave room for an in-flight generation to finish, hence the guard in
-# _helpers.tpl requiring it to exceed config.workerPool.generationTimeoutSeconds.
-# Note: the current release also self-terminates 15s after SIGTERM regardless of
-# this value, so long generations are still cut short. Raising that limit is
-# tracked separately.
-terminationGracePeriodSeconds: 150
+# Three numbers have to line up, and _helpers.tpl enforces the order:
+#
+#   generationTimeoutSeconds < forceShutdownAfterSeconds < terminationGracePeriodSeconds
+#
+# A generation the service accepted must be able to finish; the process must be
+# able to exit on its own after that; and Kubernetes must wait for both rather
+# than reaching for SIGKILL first.
+terminationGracePeriodSeconds: 180
 
 # ---------------------------------------------------------------------------
 # Configuration that is not secret. Rendered into the container's `env`.
@@ -71,9 +73,21 @@ terminationGracePeriodSeconds: 150
 config:
   logLevel: info
 
+  # Hard exit this long after SIGTERM, if graceful shutdown has not finished.
+  # Expressed in seconds so the chart can compare it with the two numbers on
+  # either side of it.
+  forceShutdownAfterSeconds: 150
+
   workerPool:
+    # Concurrent plugin lookups: a database read, plus a download and unpack
+    # from object storage on a cache miss.
     workers: 4
+    # Waiting slots, applied to lookups and to generations alike. Beyond this
+    # the answer is ErrServerOverloaded rather than a longer queue.
     queueSize: 16
+    # Concurrent plugin processes. Separate from workers on purpose: a worker is
+    # released once the plugin is located, and execution runs after that.
+    maxConcurrentGenerations: 16
     # Expressed in seconds (not "120s") so the chart can compare it against
     # terminationGracePeriodSeconds. Rendered as a Go duration for the service.
     generationTimeoutSeconds: 120
@@ -84,6 +98,10 @@ config:
     requestsPerSecond: 10.0
     burst: 20
     cleanupInterval: 10m
+    # Requests one client may have in flight at once. Rate alone does not bound
+    # this: a caller staying under the rate can still hold every generation slot
+    # with long requests. 0 disables the check.
+    maxConcurrentPerIP: 2
 
   audit:
     bufferSize: 1000
@@ -100,6 +118,12 @@ config:
   registry:
     pluginsDir: /plugins
     maxOutputSize: 67108864
+    # Bound on the unpacked plugins on disk. Least recently used ones are
+    # dropped once this is exceeded; the archive in object storage is left
+    # alone, so an evicted plugin is one download away rather than lost.
+    # Keep it below persistence.size — eviction starts at the limit, and the
+    # volume needs room to reach it. 0 disables eviction.
+    cacheMaxBytes: 21474836480   # 20 GiB
     # Leaving bucket empty disables S3 and makes pluginsDir the only source of
     # plugin binaries.
     s3:
@@ -210,7 +234,10 @@ persistence:
   existingClaim: ""
   storageClass: ""
   accessMode: ReadWriteOnce
-  size: 20Gi
+  # Larger than config.registry.cacheMaxBytes on purpose: eviction triggers at
+  # the limit, so a volume sized exactly to it would be full at the moment the
+  # cache first needs headroom.
+  size: 25Gi
 
 serviceMonitor:
   enabled: false

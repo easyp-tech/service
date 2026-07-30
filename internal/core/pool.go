@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -14,21 +15,28 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/sync/semaphore"
 	"google.golang.org/protobuf/types/pluginpb"
 )
 
 const (
-	defaultGenerationTimeout = 120 * time.Second
-	defaultShutdownTimeout   = 30 * time.Second
+	defaultGenerationTimeout        = 120 * time.Second
+	defaultShutdownTimeout          = 30 * time.Second
+	defaultMaxConcurrentGenerations = 16
 )
 
 // WorkerPoolConfig содержит параметры конфигурации worker pool.
+//
+// Workers ограничивает поиск плагина (БД и, при промахе, скачивание из
+// хранилища), MaxConcurrentGenerations — запуск самих процессов плагинов.
+// Это разные ресурсы: первое упирается в сеть, второе в CPU и память.
 type WorkerPoolConfig struct {
-	Workers           int
-	QueueSize         int
-	GenerationTimeout time.Duration
-	MaxRetries        int
-	ShutdownTimeout   time.Duration
+	Workers                  int
+	QueueSize                int
+	MaxConcurrentGenerations int
+	GenerationTimeout        time.Duration
+	MaxRetries               int
+	ShutdownTimeout          time.Duration
 }
 
 // job представляет единицу работы для воркера.
@@ -60,6 +68,23 @@ type WorkerPool struct {
 	rejectedTotal prometheus.Counter
 	jobsTotal     prometheus.Counter
 	tracer        trace.Tracer
+
+	// gen ограничивает одновременный запуск процессов плагинов. Воркеры для
+	// этого не годятся: воркер освобождается, отдав plugin в канал, а Generate
+	// вызывается уже горутиной вызывающего.
+	gen *genLimiter
+}
+
+// genLimiter пропускает не более cap одновременных генераций, держит очередь
+// глубиной queue и отклоняет всё сверх неё.
+type genLimiter struct {
+	slots   *semaphore.Weighted
+	queue   int64
+	waiting atomic.Int64
+
+	active   prometheus.Gauge
+	inQueue  prometheus.Gauge
+	rejected prometheus.Counter
 }
 
 // poolPlugin оборачивает реальный Plugin, добавляя таймаут и retry при вызове Generate.
@@ -68,6 +93,7 @@ type poolPlugin struct {
 	cfg     WorkerPoolConfig
 	logger  *slog.Logger
 	metrics Metrics
+	gen     *genLimiter
 }
 
 // NewWorkerPool создаёт WorkerPool с нормализованной конфигурацией.
@@ -89,6 +115,9 @@ func NewWorkerPool(
 	}
 	if cfg.ShutdownTimeout == 0 {
 		cfg.ShutdownTimeout = defaultShutdownTimeout
+	}
+	if cfg.MaxConcurrentGenerations < 1 {
+		cfg.MaxConcurrentGenerations = defaultMaxConcurrentGenerations
 	}
 
 	jobs := make(chan job, cfg.QueueSize)
@@ -133,7 +162,74 @@ func NewWorkerPool(
 		rejectedTotal: rejectedTotal,
 		jobsTotal:     jobsTotal,
 		tracer:        otel.Tracer("pool"),
+		gen:           newGenLimiter(cfg, reg, namespace),
 	}
+}
+
+// newGenLimiter собирает ограничитель одновременных генераций вместе с его
+// метриками.
+func newGenLimiter(cfg WorkerPoolConfig, reg *prometheus.Registry, namespace string) *genLimiter {
+	active := prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Name:      "pool_generations_active",
+		Help:      "Number of plugin processes currently running.",
+	})
+
+	inQueue := prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Name:      "pool_generations_waiting",
+		Help:      "Number of requests waiting for a generation slot.",
+	})
+
+	rejected := prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "pool_generations_rejected_total",
+		Help:      "Total generations rejected because the wait queue was full.",
+	})
+
+	if reg != nil {
+		reg.MustRegister(active, inQueue, rejected)
+	}
+
+	return &genLimiter{
+		slots:    semaphore.NewWeighted(int64(cfg.MaxConcurrentGenerations)),
+		queue:    int64(cfg.QueueSize),
+		active:   active,
+		inQueue:  inQueue,
+		rejected: rejected,
+	}
+}
+
+// acquire занимает слот генерации. Возвращает функцию освобождения либо
+// ErrServerOverloaded, если очередь ожидания уже заполнена.
+//
+// Семантика намеренно повторяет очередь заданий пула: пускаем до предела,
+// дальше ограниченная очередь, дальше явный отказ. Молча копить ожидающих
+// нельзя — они держат соединения и память.
+func (g *genLimiter) acquire(ctx context.Context) (func(), error) {
+	if !g.slots.TryAcquire(1) {
+		if g.waiting.Add(1) > g.queue {
+			g.waiting.Add(-1)
+			g.rejected.Inc()
+
+			return nil, ErrServerOverloaded
+		}
+
+		g.inQueue.Set(float64(g.waiting.Load()))
+		err := g.slots.Acquire(ctx, 1)
+		g.inQueue.Set(float64(g.waiting.Add(-1)))
+
+		if err != nil {
+			return nil, fmt.Errorf("waiting for a generation slot: %w", err)
+		}
+	}
+
+	g.active.Inc()
+
+	return func() {
+		g.active.Dec()
+		g.slots.Release(1)
+	}, nil
 }
 
 // Start запускает N горутин-воркеров.
@@ -168,6 +264,7 @@ func (p *WorkerPool) processJob(_ context.Context, work job) { //nolint:funcorde
 			cfg:     p.cfg,
 			logger:  p.logger,
 			metrics: p.metrics,
+			gen:     p.gen,
 		}
 
 		work.result <- jobResult{plugin: wrapped}
@@ -243,6 +340,15 @@ func (p *WorkerPool) Delete(ctx context.Context, group, name, version string) er
 
 // Generate выполняет генерацию кода с таймаутом и retry.
 func (pp *poolPlugin) Generate(ctx context.Context, req *pluginpb.CodeGeneratorRequest) (*pluginpb.CodeGeneratorResponse, error) {
+	// The slot is taken before the deadline starts. Time spent queueing is not
+	// the plugin's, and charging it against GenerationTimeout would fail
+	// requests that never got the chance to run.
+	release, err := pp.gen.acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	genCtx, cancel := context.WithTimeout(ctx, pp.cfg.GenerationTimeout)
 	defer cancel()
 
@@ -250,7 +356,29 @@ func (pp *poolPlugin) Generate(ctx context.Context, req *pluginpb.CodeGeneratorR
 	pluginName := info.Group + "/" + info.Name + ":" + info.Version
 
 	start := time.Now()
+	resp, err := pp.generateWithRetries(ctx, genCtx, req, pluginName)
+	pp.metrics.ObserveGenerationDuration(ctx, pluginName, time.Since(start))
 
+	// A caller that walked away is not a plugin failure, so it is not counted
+	// as one. A deadline hit by genCtx alone leaves ctx healthy and is counted.
+	if err != nil && ctx.Err() == nil {
+		errorType := "permanent"
+		if isTransient(err) {
+			errorType = "transient"
+		}
+		pp.metrics.IncGenerationErrors(ctx, pluginName, errorType)
+	}
+
+	return resp, err
+}
+
+// generateWithRetries выполняет генерацию, повторяя попытки при временных
+// ошибках. genCtx несёт таймаут генерации, ctx — жизнь вызывающего.
+func (pp *poolPlugin) generateWithRetries( //nolint:funcorder // деталь реализации poolPlugin
+	ctx, genCtx context.Context,
+	req *pluginpb.CodeGeneratorRequest,
+	pluginName string,
+) (*pluginpb.CodeGeneratorResponse, error) {
 	var resp *pluginpb.CodeGeneratorResponse
 	var err error
 
@@ -258,15 +386,11 @@ func (pp *poolPlugin) Generate(ctx context.Context, req *pluginpb.CodeGeneratorR
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		ctxErr := ctx.Err()
 		if ctxErr != nil {
-			pp.metrics.ObserveGenerationDuration(ctx, pluginName, time.Since(start))
-
 			return nil, ctxErr
 		}
 
 		resp, err = pp.inner.Generate(genCtx, req)
 		if err == nil {
-			pp.metrics.ObserveGenerationDuration(ctx, pluginName, time.Since(start))
-
 			return resp, nil
 		}
 
@@ -281,16 +405,6 @@ func (pp *poolPlugin) Generate(ctx context.Context, req *pluginpb.CodeGeneratorR
 			"max_attempts", maxAttempts,
 			"error", err,
 		)
-	}
-
-	pp.metrics.ObserveGenerationDuration(ctx, pluginName, time.Since(start))
-
-	if err != nil {
-		errorType := "permanent"
-		if isTransient(err) {
-			errorType = "transient"
-		}
-		pp.metrics.IncGenerationErrors(ctx, pluginName, errorType)
 	}
 
 	return resp, err

@@ -80,6 +80,8 @@ spec:
               value: "{{ .Values.ports.health | int }}"
             - name: SERVER_PORT_MCP
               value: "{{ .Values.ports.mcp | int }}"
+            - name: SERVER_FORCE_SHUTDOWN_AFTER
+              value: "{{ .Values.config.forceShutdownAfterSeconds }}s"
             {{- if .Values.tls.enabled }}
             - name: SERVER_TLS_CERT_FILE
               value: "{{ .Values.tls.mountPath }}/server/tls.crt"
@@ -94,6 +96,8 @@ spec:
               value: {{ .Values.config.registry.pluginsDir | quote }}
             - name: REGISTRY_MAX_OUTPUT_SIZE
               value: "{{ .Values.config.registry.maxOutputSize | int64 }}"
+            - name: REGISTRY_CACHE_MAX_BYTES
+              value: "{{ .Values.config.registry.cacheMaxBytes | int64 }}"
             {{- with .Values.config.registry.s3 }}
             {{- if .bucket }}
             - name: REGISTRY_S3_BUCKET
@@ -116,6 +120,8 @@ spec:
               value: "{{ .Values.config.workerPool.workers | int }}"
             - name: WORKER_POOL_QUEUE_SIZE
               value: "{{ .Values.config.workerPool.queueSize | int }}"
+            - name: WORKER_POOL_MAX_CONCURRENT_GENERATIONS
+              value: "{{ .Values.config.workerPool.maxConcurrentGenerations | int }}"
             - name: WORKER_POOL_GENERATION_TIMEOUT
               value: "{{ .Values.config.workerPool.generationTimeoutSeconds }}s"
             - name: WORKER_POOL_MAX_RETRIES
@@ -128,6 +134,8 @@ spec:
               value: "{{ .Values.config.rateLimit.burst | int }}"
             - name: RATE_LIMIT_CLEANUP_INTERVAL
               value: {{ .Values.config.rateLimit.cleanupInterval | quote }}
+            - name: RATE_LIMIT_MAX_CONCURRENT_PER_IP
+              value: "{{ .Values.config.rateLimit.maxConcurrentPerIP | int }}"
             {{- with .Values.config.audit }}
             - name: AUDIT_BUFFER_SIZE
               value: "{{ .bufferSize | int }}"

@@ -101,6 +101,12 @@ func runServiceStart(ctx context.Context, cfgPath string, logLevelStr string) er
 		return fmt.Errorf("config validation: %w", err)
 	}
 
+	// Armed here rather than in main: the budget has to come from the config,
+	// and the config is only known once the command runs. The other
+	// subcommands are short-lived and stop on context cancellation, so they
+	// need no watchdog.
+	go forceShutdown(ctx, cfg.Server.ForceShutdownAfter)
+
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	reg.MustRegister(collectors.NewGoCollector())
@@ -209,28 +215,14 @@ func initInfrastructure(
 		return nil, nil, fmt.Errorf("database.NewSQL: %w", err)
 	}
 
-	var bStorage core.BinaryStorage
-	if cfg.Registry.S3.Enabled() {
-		s3Store, s3Err := storage.NewS3Storage(ctx, storage.S3Options{
-			Endpoint:        cfg.Registry.S3.Endpoint,
-			Bucket:          cfg.Registry.S3.Bucket,
-			Region:          cfg.Registry.S3.Region,
-			Prefix:          cfg.Registry.S3.Prefix,
-			AccessKeyID:     cfg.Registry.S3.AccessKeyID,
-			SecretAccessKey: cfg.Registry.S3.SecretAccessKey,
-			ForcePathStyle:  cfg.Registry.S3.ForcePathStyle,
-		})
-		if s3Err != nil {
-			return nil, nil, fmt.Errorf("storage.NewS3Storage: %w", s3Err)
-		}
-		bStorage = s3Store
-		log.Info("S3 plugin storage enabled",
-			"bucket", cfg.Registry.S3.Bucket,
-			"endpoint", cfg.Registry.S3.Endpoint,
-		)
+	bStorage, err := initBinaryStorage(ctx, cfg)
+	if err != nil {
+		return nil, nil, err
 	}
 
-	repo, err := registry.New(ctx, db, cfg.Registry.PluginsDir, cfg.Registry.MaxOutputSize, bStorage)
+	cacheOpts := pluginCacheOptions(cfg, reg)
+
+	repo, err := registry.New(ctx, db, cfg.Registry.PluginsDir, cfg.Registry.MaxOutputSize, bStorage, cacheOpts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("registry.New: %w", err)
 	}
@@ -317,12 +309,7 @@ func initApp(
 
 	gate := license.NewFeatureGate(lm)
 
-	rl := ratelimiter.New(ratelimiter.Config{
-		RequestsPerSecond: cfg.RateLimit.RequestsPerSecond,
-		Burst:             cfg.RateLimit.Burst,
-		CleanupInterval:   cfg.RateLimit.CleanupInterval,
-	}, gate, nil, log, reg)
-	rl.StartCleanup(ctx)
+	rl, cl := buildLimiters(ctx, cfg, gate, log, reg)
 
 	tracedRegistry := telemetry.NewTracingRegistry(repo)
 
@@ -333,11 +320,15 @@ func initApp(
 
 	metricsAdapter := adapter_metrics.New(reg, namespace)
 	pool := core.NewWorkerPool(tracedRegistry, core.WorkerPoolConfig{
-		Workers:           wpWorkers,
-		QueueSize:         cfg.WorkerPool.QueueSize,
-		GenerationTimeout: cfg.WorkerPool.GenerationTimeout,
-		MaxRetries:        cfg.WorkerPool.MaxRetries,
-		ShutdownTimeout:   cfg.WorkerPool.ShutdownTimeout,
+		Workers:   wpWorkers,
+		QueueSize: cfg.WorkerPool.QueueSize,
+		// Not capped by the licence: MaxWorkers bounds plugin lookups, and this
+		// bounds plugin processes. Tying the paid limit to it is a pricing
+		// decision, not a plumbing one.
+		MaxConcurrentGenerations: cfg.WorkerPool.MaxConcurrentGenerations,
+		GenerationTimeout:        cfg.WorkerPool.GenerationTimeout,
+		MaxRetries:               cfg.WorkerPool.MaxRetries,
+		ShutdownTimeout:          cfg.WorkerPool.ShutdownTimeout,
 	}, log, metricsAdapter, reg, namespace)
 	pool.Start(ctx)
 
@@ -350,7 +341,13 @@ func initApp(
 			"hint", "generate one with `easyp-svc auth new-token` and add it to auth.write_tokens")
 	}
 
-	grpcSrv, apiSrv := buildGRPCServer(log, reg, gate, rl, tracedCore, grpcCreds, authenticator)
+	// contextcheck traces into ConcurrencyLimiter.StreamServerInterceptor and
+	// asks for the context to reach the handler. A stream interceptor can only
+	// do that by substituting a wrapped ServerStream, which is worth doing when
+	// a new context is derived (as the auth interceptor does) and is empty
+	// ceremony when, as here, the stream's own context is merely read.
+	//nolint:contextcheck // limiter reads ss.Context() and derives nothing
+	grpcSrv, apiSrv := buildGRPCServer(log, reg, gate, rl, cl, tracedCore, grpcCreds, authenticator)
 
 	return module, pool, gate, grpcSrv, apiSrv
 }
@@ -360,6 +357,7 @@ func buildGRPCServer(
 	reg *prometheus.Registry,
 	gate *license.FeatureGate,
 	rl *ratelimiter.RateLimiter,
+	cl *ratelimiter.ConcurrencyLimiter,
 	tracedCore *telemetry.TracingCore,
 	creds credentials.TransportCredentials,
 	authenticator auth.Authenticator,
@@ -373,7 +371,7 @@ func buildGRPCServer(
 	})
 	reg.MustRegister(panicsCounter)
 
-	unaryExtra, streamExtra := buildExtraInterceptors(log, reg, gate, rl, authenticator)
+	unaryExtra, streamExtra := buildExtraInterceptors(log, reg, gate, rl, cl, authenticator)
 
 	grpcSrv, healthSrv := grpchelper.NewServer(
 		&grpcMetrics{panics: panicsCounter},
@@ -391,15 +389,39 @@ func buildGRPCServer(
 	return grpcSrv, apiSrv
 }
 
+// buildLimiters assembles the two load-shedding limiters. They answer different
+// questions — how fast a client calls, and how much it holds at once — and
+// neither substitutes for the other.
+func buildLimiters(
+	ctx context.Context,
+	cfg config.Config,
+	gate *license.FeatureGate,
+	log *slog.Logger,
+	reg *prometheus.Registry,
+) (*ratelimiter.RateLimiter, *ratelimiter.ConcurrencyLimiter) {
+	rl := ratelimiter.New(ratelimiter.Config{
+		RequestsPerSecond: cfg.RateLimit.RequestsPerSecond,
+		Burst:             cfg.RateLimit.Burst,
+		CleanupInterval:   cfg.RateLimit.CleanupInterval,
+	}, gate, nil, log, reg)
+	rl.StartCleanup(ctx)
+
+	cl := ratelimiter.NewConcurrencyLimiter(cfg.RateLimit.MaxConcurrentPerIP, gate, nil, log, reg)
+
+	return rl, cl
+}
+
 // buildExtraInterceptors assembles the chain that runs after grpchelper's
-// built-in one. The order is deliberate: rate limiting sheds load before
-// authentication spends anything on it, and the licence check runs last so it
-// already sees an authenticated caller.
+// built-in one. The order is deliberate: load shedding comes first — rate,
+// then concurrency — so neither authentication nor the licence check spends
+// anything on a request that is about to be refused; the licence check runs
+// last so it already sees an authenticated caller.
 func buildExtraInterceptors(
 	log *slog.Logger,
 	reg *prometheus.Registry,
 	gate *license.FeatureGate,
 	rl *ratelimiter.RateLimiter,
+	cl *ratelimiter.ConcurrencyLimiter,
 	authenticator auth.Authenticator,
 ) ([]grpc.UnaryServerInterceptor, []grpc.StreamServerInterceptor) {
 	authInterceptor := api.NewAuthInterceptor(authenticator, log, reg, serviceNamespace)
@@ -407,10 +429,12 @@ func buildExtraInterceptors(
 
 	return []grpc.UnaryServerInterceptor{
 			ratelimit.UnaryServerInterceptor(rl),
+			cl.UnaryServerInterceptor(),
 			authInterceptor.UnaryServerInterceptor(),
 			licenseInterceptor.UnaryServerInterceptor(),
 		}, []grpc.StreamServerInterceptor{
 			ratelimit.StreamServerInterceptor(rl),
+			cl.StreamServerInterceptor(),
 			authInterceptor.StreamServerInterceptor(),
 			licenseInterceptor.StreamServerInterceptor(),
 		}
@@ -486,6 +510,54 @@ func serveApp(
 	return nil
 }
 
+// initBinaryStorage opens object storage for plugin archives, or returns nil
+// when none is configured — in which case the files in plugins_dir are the only
+// copy of an artifact and are never evicted.
+//
+//nolint:ireturn // core.BinaryStorage is the port; nil is a meaningful value for it
+func initBinaryStorage(ctx context.Context, cfg config.Config) (core.BinaryStorage, error) {
+	if !cfg.Registry.S3.Enabled() {
+		return nil, nil //nolint:nilnil // no storage configured is not an error
+	}
+
+	s3Store, err := storage.NewS3Storage(ctx, storage.S3Options{
+		Endpoint:        cfg.Registry.S3.Endpoint,
+		Bucket:          cfg.Registry.S3.Bucket,
+		Region:          cfg.Registry.S3.Region,
+		Prefix:          cfg.Registry.S3.Prefix,
+		AccessKeyID:     cfg.Registry.S3.AccessKeyID,
+		SecretAccessKey: cfg.Registry.S3.SecretAccessKey,
+		ForcePathStyle:  cfg.Registry.S3.ForcePathStyle,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("storage.NewS3Storage: %w", err)
+	}
+
+	monitor.FromContext(ctx).Info("S3 plugin storage enabled",
+		"bucket", cfg.Registry.S3.Bucket,
+		"endpoint", cfg.Registry.S3.Endpoint,
+	)
+
+	return s3Store, nil
+}
+
+// pluginCacheOptions derives the eviction settings from the pool timings.
+//
+// A generation cannot outlive GenerationTimeout, so a plugin untouched for
+// twice that long is certainly not executing. That is what lets eviction skip
+// reference counting and still never pull a binary out from under a running
+// process.
+func pluginCacheOptions(cfg config.Config, reg *prometheus.Registry) registry.CacheOptions {
+	const generationsOfSlack = 2
+
+	return registry.CacheOptions{
+		MaxBytes:  cfg.Registry.CacheMaxBytes,
+		MinAge:    generationsOfSlack * cfg.WorkerPool.GenerationTimeout,
+		Registry:  reg,
+		Namespace: serviceNamespace,
+	}
+}
+
 func initHealthCheck(repo *registry.Registry, namespace string) (*health.Health, error) {
 	const healthTimeout = 5 * time.Second
 
@@ -523,9 +595,11 @@ func buildLogger(level slog.Level) *slog.Logger {
 	)
 }
 
-func forceShutdown(ctx context.Context) {
+// forceShutdown exits the process if graceful shutdown has not finished within
+// delay of the termination signal. The delay must outlast an in-flight
+// generation, otherwise the watchdog itself is what severs the work.
+func forceShutdown(ctx context.Context, shutdownDelay time.Duration) {
 	log := monitor.FromContext(ctx)
-	const shutdownDelay = 15 * time.Second
 	<-ctx.Done()
 	<-time.After(shutdownDelay)
 	log.Error("failed to graceful shutdown")

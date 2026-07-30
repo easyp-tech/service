@@ -74,23 +74,40 @@ secret triggers a rollout; without that controller installed, renewal means
 ## Storage
 
 Plugin archives are downloaded on demand and unpacked into
-`config.registry.pluginsDir`. **This release never prunes that directory**, so
-it grows towards the total size of everything ever requested — size the volume
-accordingly and watch it. The PVC carries `helm.sh/resource-policy: keep`,
-because refilling the cache costs more than the disk.
+`config.registry.pluginsDir`. Once the unpacked total passes
+`config.registry.cacheMaxBytes` (20 GiB by default) the least recently used
+plugins are removed. Only local files go: the archive in object storage stays,
+so an evicted plugin is one download away rather than lost.
+
+Keep `persistence.size` above `cacheMaxBytes` — eviction begins at the limit, so
+a volume sized exactly to it would already be full when the cache first needs
+room. The defaults leave 5 GiB of headroom.
+
+A plugin used within the last few minutes is never evicted, even if that means
+overshooting the limit: removing a binary out from under a running process would
+fail the request in a way that looks like a corrupt artifact. Watch
+`easyp_plugin_cache_bytes` against the limit, and
+`easyp_plugin_cache_evictions_total` for churn.
+
+The PVC carries `helm.sh/resource-policy: keep`, because refilling the cache
+costs more than the disk.
 
 `replicaCount > 1` needs `persistence.accessMode=ReadWriteMany`; the chart fails
 the install otherwise rather than leaving pods stuck in Pending.
 
 ## Shutdown timing
 
-`terminationGracePeriodSeconds` must exceed
-`config.workerPool.generationTimeoutSeconds`, and the chart enforces it.
+Three values have to line up, and the chart refuses to install if they do not:
 
-One caveat this cannot fix: the current service release also force-exits 15
-seconds after SIGTERM regardless of the grace period, so a long generation is
-still cut short by a rollout. Making that limit configurable is tracked
-separately.
+```
+generationTimeoutSeconds  <  forceShutdownAfterSeconds  <  terminationGracePeriodSeconds
+        120                          150                            180
+```
+
+A generation the service accepted must be able to finish; the process must then
+be able to exit on its own; and Kubernetes must wait for both rather than
+reaching for SIGKILL first. Raise `generationTimeoutSeconds` and the other two
+have to follow.
 
 ## Configuration reference
 

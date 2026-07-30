@@ -42,8 +42,6 @@ func main() {
 	)
 	defer cancel()
 
-	go forceShutdown(ctx)
-
 	app := &cli.Command{
 		Name:     "easyp-svc",
 		Usage:    "EasyP Service CLI",

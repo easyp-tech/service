@@ -29,6 +29,12 @@ type Server struct {
 	Host string    `env:"HOST, default=0.0.0.0" yaml:"host"`
 	Port Ports     `env:", prefix=PORT_"        yaml:"port"`
 	TLS  TLSConfig `env:", prefix=TLS_"         yaml:"tls"`
+
+	// ForceShutdownAfter is how long the process waits after a termination
+	// signal before exiting outright. It has to outlast a generation the
+	// service has already accepted, or every rolling deploy severs work in
+	// progress; Validate enforces that against worker_pool.generation_timeout.
+	ForceShutdownAfter time.Duration `env:"FORCE_SHUTDOWN_AFTER,default=150s" yaml:"force_shutdown_after"`
 }
 
 // TLSConfig configures transport security for the gRPC server.
@@ -69,9 +75,19 @@ type DBConfig struct {
 
 // RegistryConfig configures plugin execution.
 type RegistryConfig struct {
-	PluginsDir    string   `env:"PLUGINS_DIR, default=/plugins"     yaml:"plugins_dir"`
-	MaxOutputSize int64    `env:"MAX_OUTPUT_SIZE, default=67108864" yaml:"max_output_size"`
-	S3            S3Config `env:", prefix=S3_"                      yaml:"s3"`
+	PluginsDir    string `env:"PLUGINS_DIR, default=/plugins"     yaml:"plugins_dir"`
+	MaxOutputSize int64  `env:"MAX_OUTPUT_SIZE, default=67108864" yaml:"max_output_size"`
+
+	// CacheMaxBytes bounds the unpacked plugins under PluginsDir. Archives are
+	// downloaded on demand and never removed on their own, so without a limit
+	// the directory grows towards the size of every plugin ever requested and
+	// the volume fills silently. 0 disables eviction.
+	//
+	// Only meaningful with object storage configured: without it the files on
+	// disk are the sole copy and are never evicted.
+	CacheMaxBytes int64 `env:"CACHE_MAX_BYTES, default=21474836480" yaml:"cache_max_bytes"`
+
+	S3 S3Config `env:", prefix=S3_" yaml:"s3"`
 }
 
 // S3Config configures S3-compatible storage for plugin binaries.
@@ -101,9 +117,22 @@ type TelemetryConfig struct {
 }
 
 // WorkerPoolConfig configures bounded concurrency for plugin execution.
+//
+// Workers and MaxConcurrentGenerations bound different things and are
+// deliberately separate. A worker is busy only while a plugin is being located:
+// a database lookup and, on a cache miss, a download and unpack from object
+// storage — network-bound work. Running the plugin binary happens afterwards,
+// outside the pool, and is CPU- and memory-bound. One number for both would
+// either starve downloads or over-admit executions.
 type WorkerPoolConfig struct {
-	Workers           int           `env:"WORKERS,default=4"               yaml:"workers"`
-	QueueSize         int           `env:"QUEUE_SIZE,default=16"           yaml:"queue_size"`
+	Workers   int `env:"WORKERS,default=4"     yaml:"workers"`
+	QueueSize int `env:"QUEUE_SIZE,default=16" yaml:"queue_size"`
+
+	// MaxConcurrentGenerations caps how many plugin processes may run at once.
+	// Requests beyond it queue up to QueueSize deep and are then rejected with
+	// ErrServerOverloaded rather than piling more processes onto the host.
+	MaxConcurrentGenerations int `env:"MAX_CONCURRENT_GENERATIONS,default=16" yaml:"max_concurrent_generations"`
+
 	GenerationTimeout time.Duration `env:"GENERATION_TIMEOUT,default=120s" yaml:"generation_timeout"`
 	MaxRetries        int           `env:"MAX_RETRIES,default=2"           yaml:"max_retries"`
 	ShutdownTimeout   time.Duration `env:"SHUTDOWN_TIMEOUT,default=30s"    yaml:"shutdown_timeout"`
@@ -135,6 +164,11 @@ type RateLimitConfig struct {
 	RequestsPerSecond float64       `env:"REQUESTS_PER_SECOND,default=10.0" yaml:"requests_per_second"`
 	Burst             int           `env:"BURST,default=20"                 yaml:"burst"`
 	CleanupInterval   time.Duration `env:"CLEANUP_INTERVAL,default=10m"     yaml:"cleanup_interval"`
+
+	// MaxConcurrentPerIP bounds requests one client may have in flight at once.
+	// Rate alone does not: a caller staying under the limit can still hold every
+	// generation slot with long requests. Zero disables the check.
+	MaxConcurrentPerIP int `env:"MAX_CONCURRENT_PER_IP,default=2" yaml:"max_concurrent_per_ip"`
 }
 
 // AuditConfig configures the audit log writer. Audit is an Enterprise feature:
@@ -185,6 +219,22 @@ func (c *Config) Validate() error {
 
 	if c.WorkerPool.QueueSize <= 0 {
 		return fmt.Errorf("worker_pool.queue_size must be positive, got %d", c.WorkerPool.QueueSize)
+	}
+
+	if c.WorkerPool.MaxConcurrentGenerations <= 0 {
+		return fmt.Errorf(
+			"worker_pool.max_concurrent_generations must be positive, got %d",
+			c.WorkerPool.MaxConcurrentGenerations,
+		)
+	}
+
+	// Killing the process before a generation it accepted can finish turns every
+	// rolling deploy into severed requests.
+	if c.Server.ForceShutdownAfter <= c.WorkerPool.GenerationTimeout {
+		return fmt.Errorf(
+			"server.force_shutdown_after (%s) must exceed worker_pool.generation_timeout (%s)",
+			c.Server.ForceShutdownAfter, c.WorkerPool.GenerationTimeout,
+		)
 	}
 
 	if c.RateLimit.RequestsPerSecond <= 0 {
