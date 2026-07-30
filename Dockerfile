@@ -27,6 +27,11 @@ RUN groupadd --gid 65532 nonroot \
 
 COPY --from=builder --chown=65532:65532 /app/easyp-svc /easyp-svc
 
+# The Elastic License 2.0 requires that anyone receiving a copy of the software
+# also receives the terms. Shipping the text in the image is the only way a
+# downstream redistributor can satisfy that without hunting for the repository.
+COPY --from=builder /app/LICENSE /LICENSE
+
 VOLUME ["/plugins"]
 
 USER 65532:65532

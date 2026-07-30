@@ -39,6 +39,7 @@ dockers:
       - "--label=org.opencontainers.image.title={{ .ProjectName }}"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.source=https://github.com/easyp-tech/service"
+      - "--label=org.opencontainers.image.licenses=Elastic-2.0"
     extra_files:
       - go.mod
       - go.sum
@@ -46,7 +47,12 @@ dockers:
       - internal
       - api
       - registry
-      - migrate
+      # The Dockerfile compiles from source, so every package cmd/easyp-svc
+      # imports has to be in the build context. sdk is one of them.
+      - sdk
+      # Needed by the COPY in Dockerfile: ELv2 requires the terms to travel
+      # with the software.
+      - LICENSE
 
   - image_templates:
       - "ghcr.io/easyp-tech/service:{{ .Tag }}-arm64"
@@ -57,6 +63,7 @@ dockers:
       - "--label=org.opencontainers.image.title={{ .ProjectName }}"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.source=https://github.com/easyp-tech/service"
+      - "--label=org.opencontainers.image.licenses=Elastic-2.0"
     extra_files:
       - go.mod
       - go.sum
@@ -64,7 +71,12 @@ dockers:
       - internal
       - api
       - registry
-      - migrate
+      # The Dockerfile compiles from source, so every package cmd/easyp-svc
+      # imports has to be in the build context. sdk is one of them.
+      - sdk
+      # Needed by the COPY in Dockerfile: ELv2 requires the terms to travel
+      # with the software.
+      - LICENSE
 
 docker_manifests:
   - name_template: "ghcr.io/easyp-tech/service:{{ .Tag }}"
