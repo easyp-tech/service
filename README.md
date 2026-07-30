@@ -722,7 +722,26 @@ SELECT * FROM plugins;
 
 ## License
 
-Apache 2.0. See [LICENSE](LICENSE) for details.
+EasyP Service is **source available**, not open source.
+
+| Part | License |
+|------|---------|
+| `sdk/` — the Go client library | [Apache License 2.0](sdk/LICENSE) |
+| Everything else — the service itself | [Elastic License 2.0](LICENSE) |
+
+The Elastic License 2.0 lets you use, copy, modify and redistribute the service
+free of charge, production included. It forbids three things: offering the
+service to third parties as a hosted or managed service, circumventing the
+license key mechanism that gates Enterprise features (see [Licensing](#licensing)),
+and removing license notices.
+
+Community mode needs no license key and stays free under those terms. The client
+SDK is deliberately Apache 2.0 so it can be imported into your own code without
+inheriting any of the above.
+
+Releases up to and including `v0.8.0` were published under Apache 2.0 and remain
+available under those terms; the Elastic License 2.0 applies from the next
+release onward.
 
 ## Support
 

@@ -48,7 +48,7 @@ This folder contains documentation to help LLMs and developers quickly understan
 | **Task Runner** | Taskfile v3 |
 | **CI** | GitHub Actions + GoReleaser |
 | **Linter** | golangci-lint v2 (all linters enabled, exhaustruct/wsl disabled) |
-| **License** | Apache 2.0 |
+| **License** | Elastic License 2.0 (service) / Apache 2.0 (`sdk/`) |
 
 ## Project Structure
 
