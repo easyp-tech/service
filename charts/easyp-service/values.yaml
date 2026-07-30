@@ -1,0 +1,233 @@
+# Default values for easyp-service.
+#
+# Two things have no working default and must be supplied before the chart will
+# install: a database DSN (see `secrets`) and, if you want the gRPC API reachable
+# from outside the cluster, `ingress.host`.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/easyp-tech/service
+  # Empty means Chart.appVersion. Pin an explicit tag in production: a floating
+  # tag makes a rollout non-reproducible.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+
+# The service reads its certificate and key once, at startup, so a rotated
+# certificate is not picked up until the pod restarts. With stakater/Reloader
+# installed this annotation restarts the deployment when the secret changes.
+# Without it, rotation is a manual `kubectl rollout restart`.
+reloader:
+  enabled: true
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: "2"
+    memory: 1Gi
+
+# Ports the container listens on. The service defaults to 23410-23413 when no
+# configuration is given; the chart always sets them explicitly.
+ports:
+  grpc: 8080
+  metrics: 8081
+  health: 8082
+  mcp: 8083
+
+service:
+  type: ClusterIP
+  annotations: {}
+
+# Seconds Kubernetes waits after SIGTERM before SIGKILL.
+#
+# Must leave room for an in-flight generation to finish, hence the guard in
+# _helpers.tpl requiring it to exceed config.workerPool.generationTimeoutSeconds.
+# Note: the current release also self-terminates 15s after SIGTERM regardless of
+# this value, so long generations are still cut short. Raising that limit is
+# tracked separately.
+terminationGracePeriodSeconds: 150
+
+# ---------------------------------------------------------------------------
+# Configuration that is not secret. Rendered into the container's `env`.
+# ---------------------------------------------------------------------------
+config:
+  logLevel: info
+
+  workerPool:
+    workers: 4
+    queueSize: 16
+    # Expressed in seconds (not "120s") so the chart can compare it against
+    # terminationGracePeriodSeconds. Rendered as a Go duration for the service.
+    generationTimeoutSeconds: 120
+    maxRetries: 2
+    shutdownTimeout: 30s
+
+  rateLimit:
+    requestsPerSecond: 10.0
+    burst: 20
+    cleanupInterval: 10m
+
+  audit:
+    bufferSize: 1000
+    batchSize: 100
+    flushInterval: 1s
+    maxSaveRetries: 3
+    # Partitions older than this are dropped on a schedule. Make sure your
+    # backups outlive it, or history disappears with no archive anywhere.
+    retentionMonths: 12
+    preCreateMonths: 3
+    partitionCheckInterval: 6h
+    partitionOpTimeout: 30s
+
+  registry:
+    pluginsDir: /plugins
+    maxOutputSize: 67108864
+    # Leaving bucket empty disables S3 and makes pluginsDir the only source of
+    # plugin binaries.
+    s3:
+      endpoint: ""
+      bucket: ""
+      region: us-east-1
+      prefix: ""
+      forcePathStyle: false
+
+  telemetry:
+    # Empty means the service default (localhost), i.e. no external collector.
+    otlpEndpoint: ""
+    pyroscopeEndpoint: ""
+
+# Extra environment variables, appended last. Use for settings the chart does
+# not model yet.
+extraEnv: []
+
+# ---------------------------------------------------------------------------
+# Secrets
+#
+# The pod loads them with envFrom, so the KEYS OF THE SECRET ARE THE ENVIRONMENT
+# VARIABLE NAMES. A secret you bring yourself must use exactly these keys:
+#
+#   DB_POSTGRES_DSN                 required
+#   REGISTRY_S3_ACCESS_KEY_ID       required when config.registry.s3.bucket is set
+#   REGISTRY_S3_SECRET_ACCESS_KEY   required when config.registry.s3.bucket is set
+#   LICENSE_KEY                     optional; absent means community mode
+#   LICENSE_PUBLIC_KEY              optional; required for LICENSE_KEY to count
+#   AUTH_WRITE_TOKENS               optional; absent means no writes are allowed
+#
+# AUTH_WRITE_TOKENS holds sha256 digests, never the tokens: "ci=<64 hex>,me=<64 hex>".
+# Generate a token with `easyp-svc auth new-token --name ci`.
+# ---------------------------------------------------------------------------
+secrets:
+  # Bring your own secret (recommended). Values put in `data` below end up in
+  # Helm release history and in `helm get values`, which is why create defaults
+  # to false.
+  existingSecret: ""
+  create: false
+  data: {}
+
+# ---------------------------------------------------------------------------
+# Transport security
+#
+# When enabled, the gRPC listener serves TLS. Adding clientCASecret turns it
+# into mutual TLS: only callers holding a certificate signed by that CA get in,
+# which is what keeps the listener private when the ingress is the only party
+# meant to reach it.
+# ---------------------------------------------------------------------------
+tls:
+  enabled: true
+  # Secret of type kubernetes.io/tls holding tls.crt and tls.key for the server.
+  serverSecret: ""
+  # Secret holding ca.crt used to verify client certificates. Empty falls back
+  # to ca.crt inside serverSecret, which is what cert-manager writes for a CA
+  # issuer. Set to "-" to serve plain server-side TLS with no client check.
+  clientCASecret: ""
+  mountPath: /certs
+
+# Optional: let cert-manager issue the certificates instead of supplying them.
+certManager:
+  enabled: false
+  issuerRef:
+    name: ""
+    kind: ClusterIssuer
+    group: cert-manager.io
+  duration: 2160h
+  renewBefore: 360h
+  # Extra SANs for the server certificate. The in-cluster service name is
+  # always included.
+  extraDnsNames: []
+  # Issues the client certificate the ingress presents to the service.
+  clientCertificate:
+    enabled: true
+    commonName: easyp-ingress
+
+# ---------------------------------------------------------------------------
+# Ingress. Defaults target Traefik because it is the only controller that can
+# express a mutual-TLS backend leg declaratively, via ServersTransport.
+# ---------------------------------------------------------------------------
+ingress:
+  enabled: false
+  className: traefik
+  host: ""
+  annotations: {}
+  # Secret holding the certificate served to external clients.
+  tlsSecret: ""
+  # Traefik ServersTransport describing how the router reaches the pod. Required
+  # whenever tls.enabled is true, otherwise the backend leg would be plaintext
+  # against a listener that demands a client certificate.
+  serversTransport:
+    enabled: true
+    # Secret of type kubernetes.io/tls with the client certificate the router
+    # presents to the service.
+    clientSecret: ""
+    # Name the router expects on the service certificate.
+    serverName: ""
+    insecureSkipVerify: false
+
+# ---------------------------------------------------------------------------
+# Storage for the plugin cache. Plugin archives are downloaded lazily and
+# unpacked here; the directory is never pruned by the current release, so size
+# it for everything you expect to be requested.
+# ---------------------------------------------------------------------------
+persistence:
+  enabled: true
+  existingClaim: ""
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 20Gi
+
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+networkPolicy:
+  enabled: false
+  # Selector matching the namespace your ingress controller runs in.
+  ingressNamespaceSelector: {}
+  # Ports the pod is allowed to reach outbound, beyond DNS.
+  egressPorts:
+    - 5432
+    - 443
+    - 4317

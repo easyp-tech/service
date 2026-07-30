@@ -1,0 +1,27 @@
+apiVersion: v2
+name: easyp-service
+description: EasyP Service — a gRPC code generation service for Protobuf schemas
+type: application
+
+# version is the chart version and moves independently of the service.
+version: 0.1.0
+# appVersion tracks the service release this chart was validated against and is
+# the default image tag.
+appVersion: "0.8.0"
+
+home: https://github.com/easyp-tech/service
+sources:
+  - https://github.com/easyp-tech/service
+
+keywords:
+  - protobuf
+  - grpc
+  - codegen
+
+maintainers:
+  - name: easyp-tech
+    url: https://github.com/easyp-tech
+
+annotations:
+  # The service itself is Elastic License 2.0; only sdk/ is Apache 2.0.
+  licenses: Elastic-2.0

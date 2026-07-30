@@ -1,0 +1,27 @@
+{{- if and .Values.ingress.enabled .Values.tls.enabled .Values.ingress.serversTransport.enabled }}
+{{- /*
+The listener requires a verified client certificate, so the router has to
+present one. Only Traefik can express that declaratively for an Ingress; other
+controllers need their own equivalent (nginx, for instance, uses
+nginx.ingress.kubernetes.io/proxy-ssl-secret).
+
+The Service carries the annotations that point at this resource.
+*/ -}}
+apiVersion: traefik.io/v1alpha1
+kind: ServersTransport
+metadata:
+  name: {{ include "easyp-service.fullname" . }}
+  labels:
+    {{- include "easyp-service.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.ingress.serversTransport.serverName }}
+  serverName: {{ .Values.ingress.serversTransport.serverName | quote }}
+  {{- end }}
+  insecureSkipVerify: {{ .Values.ingress.serversTransport.insecureSkipVerify }}
+  {{- if not .Values.ingress.serversTransport.insecureSkipVerify }}
+  rootCAsSecrets:
+    - {{ include "easyp-service.clientCASecret" . }}
+  {{- end }}
+  certificatesSecrets:
+    - {{ include "easyp-service.clientTLSSecret" . }}
+{{- end }}

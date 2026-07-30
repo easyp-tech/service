@@ -1,0 +1,238 @@
+{{- include "easyp-service.validate" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "easyp-service.fullname" . }}
+  labels:
+    {{- include "easyp-service.labels" . | nindent 4 }}
+  {{- if and .Values.reloader.enabled .Values.tls.enabled }}
+  annotations:
+    # The service loads its key pair once at startup, so a rotated certificate
+    # needs a new pod. Without Reloader installed this annotation is inert and
+    # rotation becomes `kubectl rollout restart`.
+    reloader.stakater.com/auto: "true"
+  {{- end }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "easyp-service.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "easyp-service.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "easyp-service.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        runAsNonRoot: true
+        # Matches the user baked into the image; the plugin cache volume is
+        # chowned to it via fsGroup.
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - service
+            - start
+            - --log_level={{ .Values.config.logLevel }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            # Not read-only: the service unpacks plugin archives into
+            # registry.pluginsDir at runtime. That path is a separate volume.
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.ports.grpc }}
+            - name: metrics
+              containerPort: {{ .Values.ports.metrics }}
+            - name: health
+              containerPort: {{ .Values.ports.health }}
+            - name: mcp
+              containerPort: {{ .Values.ports.mcp }}
+          env:
+            - name: SERVER_HOST
+              value: "0.0.0.0"
+            - name: SERVER_PORT_GRPC
+              value: "{{ .Values.ports.grpc | int }}"
+            - name: SERVER_PORT_METRIC
+              value: "{{ .Values.ports.metrics | int }}"
+            - name: SERVER_PORT_HEALTH
+              value: "{{ .Values.ports.health | int }}"
+            - name: SERVER_PORT_MCP
+              value: "{{ .Values.ports.mcp | int }}"
+            {{- if .Values.tls.enabled }}
+            - name: SERVER_TLS_CERT_FILE
+              value: "{{ .Values.tls.mountPath }}/server/tls.crt"
+            - name: SERVER_TLS_KEY_FILE
+              value: "{{ .Values.tls.mountPath }}/server/tls.key"
+            {{- if eq (include "easyp-service.mutualTLS" .) "true" }}
+            - name: SERVER_TLS_CLIENT_CA_FILE
+              value: "{{ .Values.tls.mountPath }}/ca/ca.crt"
+            {{- end }}
+            {{- end }}
+            - name: REGISTRY_PLUGINS_DIR
+              value: {{ .Values.config.registry.pluginsDir | quote }}
+            - name: REGISTRY_MAX_OUTPUT_SIZE
+              value: "{{ .Values.config.registry.maxOutputSize | int64 }}"
+            {{- with .Values.config.registry.s3 }}
+            {{- if .bucket }}
+            - name: REGISTRY_S3_BUCKET
+              value: {{ .bucket | quote }}
+            - name: REGISTRY_S3_REGION
+              value: {{ .region | quote }}
+            {{- if .endpoint }}
+            - name: REGISTRY_S3_ENDPOINT
+              value: {{ .endpoint | quote }}
+            {{- end }}
+            {{- if .prefix }}
+            - name: REGISTRY_S3_PREFIX
+              value: {{ .prefix | quote }}
+            {{- end }}
+            - name: REGISTRY_S3_FORCE_PATH_STYLE
+              value: {{ .forcePathStyle | quote }}
+            {{- end }}
+            {{- end }}
+            - name: WORKER_POOL_WORKERS
+              value: "{{ .Values.config.workerPool.workers | int }}"
+            - name: WORKER_POOL_QUEUE_SIZE
+              value: "{{ .Values.config.workerPool.queueSize | int }}"
+            - name: WORKER_POOL_GENERATION_TIMEOUT
+              value: "{{ .Values.config.workerPool.generationTimeoutSeconds }}s"
+            - name: WORKER_POOL_MAX_RETRIES
+              value: "{{ .Values.config.workerPool.maxRetries | int }}"
+            - name: WORKER_POOL_SHUTDOWN_TIMEOUT
+              value: {{ .Values.config.workerPool.shutdownTimeout | quote }}
+            - name: RATE_LIMIT_REQUESTS_PER_SECOND
+              value: {{ .Values.config.rateLimit.requestsPerSecond | quote }}
+            - name: RATE_LIMIT_BURST
+              value: "{{ .Values.config.rateLimit.burst | int }}"
+            - name: RATE_LIMIT_CLEANUP_INTERVAL
+              value: {{ .Values.config.rateLimit.cleanupInterval | quote }}
+            {{- with .Values.config.audit }}
+            - name: AUDIT_BUFFER_SIZE
+              value: "{{ .bufferSize | int }}"
+            - name: AUDIT_BATCH_SIZE
+              value: "{{ .batchSize | int }}"
+            - name: AUDIT_FLUSH_INTERVAL
+              value: {{ .flushInterval | quote }}
+            - name: AUDIT_MAX_SAVE_RETRIES
+              value: "{{ .maxSaveRetries | int }}"
+            - name: AUDIT_RETENTION_MONTHS
+              value: "{{ .retentionMonths | int }}"
+            - name: AUDIT_PRE_CREATE_MONTHS
+              value: "{{ .preCreateMonths | int }}"
+            - name: AUDIT_PARTITION_CHECK_INTERVAL
+              value: {{ .partitionCheckInterval | quote }}
+            - name: AUDIT_PARTITION_OP_TIMEOUT
+              value: {{ .partitionOpTimeout | quote }}
+            {{- end }}
+            {{- if .Values.config.telemetry.otlpEndpoint }}
+            # Note the double prefix: the field is OTEL_EXPORTER_OTLP_ENDPOINT
+            # inside a section prefixed TELEMETRY_, so the plain OTel variable
+            # name is NOT what the service reads.
+            - name: TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.config.telemetry.otlpEndpoint | quote }}
+            {{- end }}
+            {{- if .Values.config.telemetry.pyroscopeEndpoint }}
+            - name: TELEMETRY_PYROSCOPE_ENDPOINT
+              value: {{ .Values.config.telemetry.pyroscopeEndpoint | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          envFrom:
+            # The secret's keys are the variable names; see the `secrets`
+            # section of values.yaml for the exact set.
+            - secretRef:
+                name: {{ include "easyp-service.secretName" . }}
+          # "/" checks the database, so it is readiness only. "/live" checks
+          # nothing on purpose: pointing liveness at the database turns a brief
+          # outage into a cluster-wide restart storm.
+          startupProbe:
+            httpGet:
+              path: /live
+              port: health
+            periodSeconds: 3
+            failureThreshold: 40
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: health
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: health
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: plugins
+              mountPath: {{ .Values.config.registry.pluginsDir }}
+            {{- if .Values.tls.enabled }}
+            - name: server-tls
+              mountPath: {{ .Values.tls.mountPath }}/server
+              readOnly: true
+            {{- if eq (include "easyp-service.mutualTLS" .) "true" }}
+            - name: client-ca
+              mountPath: {{ .Values.tls.mountPath }}/ca
+              readOnly: true
+            {{- end }}
+            {{- end }}
+      volumes:
+        - name: plugins
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-plugins" (include "easyp-service.fullname" .)) }}
+          {{- else }}
+          # Ephemeral: every restart re-downloads plugin archives from S3.
+          emptyDir: {}
+          {{- end }}
+        {{- if .Values.tls.enabled }}
+        - name: server-tls
+          secret:
+            secretName: {{ include "easyp-service.serverTLSSecret" . }}
+        {{- if eq (include "easyp-service.mutualTLS" .) "true" }}
+        - name: client-ca
+          secret:
+            secretName: {{ include "easyp-service.clientCASecret" . }}
+        {{- end }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

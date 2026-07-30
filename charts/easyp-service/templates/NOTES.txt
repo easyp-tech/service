@@ -1,0 +1,72 @@
+{{ .Chart.Name }} {{ .Chart.AppVersion }} installed as {{ .Release.Name }}.
+
+Watch it come up:
+
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "easyp-service.fullname" . }}
+
+If the pod restarts immediately, the cause is almost always configuration and it
+is printed on the first line of the log, not in the pod events:
+
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "easyp-service.fullname" . }}
+
+Three things worth checking before you call it done:
+
+{{ if not (hasKey .Values.secrets.data "LICENSE_KEY") }}
+1. LICENSE — running in COMMUNITY mode.
+
+   No LICENSE_KEY was rendered by the chart. In community mode the audit log is
+   off and the service is capped at 4 workers and 10 registered plugins. This is
+   the correct default, but if you paid for Enterprise and see no audit entries,
+   this is why. Enterprise needs BOTH LICENSE_KEY and LICENSE_PUBLIC_KEY in the
+   secret; a token without the key it is verified against is ignored.
+{{- else }}
+1. LICENSE — a key was supplied. Confirm it was accepted:
+
+   kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "easyp-service.fullname" . }} | grep -i licen
+{{- end }}
+
+{{ if not (hasKey .Values.secrets.data "AUTH_WRITE_TOKENS") }}
+2. WRITES ARE CLOSED.
+
+   No AUTH_WRITE_TOKENS in the rendered secret means every mutating call —
+   CreatePlugin, UpdatePlugin, DeletePlugin — is rejected with Unauthenticated.
+   Reads stay open. This is deliberate: a forgotten configuration must break
+   registration rather than leave the registry writable by anyone.
+
+   Mint a token and put its digest in the secret:
+
+     easyp-svc auth new-token --name ci
+{{- else }}
+2. Writes are enabled for the configured tokens. The token name lands in the
+   audit log, so `SELECT metadata FROM audit_log` shows who did what.
+{{- end }}
+
+{{ if .Values.tls.enabled }}
+3. TRANSPORT — mutual TLS is on.
+{{- if .Values.certManager.enabled }}
+   cert-manager issues the certificates. It cannot restart pods, and the service
+   reads its key pair only at startup, so after a renewal either run
+   `kubectl rollout restart` or install stakater/Reloader{{ if .Values.reloader.enabled }} (the annotation is already set){{ end }}.
+{{- else }}
+   Certificates come from secrets you supplied. The same applies on renewal: the
+   pod must restart to pick up a new key pair.
+{{- end }}
+{{- else }}
+3. TRANSPORT — TLS IS DISABLED.
+
+   The gRPC listener is plaintext and unauthenticated at the transport layer.
+   Anything that can reach the pod can call it, and write tokens travel in the
+   clear. Acceptable for a throwaway cluster, not for anything else.
+{{- end }}
+
+{{ if not .Values.ingress.enabled }}
+The API is not exposed outside the cluster (ingress.enabled=false). To try it:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "easyp-service.fullname" . }} {{ .Values.ports.grpc }}:{{ .Values.ports.grpc }}
+{{- else }}
+The API is published at {{ .Values.ingress.host }}. The server does not serve
+reflection, so ad-hoc tooling needs a descriptor set:
+
+  easyp-svc api descriptor -o api.protoset
+  grpcurl -protoset api.protoset {{ .Values.ingress.host }}:443 api.generator.v1.ServiceAPI/Plugins
+{{- end }}

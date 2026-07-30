@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "easyp-service.fullname" . }}
+  labels:
+    {{- include "easyp-service.labels" . | nindent 4 }}
+  annotations:
+    {{- with .Values.service.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if and .Values.ingress.enabled .Values.tls.enabled .Values.ingress.serversTransport.enabled }}
+    # Traefik reads the backend scheme and transport from the Service, not the
+    # Ingress. Without both of these the router would open a plaintext
+    # connection to a listener that requires a client certificate.
+    traefik.ingress.kubernetes.io/service.serversscheme: https
+    traefik.ingress.kubernetes.io/service.serverstransport: {{ printf "%s-%s@kubernetescrd" .Release.Namespace (include "easyp-service.fullname" .) }}
+    {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "easyp-service.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: grpc
+      port: {{ .Values.ports.grpc }}
+      targetPort: grpc
+      protocol: TCP
+      appProtocol: h2c
+    - name: metrics
+      port: {{ .Values.ports.metrics }}
+      targetPort: metrics
+      protocol: TCP
+    - name: health
+      port: {{ .Values.ports.health }}
+      targetPort: health
+      protocol: TCP
+    - name: mcp
+      port: {{ .Values.ports.mcp }}
+      targetPort: mcp
+      protocol: TCP

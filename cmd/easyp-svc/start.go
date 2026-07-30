@@ -430,7 +430,16 @@ func serveApp(
 	mcpMux.Handle("/mcp", mcpHandler)
 
 	healthMux := http.NewServeMux()
+	// "/" reports readiness: it checks postgres, so a pod drops out of load
+	// balancing while the database is unreachable.
 	healthMux.Handle("/", healthCheck.Handler())
+	// "/live" reports liveness and deliberately checks nothing. Pointing a
+	// liveness probe at the readiness handler would restart every pod at once
+	// during a database blip — turning a recoverable outage into a rolling
+	// crash loop.
+	healthMux.HandleFunc("/live", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 
 	grpcPort, err := strconv.ParseUint(cfg.Server.Port.GRPC, 10, 16)
 	if err != nil {

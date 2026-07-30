@@ -1,0 +1,60 @@
+{{- if .Values.certManager.enabled }}
+{{- $fullname := include "easyp-service.fullname" . -}}
+{{- /*
+Certificates for the mutual-TLS leg between the router and the pod.
+
+The issuer must be a CA issuer: both certificates have to chain to a CA the
+other side trusts, and cert-manager writes that CA into ca.crt of each secret,
+which is what tls.clientCASecret falls back to.
+*/ -}}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ printf "%s-server" $fullname }}
+  labels:
+    {{- include "easyp-service.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "easyp-service.serverTLSSecret" . }}
+  duration: {{ .Values.certManager.duration }}
+  renewBefore: {{ .Values.certManager.renewBefore }}
+  issuerRef:
+    name: {{ .Values.certManager.issuerRef.name }}
+    kind: {{ .Values.certManager.issuerRef.kind }}
+    group: {{ .Values.certManager.issuerRef.group }}
+  usages:
+    - digital signature
+    - key encipherment
+    - server auth
+  dnsNames:
+    - {{ $fullname }}
+    - {{ printf "%s.%s" $fullname .Release.Namespace }}
+    - {{ printf "%s.%s.svc" $fullname .Release.Namespace }}
+    - {{ printf "%s.%s.svc.cluster.local" $fullname .Release.Namespace }}
+    {{- with .Values.certManager.extraDnsNames }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- if .Values.certManager.clientCertificate.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ printf "%s-client" $fullname }}
+  labels:
+    {{- include "easyp-service.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "easyp-service.clientTLSSecret" . }}
+  duration: {{ .Values.certManager.duration }}
+  renewBefore: {{ .Values.certManager.renewBefore }}
+  commonName: {{ .Values.certManager.clientCertificate.commonName | quote }}
+  issuerRef:
+    name: {{ .Values.certManager.issuerRef.name }}
+    kind: {{ .Values.certManager.issuerRef.kind }}
+    group: {{ .Values.certManager.issuerRef.group }}
+  # clientAuth only: this certificate identifies the router to the service and
+  # must never be usable to impersonate the service itself.
+  usages:
+    - digital signature
+    - key encipherment
+    - client auth
+{{- end }}
+{{- end }}
