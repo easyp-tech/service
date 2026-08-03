@@ -64,13 +64,44 @@ Standard grpc-prometheus metrics:
 | `pool_rejected_total` | Counter | `core/pool.go` |
 | `pool_jobs_total` | Counter | `core/pool.go` |
 | `db_*_connections` | Gauge | `adapters/metrics/db_collector.go` |
+| `operations_total` | Counter | `core/core.go` (`sendAudit`) |
 | Business metrics (plugin counts) | Gauge | `adapters/metrics/business_collector.go` |
 | Audit worker metrics | Counter/Gauge | `adapters/audit/worker.go` |
+| `audit_default_partition_used` | Gauge | `adapters/audit/partitions.go` |
 | License metrics | Counter/Gauge | `internal/license/manager.go` |
 
 ### Endpoint
 
 `GET /metrics` on port 8081 (default 23411).
+
+### What is counted in the process, and what is asked of the database
+
+The split is not stylistic. Every query in `business_collector.go` runs
+synchronously on each scrape, so anything there is paid for every 30 seconds,
+forever.
+
+**Events are counted in the process.** `easyp_operations_total{operation,status}`
+is incremented in `Core.sendAudit`, above the audit gate, so it is recorded in
+every tier — a community installation still needs to see its own error rate.
+Rates and windows are Prometheus's job: activity over a day is
+`increase(easyp_operations_total[24h])`, not a query.
+
+**State is asked of the database.** How many plugins exist is not something a
+replica can know: an in-memory gauge starts at zero after a restart and never
+learns the truth until someone happens to create a plugin, and with several
+replicas each would answer only for itself. These queries stay, and stay cheap —
+the table is bounded by the licence.
+
+`easyp_business_audit_log_total` is the planner's row estimate, not a count. It
+lags bulk changes until autovacuum runs; it answers whether retention is working,
+which tolerates that.
+
+Three metrics were removed from the scrape path because they were events wearing
+a gauge's clothing — running totals over the whole audit table. Measured at
+sixteen million rows they cost 2.3 seconds per scrape and grew linearly, against
+a five-second query timeout: left alone they would eventually have timed out and
+blanked the dashboards at the worst possible moment. Indexes do not help, because
+an aggregate with no `WHERE` reads every row by definition.
 
 ## Logging
 

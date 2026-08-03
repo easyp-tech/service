@@ -2,12 +2,19 @@ EasyP Service
 
 This repository contains source code under two different licenses.
 
+  api/              Apache License 2.0  — see api/LICENSE
   sdk/              Apache License 2.0  — see sdk/LICENSE
   everything else   Elastic License 2.0 — full text below
 
 A directory that contains its own LICENSE file is governed by that file. All
 other source code in this repository is governed by the Elastic License 2.0
 reproduced below.
+
+api/ and sdk/ are permissive together and on purpose. api/ is the generated gRPC
+contract and sdk/ is the Go client built on it; sdk/ imports api/, so licensing
+only one of them would leave anyone writing a client compiling Elastic-licensed
+code. Talking to this service, from any program, is not meant to be restricted —
+running the service is.
 
 Releases up to and including v0.8.0 were published under the Apache License 2.0
 and remain available under those terms. The Elastic License 2.0 applies from the

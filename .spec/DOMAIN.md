@@ -109,15 +109,16 @@ const (
     FeatureMCPServerTools                 // MCP server tools
     FeatureRateLimiting                   // Rate limiting
     FeaturePluginCRUD                     // CRUD operations on plugins
-    FeatureMultiTenancy                   // Multi-tenancy (Enterprise)
-    FeatureResponseCaching                // Response caching (Enterprise)
     FeatureAudit                          // Audit logging (Enterprise)
 )
 ```
 
 **Community tier features:** CodeGeneration, PluginListing, MCPServerTools, RateLimiting, PluginCRUD
 
-**Enterprise-only features:** MultiTenancy, ResponseCaching, Audit
+**Enterprise-only features:** Audit
+
+Multi-tenancy and response caching used to be listed here as constants with
+nothing behind them. They are in `.spec/ROADMAP.md` until they are code.
 
 ### License Tiers
 

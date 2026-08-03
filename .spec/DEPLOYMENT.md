@@ -173,6 +173,17 @@ rate_limit:
 
 All config fields have `env` tags. Prefix: section name (e.g., `SERVER_HOST`, `DB_POSTGRES_DSN`, `WORKER_POOL_WORKERS`).
 
+Three that are easy to miss and that change behaviour rather than tuning it:
+
+| Variable | Default | Why it matters |
+|----------|---------|----------------|
+| `SERVER_TRUSTED_PROXIES` | empty | Comma-separated CIDRs whose forwarding headers are believed. Empty behind a proxy collapses every caller into one rate-limit bucket and files the audit log under the proxy. See [SECURITY.md](SECURITY.md#what-per-ip-means-depends-on-servertrusted_proxies). |
+| `SERVER_MAX_SEND_MSG_SIZE` | 67108864 | Must cover `REGISTRY_MAX_OUTPUT_SIZE`; startup refuses a smaller value, because a plugin's permitted output would otherwise be generated and then undeliverable. |
+| `SERVER_MAX_CONCURRENT_STREAMS` | 256 | gRPC's own default is unlimited, which lets one connection exhaust the pod's memory before any limiter sees the requests. |
+
+Clients need `sdk.WithMaxRecvMsgSize` only if the service is configured above
+64 MiB; the SDK defaults to the same figure the service does.
+
 ### Customizable Ports (docker-compose)
 
 | Variable | Default | Description |

@@ -60,6 +60,40 @@ Plugin binaries are executed as local processes with the following characteristi
 
 **Note:** Plugin binaries are built from Dockerfiles but executed as local processes, not in Docker containers at runtime. The WorkerPool limits concurrent executions.
 
+### What the plugin process cannot reach
+
+- **The environment.** `exec.Cmd.Env` is built from scratch out of the plugin's
+  own configured variables (`internal/adapters/registry/registry.go`), so the
+  process inherits nothing. The database DSN, the licence token and the write
+  token digests are all invisible to it.
+- **Unbounded output.** Stdout is capped by `max_output_size`.
+- **Unbounded time.** The context deadline kills the process group; `Setpgid`
+  ensures children die with it.
+- **Unbounded parallelism.** `max_concurrent_generations` caps how many run at
+  once.
+
+### Accepted risks
+
+The plugin runs as the same uid (65532) and in the same container as the service.
+That leaves two things it could do, and both are accepted rather than solved:
+
+- **Read `/certs`,** which holds the server's TLS private key.
+- **Write into `plugins_dir`** until the volume is full. Nothing quotas it.
+
+Both require getting a malicious plugin registered, and registration needs a
+write token (see *Access to the API*). The threat is therefore an insider or a
+stolen CI credential, not an anonymous caller — which is what keeps this off the
+critical path.
+
+**This assessment must be revisited if plugin registration is ever opened to
+users**, for example under multi-tenancy. At that point the plugin process needs
+real isolation: a separate uid, a mount namespace that excludes `/certs`, and a
+disk quota.
+
+The related but likelier failure — a volume smaller than the cache limit, so the
+disk fills before eviction ever triggers — is refused at install time by the
+Helm chart rather than left to be diagnosed from an I/O error.
+
 ## Input Validation
 
 ### Plugin Name Format
@@ -83,8 +117,43 @@ Per-IP token bucket rate limiter (`internal/ratelimiter`):
 | Requests per second | 10.0 |
 | Burst | 20 |
 | Cleanup interval | 10m |
+| Max concurrent per IP | 2 |
 
 Rate limits are integrated with FeatureGate for tier-based configuration.
+
+### What "per IP" means depends on `server.trusted_proxies`
+
+The limiter keys on the address the interceptor chain resolved, not on the
+socket. With `server.trusted_proxies` empty that is the connecting peer, which
+is correct when clients reach the listener directly.
+
+Behind a proxy it is not: every request arrives from the proxy's address, so all
+callers share one bucket — a rate of 10/s and two concurrent requests for the
+entire user base, and no protection against any individual client. The audit log
+records the proxy as the actor for the same reason.
+
+Setting `server.trusted_proxies` to the CIDR the ingress runs in makes
+`X-Forwarded-For` and `X-Real-IP` authoritative for connections from that range,
+and only that range: a header arriving from anywhere else is ignored, so a
+caller cannot choose its own identity to escape a limit. The Helm chart refuses
+to install with `ingress.enabled` and no trusted proxies, because the failure is
+otherwise invisible.
+
+Anything listed there can claim to be any client — scope it to the ingress
+controller's pods, not to the cluster.
+
+## Request logging
+
+The gRPC logging interceptor records method, code and duration. It deliberately
+does **not** log message payloads.
+
+`logging.PayloadReceived` and `logging.PayloadSent` were enabled once. Because
+the library logs them at the level the response code maps to — Info, for a
+successful call — every request wrote the caller's whole `CodeGeneratorRequest`
+and every response the source generated from it into stdout, at the chart's
+default log level. That is customers' proto definitions and generated code in
+whatever aggregator collects logs. `internal/grpchelper/payload_logging_test.go`
+fails if either event returns.
 
 ## Secrets Management
 

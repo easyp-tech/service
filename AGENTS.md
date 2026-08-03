@@ -113,7 +113,7 @@ go test ./...            # Standard tests
 - **`easyp-svc plugins register [path]`** — registers built plugins via gRPC `CreatePlugin` (default path `plugins`); use `--cfg` for `registry.plugins_dir` as command prefix, `--dry-run`, `--fail-on-error` (default true)
 - **Port 5432 conflict** — if postgres already runs locally, minimal stack uses port 5433 (`EASYP_POSTGRES_PORT`)
 - **Plugin binaries must exist** — run `task build-plugins` before the service can generate code
-- **License:** `MockLicenseClient` always returns Enterprise (production placeholder; TODO: replace with real gRPC client when license server is ready)
+- **License:** `PasetoLicenseClient` verifies the token offline against `license.public_keys` (kid → hex) or the single `license.public_key`. No key configured means community mode; a key that does not decode stops startup. Anything else that goes wrong resolves to community, never to an error
 - **`easyp generate` needs running service** — the generate command calls localhost:8080 gRPC
 - **Migration order matters** — files are sorted by numeric prefix; never reorder
 - **Audit channel capacity** — fixed at 1000; if exceeded, events are silently dropped (logged as warning)

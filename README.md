@@ -102,6 +102,23 @@ Key properties:
 - **Concurrent misses collapse** into a single download (singleflight); `plugins_dir` acts as a local cache.
 - With S3 disabled, nothing changes from the classic flow: artifacts are read straight from `plugins_dir`.
 
+#### Pushing a packed tree
+
+`plugins pack --out <dir>` writes the same `{group}/{name}/{version}/plugin.tgz` layout to disk, which `plugins push --packed <dir>` uploads as it is. Packing on the build machine and uploading later — or from elsewhere — is then two commands instead of one repeated:
+
+```bash
+# Build machine: pack once.
+easyp-svc plugins pack plugins --out plugin-archives
+
+# Anywhere with the archives and S3 credentials.
+export AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=…
+easyp-svc plugins push plugin-archives --packed \
+  --endpoint https://storage.example.com --bucket easyp-plugins --force-path-style \
+  --parallel 24
+```
+
+Uploads run `--parallel` at a time (8 by default). Object storage commonly rate-limits a single connection far below the link it arrives on, so throughput comes from streams rather than from any one of them: measure one stream, then set `--parallel` to about the ratio between your uplink and that figure. An interrupted run is resumed by re-running it — archives already in storage are skipped without being re-read.
+
 ## Project Structure
 
 ```
@@ -442,12 +459,23 @@ workers and 10 registered plugins. Enterprise needs two things — a token and t
 public key it is verified against:
 
 ```bash
-LICENSE_PUBLIC_KEY=<hex> LICENSE_KEY=<paseto-token> task up
+LICENSE_PUBLIC_KEYS=<kid>:<hex> LICENSE_KEY=<paseto-token> task up
 ```
 
 Both are read at runtime. The token comes from `license.key`, then
-`license.file`, then `LICENSE_KEY`; the public key from `license.public_key`,
-then `LICENSE_PUBLIC_KEY`. Without a public key no token is honoured.
+`license.file`, then `LICENSE_KEY`; the public key from `license.public_keys`,
+then `LICENSE_PUBLIC_KEYS`, then `license.public_key`, then
+`LICENSE_PUBLIC_KEY`. Without a public key no token is honoured.
+
+This service only verifies licences; it does not issue them. Issuing lives in the
+licence registry (`easyp-tech/licenses`), which holds the private signing key,
+the record of who was given what, and the `easyp-license` tool that signs.
+
+Several keys can be configured at once, keyed by the key id in the token footer:
+`LICENSE_PUBLIC_KEYS="2026-08:<hex>,2026-09:<hex>"`. That is what lets a signing
+key be rotated without every deployment having to change key on the same day.
+A key that is not a valid hex Ed25519 key stops startup rather than quietly
+dropping the service to community mode.
 
 Because the verification key is configuration, whoever can edit `config.yml` can
 point the service at a different signing authority — protect that file the way
@@ -643,6 +671,9 @@ task up
 # Upload plugin archives to S3 storage
 task push-plugins
 
+# Upload an already packed archive tree to a remote store
+S3_ENDPOINT=https://storage.example.com AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… task push-archives
+
 # Register plugins
 task register-plugins
 
@@ -726,6 +757,7 @@ EasyP Service is **source available**, not open source.
 
 | Part | License |
 |------|---------|
+| `api/` — the generated gRPC contract | [Apache License 2.0](api/LICENSE) |
 | `sdk/` — the Go client library | [Apache License 2.0](sdk/LICENSE) |
 | Everything else — the service itself | [Elastic License 2.0](LICENSE) |
 
@@ -735,9 +767,16 @@ service to third parties as a hosted or managed service, circumventing the
 license key mechanism that gates Enterprise features (see [Licensing](#licensing)),
 and removing license notices.
 
-Community mode needs no license key and stays free under those terms. The client
-SDK is deliberately Apache 2.0 so it can be imported into your own code without
-inheriting any of the above.
+Community mode needs no license key and stays free under those terms. What
+Enterprise adds today is the audit log and the removal of the community limits
+(4 workers, 10 registered plugins); planned additions are in
+[.spec/ROADMAP.md](.spec/ROADMAP.md).
+
+The client SDK and the API contract it is generated from are both Apache 2.0, so
+they can be imported into your own code without inheriting any of the above. The
+two go together deliberately: `sdk/` imports `api/`, and licensing only the
+client would leave anyone writing one compiling Elastic-licensed code anyway.
+Talking to this service is not restricted; running it is.
 
 Releases up to and including `v0.8.0` were published under Apache 2.0 and remain
 available under those terms; the Elastic License 2.0 applies from the next

@@ -200,3 +200,43 @@ task test-mcp
 # MCP smoke test (requires running service)
 task smoke-mcp
 ```
+
+## Integration tests
+
+`test/integration/` runs against a real PostgreSQL and a real plugin process.
+It is behind the `integration` build tag, so `go test ./...` stays hermetic.
+
+```bash
+docker run -d --name easyp-it -e POSTGRES_PASSWORD=pg -e POSTGRES_DB=easyp \
+  -p 5439:5432 postgres:16-alpine
+
+EASYP_TEST_DSN='postgres://postgres:pg@localhost:5439/easyp?sslmode=disable' \
+  go test -tags integration ./test/...
+```
+
+Without `EASYP_TEST_DSN` the tests skip rather than fail. CI supplies one from a
+service container.
+
+These exist because the defects that got through were not the kind unit tests
+catch. Writing this suite immediately surfaced three more: `Core.CreatePlugin`
+dereferenced a nil feature gate that its own sibling `checkFeature` documented as
+supported, `sendAudit` panicked on a nil audit sink, and a `WorkerPool` whose
+`Start` is never called blocks forever instead of failing. None of those are
+reachable through the production wiring today — which is exactly why nothing
+else found them.
+
+`msgsize_test.go` is the one case that needs the whole stack rather than the
+harness: it stands the production gRPC server up over TCP and talks to it with
+the production SDK client, because the limits it checks live in
+`grpchelper.NewServer` and in the SDK's dial options. A hand-rolled client or a
+bare `grpc.NewServer` would exercise neither, and the defect it covers — 4 MiB
+transport caps under a 64 MiB configured output limit — only shows up where both
+ends are the real ones.
+
+The stub plugin (`test/integration/stubplugin/`) is a compiled program, not a
+script echoing fixed bytes: the point is the process boundary — marshal, hand
+over stdin, read back from stdout, unmarshal — and a script exercises none of it.
+It carries `//go:build ignore` so it stays out of `go build ./...`, and the test
+builds it by file path, which ignores the tag while still resolving imports
+against this module. Building it outside the module tree makes the compiler go
+looking for dependencies on the network, and the test hangs rather than fails.

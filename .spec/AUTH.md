@@ -50,7 +50,7 @@ merely wrong; the reason is logged and counted in `easyp_auth_failures_total`.
 | Tier | MaxWorkers | MaxPlugins | Features |
 |------|-----------|------------|----------|
 | Community | 4 | 10 | CodeGeneration, PluginListing, MCPServerTools, RateLimiting, PluginCRUD |
-| Enterprise | Configurable | Unlimited (-1) | All community + MultiTenancy, ResponseCaching, Audit |
+| Enterprise | Configurable | Unlimited (-1) | All community + Audit |
 
 ## Architecture
 
@@ -75,19 +75,33 @@ type LicenseClient interface {
 }
 ```
 
-**Current implementation:** `MockLicenseClient`. It honours the wiring but not the
-cryptography:
+**Implementation:** `PasetoLicenseClient`. Verification is offline — nothing
+reaches the network, so an air-gapped installation is not a special case.
 
 | Token | Configured public key | Result |
 |-------|----------------------|--------|
 | absent | any | community |
 | present | absent | community (logs a warning) |
-| present | present | enterprise, **token accepted unverified** |
+| present | does not decode | **startup fails** |
+| present | present, signature verifies, current | enterprise |
+| present | present, signature verifies, expired within `grace_days` | enterprise (logs a warning) |
+| present | present, anything else | community (logs the reason) |
 
-The signature is never checked — that is the piece still missing, and the client
-logs a warning on every refresh to say so. It will be replaced with a real gRPC
-client, or with local PASETO verification against the configured public key,
-when the license server is ready.
+A licence problem must not be able to take the service down, so every runtime
+failure resolves to community mode. The one exception is a public key that is
+not a key: that can only be an operator error, and quietly downgrading would
+hide it.
+
+The key id in the token footer selects which configured key to verify against.
+It is read before anything is verified, which is safe because it selects a key
+and decides nothing else — a forged key id merely points at a key the signature
+then fails against.
+
+Time is decided in one place, against the service clock, with a minute of skew
+tolerance at both ends. The PASETO parser is deliberately built *without* its
+own `NotExpired` rule: leaving it in place rejects an expired token before the
+grace period it may still be entitled to can be considered, which is exactly the
+bug that shipped first time round.
 
 ### Manager (`internal/license`)
 
@@ -121,28 +135,60 @@ gRPC interceptor that checks feature availability before request processing. App
 license:
   key: ""          # inline PASETO token; takes priority over file
   file: ""         # path to a file holding the token
-  public_key: ""   # hex-encoded Ed25519 verification key
+  public_keys:     # key id -> hex-encoded Ed25519 verification key
+    "2026-08": ""
+  public_key: ""   # single verification key, used when the key id matches nothing above
   cache_ttl: 5m    # how long to cache license claims
 ```
 
-Environment: `LICENSE_KEY`, `LICENSE_FILE`, `LICENSE_PUBLIC_KEY`,
-`LICENSE_CACHE_TTL`.
+Environment: `LICENSE_KEY`, `LICENSE_FILE`, `LICENSE_PUBLIC_KEYS`,
+`LICENSE_PUBLIC_KEY`, `LICENSE_CACHE_TTL`.
 
-`LICENSE_KEY` and `LICENSE_PUBLIC_KEY` are also consulted directly as a last
-resort, because the `--cfg` startup path decodes YAML and skips envconfig
-entirely — without that fallback values passed to the container through the
-environment would be dropped. Order of precedence:
+`LICENSE_PUBLIC_KEYS` is encoded `<kid>:<hex>,<kid>:<hex>`. This is what the Helm
+chart renders from `config.license.publicKeys`; a key id may therefore contain
+neither `:` nor `,`, and configuration naming one is rejected.
+
+All of these are also consulted directly as a last resort, because the `--cfg`
+startup path decodes YAML and skips envconfig entirely — without that fallback,
+values passed to the container through the environment would be dropped. Order
+of precedence:
 
 - token: `license.key` → contents of `license.file` → `LICENSE_KEY`
-- key: `license.public_key` → `LICENSE_PUBLIC_KEY`
+- keys: `license.public_keys` → `LICENSE_PUBLIC_KEYS`
+- single key: `license.public_key` → `LICENSE_PUBLIC_KEY`
 
-Both are read at runtime. A deployment with no public key cannot honour any
-token and stays in community mode.
+All are read at runtime. A deployment with no public key cannot honour any token
+and stays in community mode.
+
+Two keys can be configured at once so that a signing key can be rotated without
+every deployment having to change key on the same day: issue under the new key
+id while the old one is still accepted, then drop the old entry.
 
 > **Threat model.** Because the verification key is configuration rather than a
 > property of the build, anyone able to edit `config.yml` or set
-> `LICENSE_PUBLIC_KEY` can substitute their own signing authority and issue
+> `LICENSE_PUBLIC_KEYS` can substitute their own signing authority and issue
 > themselves a licence. Protect the config file accordingly.
+
+## Issuing
+
+Not here. This service verifies; the licence registry (`easyp-tech/licenses`,
+private) issues. It holds the private signing key, the record of who was given
+what, and `cmd/easyp-license`, which signs from a spec file in CI.
+
+The two sides therefore agree on the token format by writing the same six values
+down twice: `iss`, `aud`, `tier`, and the claim names `grace_days` and
+`customer_name`, plus the footer shape `{"kid": "..."}`. Everything else —
+signature, encoding, key format — is `go-paseto`, which both use.
+
+Sharing a Go package for six string literals was considered and rejected: it
+would couple a private repository to this module for less than it costs, and
+`internal/` cannot be imported across modules anyway. What guards the format
+instead is a test on each side. Here that is `TestTokenContents` and
+`TestValidityWindow` in `internal/license/paseto_client_test.go`, which pin the
+issuer, audience, tier and validity window by asserting that anything else
+resolves to community. In the registry it is `easyp-license verify`, and, once
+that repository has CI, a step that runs an issued token through a real service
+binary.
 
 ## PASETO Token Format
 

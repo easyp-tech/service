@@ -18,8 +18,6 @@ const (
     FeatureMCPServerTools                 // MCP server tools
     FeatureRateLimiting                   // Rate limiting
     FeaturePluginCRUD                     // CRUD operations on plugins
-    FeatureMultiTenancy                   // Multi-tenancy (Enterprise only)
-    FeatureResponseCaching                // Response caching (Enterprise only)
     FeatureAudit                          // Audit logging (Enterprise only)
 )
 ```
@@ -33,9 +31,15 @@ const (
 | MCPServerTools | ✅ | ✅ |
 | RateLimiting | ✅ | ✅ |
 | PluginCRUD | ✅ | ✅ |
-| MultiTenancy | ❌ | ✅ |
-| ResponseCaching | ❌ | ✅ |
 | Audit | ❌ | ✅ |
+
+Audit is the only feature the tier actually gates. What separates the two tiers
+today is that plus the resource limits below — worth knowing before quoting
+anyone a price. Multi-tenancy and response caching are in `.spec/ROADMAP.md`.
+
+`LicenseInterceptor` maps gRPC methods to features and its map is empty, because
+no method is Enterprise-only. It stays wired for the roadmap items rather than
+being removed and rewritten.
 
 ## Resource Limits
 

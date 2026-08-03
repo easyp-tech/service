@@ -108,7 +108,7 @@ Interceptor chain order: trace_logging → realip → prometheus → structured_
 | `features.go` | `featureGate` implementing `core.FeatureGate` |
 | `gate.go` | `FeatureGate` constructor and interface adapter |
 | `claims.go` | PASETO token parsing and validation |
-| `client.go` | License client interface and `MockLicenseClient` |
+| `paseto_client.go` | `PasetoLicenseClient`: offline PASETO v4.public verification |
 | `errors.go` | License-specific error types |
 | `metrics.go` | License metrics (cache hits/misses, tier gauge) |
 
