@@ -8,7 +8,7 @@ tasks:
       - "./scripts/gen-dev-certs.sh"
 
   up:
-    desc: "Start all services. For Enterprise: LICENSE_PUBLIC_KEY=... LICENSE_KEY=... task up"
+    desc: "Start all services. For Enterprise: LICENSE_PUBLIC_KEYS=<kid>:<hex> LICENSE_KEY=... task up"
     dir: "{{.USER_WORKING_DIR}}"
     preconditions:
       - "test -f docker-compose.yml"
@@ -61,6 +61,32 @@ tasks:
         --region us-east-1
         --force-path-style
         --non-interactive
+
+  push-archives:
+    desc: >-
+      Upload a packed archive tree (from `plugins pack`) to any S3-compatible storage, e.g.
+      S3_ENDPOINT=https://storage.example.com AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... task push-archives
+    dir: "{{.USER_WORKING_DIR}}"
+    vars:
+      ARCHIVES: '{{.ARCHIVES | default "../plugin-archives"}}'
+      S3_BUCKET: '{{.S3_BUCKET | default "easyp-plugins"}}'
+      # Storage tends to cap one connection well below the uplink, so the
+      # default here is high enough to saturate an ordinary link.
+      PARALLEL: '{{.PARALLEL | default "24"}}'
+    preconditions:
+      - sh: 'test -n "$S3_ENDPOINT"'
+        msg: "S3_ENDPOINT is required, e.g. S3_ENDPOINT=https://storage.example.com task push-archives"
+      - sh: 'test -d "{{.ARCHIVES}}"'
+        msg: "{{.ARCHIVES}} not found; pack first or pass ARCHIVES=<dir>"
+    cmds:
+      # Credentials are left to the AWS SDK default chain: they belong in the
+      # environment or a secret manager, never in this file.
+      - >-
+        go run ./cmd/easyp-svc/ plugins push {{.ARCHIVES}} --packed
+        --endpoint "$S3_ENDPOINT"
+        --bucket {{.S3_BUCKET}}
+        --force-path-style
+        --parallel {{.PARALLEL}}
 
   register-plugins:
     desc: "Register all built plugins via gRPC CreatePlugin API"

@@ -18,6 +18,7 @@ type Metrics struct {
 	generationDuration *prometheus.HistogramVec
 	generationErrors   *prometheus.CounterVec
 	generationRetries  *prometheus.CounterVec
+	operations         *prometheus.CounterVec
 }
 
 const labelPlugin = "plugin"
@@ -57,12 +58,27 @@ func New(reg *prometheus.Registry, namespace string) *Metrics {
 			},
 			[]string{labelPlugin},
 		),
+		// A counter, not a gauge of rows in the audit table. The question worth
+		// asking of it is a rate — how many operations per second, how many of
+		// them failing — and a running total of table rows cannot answer that.
+		//
+		// Ten series at most: five operation types times two outcomes, all of
+		// them constants in core. Nothing here comes from a request.
+		operations: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: namespace,
+				Name:      "operations_total",
+				Help:      "Total operations performed, by type and outcome. Counted in every tier, audit or not.",
+			},
+			[]string{"operation", "status"},
+		),
 	}
 
 	reg.MustRegister(metrics.generated)
 	reg.MustRegister(metrics.generationDuration)
 	reg.MustRegister(metrics.generationErrors)
 	reg.MustRegister(metrics.generationRetries)
+	reg.MustRegister(metrics.operations)
 
 	return metrics
 }
@@ -83,6 +99,11 @@ func (m Metrics) ObserveGenerationDuration(_ context.Context, pluginName string,
 // IncGenerationErrors increments the generation error counter.
 func (m Metrics) IncGenerationErrors(_ context.Context, pluginName string, errorType string) {
 	m.generationErrors.WithLabelValues(pluginName, errorType).Inc()
+}
+
+// IncOperation counts one completed operation by type and outcome.
+func (m Metrics) IncOperation(_ context.Context, operation, status string) {
+	m.operations.WithLabelValues(operation, status).Inc()
 }
 
 // IncGenerationRetries increments the generation retry counter.

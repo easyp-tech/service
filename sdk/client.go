@@ -35,6 +35,10 @@ func NewClient(addr string, opts ...Option) (*Client, error) {
 	dialOpts := []grpc.DialOption{
 		grpc.WithTransportCredentials(cfg.transportCreds),
 		grpc.WithChainUnaryInterceptor(interceptors...),
+		// Without this the client caps responses at gRPC's 4 MiB default, which
+		// is below what the service is allowed to generate — a large request
+		// would be served in full and then rejected on arrival.
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(cfg.maxRecvMsgSize)),
 	}
 
 	if cfg.keepaliveParams != nil {

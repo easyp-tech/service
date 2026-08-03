@@ -25,6 +25,9 @@ const (
 	defaultPluginsPrefix = "/plugins"
 	// defaultPluginsScanPath is used when no path argument is given.
 	defaultPluginsScanPath = "plugins"
+	// pluginEntrypointName is the file a built plugin version directory is
+	// required to contain, and the one a scan of such a tree looks for.
+	pluginEntrypointName = "plugin"
 )
 
 var (
@@ -79,7 +82,7 @@ func resolvePluginsPrefix(cfgPath string, prefixFlag string, prefixExplicit bool
 
 // pluginCommandPath builds the server-side command path for a plugin binary.
 func pluginCommandPath(pluginsPrefix string, plg pluginInfo) string {
-	return path.Join(filepath.ToSlash(pluginsPrefix), plg.group, plg.name, plg.version, "plugin")
+	return path.Join(filepath.ToSlash(pluginsPrefix), plg.group, plg.name, plg.version, pluginEntrypointName)
 }
 
 func pluginDisplayName(plg pluginInfo) string {
@@ -287,7 +290,15 @@ func processRegistrationResult(
 	}
 }
 
+// scanPlugins finds plugin version directories holding an unpacked entrypoint.
 func scanPlugins(scanPath string, filter string) ([]pluginInfo, error) {
+	return scanPluginTree(scanPath, filter, pluginEntrypointName)
+}
+
+// scanPluginTree walks scanPath for {group}/{name}/{version}/{leafName} files.
+// leafName is the entrypoint binary in a built tree and the archive in a packed
+// one, which is the only thing that differs between the two layouts.
+func scanPluginTree(scanPath string, filter string, leafName string) ([]pluginInfo, error) {
 	info, err := os.Stat(scanPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -310,8 +321,8 @@ func scanPlugins(scanPath string, filter string) ([]pluginInfo, error) {
 		if dirEntry.IsDir() {
 			return nil
 		}
-		if dirEntry.Name() == "plugin" {
-			group, name, version, parseErr := parsePluginPath(cleanedPath, path)
+		if dirEntry.Name() == leafName {
+			group, name, version, parseErr := parsePluginPath(cleanedPath, path, leafName)
 			if parseErr == nil && matchFilter(group, name, version, filter) {
 				plugins = append(plugins, pluginInfo{
 					group:   group,
@@ -356,7 +367,9 @@ func registerSinglePlugin(ctx context.Context, client *sdk.Client, plg pluginInf
 	return false, nil
 }
 
-func parsePluginPath(basePath, fullPath string) (string, string, string, error) {
+// parsePluginPath splits {base}/{group}/{name}/{version}/{leafName} into its
+// three plugin coordinates.
+func parsePluginPath(basePath, fullPath string, leafName string) (string, string, string, error) {
 	rel, err := filepath.Rel(basePath, fullPath)
 	if err != nil {
 		return "", "", "", fmt.Errorf("invalid path: %w", err)
@@ -367,7 +380,7 @@ func parsePluginPath(basePath, fullPath string) (string, string, string, error) 
 
 	rel = filepath.ToSlash(rel)
 	parts := strings.Split(rel, "/")
-	if len(parts) != 4 || parts[3] != "plugin" {
+	if len(parts) != 4 || parts[3] != leafName {
 		return "", "", "", ErrInvalidStructure
 	}
 

@@ -97,6 +97,8 @@ type Maintainer struct {
 	dropped    prometheus.Counter
 	lastOK     prometheus.Gauge
 	partitions prometheus.Gauge
+
+	defaultUsed prometheus.Gauge
 }
 
 // NewMaintainer creates a Maintainer and registers its metrics.
@@ -137,23 +139,36 @@ func NewMaintainer(
 		Help:      "Current number of monthly audit_log partitions.",
 	})
 
+	// Checked here, on the six-hourly maintenance tick, rather than on every
+	// metrics scrape. It answers a question about partition maintenance, which is
+	// what this component does, and its cadence is the one that matters: a
+	// non-empty default partition is a slow-moving fault, not a per-second one.
+	defaultUsed := prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Name:      "audit_default_partition_used",
+		Help: "1 when rows have landed in the default audit partition. Must stay 0: " +
+			"a non-empty default partition blocks creating the month it overlaps, and " +
+			"defeats partition pruning for every query filtering on created_at.",
+	})
+
 	for _, result := range []string{resultSuccess, resultError, resultSkipped} {
 		runs.WithLabelValues(result)
 	}
 
 	if reg != nil {
-		reg.MustRegister(runs, created, dropped, lastOK, partitions)
+		reg.MustRegister(runs, created, dropped, lastOK, partitions, defaultUsed)
 	}
 
 	return &Maintainer{
-		db:         db,
-		cfg:        cfg,
-		logger:     logger,
-		runs:       runs,
-		created:    created,
-		dropped:    dropped,
-		lastOK:     lastOK,
-		partitions: partitions,
+		db:          db,
+		cfg:         cfg,
+		logger:      logger,
+		runs:        runs,
+		created:     created,
+		dropped:     dropped,
+		lastOK:      lastOK,
+		partitions:  partitions,
+		defaultUsed: defaultUsed,
 	}
 }
 
@@ -211,6 +226,9 @@ func (m *Maintainer) Maintain(ctx context.Context) error {
 
 	m.created.Add(float64(created))
 
+	// Reported before retention, so the signal survives a failure further down.
+	m.observeDefaultPartition(ctx)
+
 	if !m.retentionEnabled() {
 		return nil
 	}
@@ -227,6 +245,42 @@ func (m *Maintainer) Maintain(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// observeDefaultPartition reports whether anything has landed in the default
+// partition, without counting how much.
+//
+// "Is it empty" is the entire signal — the alert fires on anything above zero —
+// and asking that way is what keeps the check affordable. Counting the rows
+// instead took 292 ms against 0,6 ms for the existence check on the same data,
+// and it is slowest exactly when the fault is present, since a broken partition
+// schedule is what fills this table in the first place.
+//
+// A failure here is logged and left at that: it says nothing about whether
+// maintenance itself succeeded, and failing the pass over it would mean losing
+// pre-creation and retention as well.
+func (m *Maintainer) observeDefaultPartition(ctx context.Context) { //nolint:funcorder // helper of Maintain above
+	var used bool
+
+	err := m.db.NoTxContext(ctx, func(conn *sqlx.DB) error {
+		return conn.GetContext(ctx, &used,
+			"SELECT EXISTS(SELECT 1 FROM "+partitionTable+"_default)")
+	})
+	if err != nil {
+		m.logger.Warn("could not check the default audit partition", "error", err)
+
+		return
+	}
+
+	if used {
+		m.defaultUsed.Set(1)
+		m.logger.Error("rows have landed in the default audit partition; " +
+			"the month they belong to cannot be created until it is emptied")
+
+		return
+	}
+
+	m.defaultUsed.Set(0)
 }
 
 // EnsurePartitions creates any missing partitions for the given months and

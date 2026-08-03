@@ -1,0 +1,160 @@
+{{- if .Values.prometheusRule.enabled }}
+{{- $cacheLimit := .Values.config.registry.cacheMaxBytes | int64 }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "easyp-service.fullname" . }}
+  labels:
+    {{- include "easyp-service.labels" . | nindent 4 }}
+    {{- with .Values.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    # The licence lapses quietly. Nothing fails, nothing errors: the tier drops
+    # to community, audit stops being written, and the plugin limit starts
+    # rejecting registrations. These three exist so the first sign of it is not
+    # a customer asking why their pipeline broke.
+    - name: {{ include "easyp-service.fullname" . }}.licence
+      rules:
+        - alert: EasypLicenceExpiringSoon
+          # Zero means no licence is configured at all, which is a valid
+          # community deployment and not something to page about.
+          expr: |
+            easyp_license_expiry_timestamp_seconds > 0
+              and easyp_license_expiry_timestamp_seconds - time() < {{ .Values.prometheusRule.licenceExpiryWarningDays }} * 86400
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "EasyP licence expires in under {{ .Values.prometheusRule.licenceExpiryWarningDays }} days"
+            description: >-
+              Renew it in the licence registry and roll out the new LICENSE_KEY.
+              When it expires the service keeps Enterprise for the grace period
+              written into the token, then silently drops to community.
+
+        - alert: EasypLicenceInGrace
+          expr: easyp_license_in_grace == 1
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "EasyP licence has expired and is running on its grace period"
+            description: >-
+              Enterprise features are still on, but only until the grace period
+              in the token runs out. After that audit stops and the community
+              plugin limit applies.
+
+    - name: {{ include "easyp-service.fullname" . }}.capacity
+      rules:
+        - alert: EasypGenerationsRejected
+          expr: rate(easyp_pool_generations_rejected_total[5m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "EasyP is refusing code generation requests"
+            description: >-
+              Clients are getting ResourceExhausted. Raise
+              config.workerPool.maxConcurrentGenerations or add replicas.
+
+        - alert: EasypGenerationQueueSaturated
+          expr: easyp_pool_generations_waiting > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "EasyP has had generations queued for ten minutes"
+            description: >-
+              Sustained queueing means the concurrency limit is the bottleneck.
+              Refusals follow once the queue fills.
+
+        {{- if gt $cacheLimit 0 }}
+        - alert: EasypPluginCacheAtLimit
+          # Rendered from config.registry.cacheMaxBytes. At the limit, eviction
+          # runs continuously and most requests pay for a fresh download.
+          expr: easyp_plugin_cache_bytes / {{ $cacheLimit }} > {{ .Values.prometheusRule.cacheUsageWarningRatio }}
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "EasyP plugin cache is at its size limit"
+            description: >-
+              Raise config.registry.cacheMaxBytes and persistence.size together,
+              or accept that plugins are re-downloaded on most requests.
+        {{- end }}
+
+    # Audit is the one thing Enterprise actually promises. Losing events is a
+    # broken promise, not a performance problem.
+    - name: {{ include "easyp-service.fullname" . }}.audit
+      rules:
+        - alert: EasypAuditEventsLost
+          expr: rate(easyp_audit_events_lost_total[5m]) > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "EasyP is dropping audit events"
+            description: >-
+              The audit buffer overflowed or writes are failing. Raise
+              config.audit.bufferSize, or look for database trouble.
+
+        - alert: EasypAuditMaintenanceStale
+          expr: time() - easyp_audit_partition_maintenance_last_success_seconds > 86400
+          for: 1h
+          labels:
+            severity: critical
+          annotations:
+            summary: "EasyP has not maintained audit partitions for a day"
+            description: >-
+              Future partitions are not being created. Audit writes fail once
+              the newest existing partition is passed.
+
+        - alert: EasypAuditDefaultPartitionUsed
+          expr: easyp_audit_default_partition_used == 1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "EasyP audit rows have landed in the default partition"
+            description: >-
+              Maintenance did not create the month these rows belong to in time.
+              Nothing is lost, but the month cannot be created until the default
+              partition is emptied, and while it holds rows Postgres cannot prune
+              partitions for any query filtering on created_at — so audit queries
+              read the whole table. Move the rows into a new partition for their
+              month, then confirm this returns to zero.
+
+    - name: {{ include "easyp-service.fullname" . }}.errors
+      rules:
+        - alert: EasypGenerationErrorRate
+          expr: |
+            rate(easyp_generation_errors_total[5m])
+              / clamp_min(rate(easyp_pool_jobs_total[5m]), 0.001)
+              > {{ .Values.prometheusRule.generationErrorRatio }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "More than {{ .Values.prometheusRule.generationErrorRatio }} of EasyP generations are failing"
+            description: "A plugin is broken, or its binary does not match the checksum recorded for it."
+
+        - alert: EasypPanics
+          expr: increase(easyp_panics_total[5m]) > 0
+          labels:
+            severity: critical
+          annotations:
+            summary: "EasyP recovered from a panic"
+            description: "A recovered panic is still a bug. Check the logs for the stack."
+
+        - alert: EasypAuthFailures
+          expr: rate(easyp_auth_failures_total[5m]) > {{ .Values.prometheusRule.authFailureRate }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "EasyP is rejecting write credentials"
+            description: >-
+              Either a token was rotated without updating a caller, or somebody
+              is guessing. Callers are identified by name in the logs.
+{{- end }}

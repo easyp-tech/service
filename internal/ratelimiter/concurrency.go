@@ -41,19 +41,22 @@ func NewConcurrencyLimiter(
 	key KeyExtractor,
 	logger *slog.Logger,
 	reg *prometheus.Registry,
+	namespace string,
 ) *ConcurrencyLimiter {
 	if key == nil {
 		key = PeerIPExtractor
 	}
 
 	rejected := prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "easyp_concurrency_rejected_total",
-		Help: "Total requests rejected for exceeding the per-client concurrency limit.",
+		Namespace: namespace,
+		Name:      "concurrency_rejected_total",
+		Help:      "Total requests rejected for exceeding the per-client concurrency limit.",
 	})
 
 	active := prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "easyp_concurrency_active_clients",
-		Help: "Number of clients with at least one request in flight.",
+		Namespace: namespace,
+		Name:      "concurrency_active_clients",
+		Help:      "Number of clients with at least one request in flight.",
 	})
 
 	if reg != nil {

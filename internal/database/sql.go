@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/easyp-tech/service/internal/database/internal"
+	"github.com/easyp-tech/service/internal/monitor"
 )
 
 var (
@@ -59,6 +60,73 @@ func (c SQLConfig) setDefault() SQLConfig {
 	return c
 }
 
+// Backoff bounds for waiting on the database at startup.
+const (
+	pingBackoffMin = 100 * time.Millisecond
+	pingBackoffMax = 5 * time.Second
+	// How often an unsuccessful wait is allowed to say so. Once the interval
+	// has grown, every attempt is worth a line; before that they are not.
+	pingLogInterval = 5 * time.Second
+)
+
+// pinger is what waitForDB needs of a connection, so the wait can be tested
+// without one.
+type pinger interface {
+	PingContext(ctx context.Context) error
+}
+
+// waitForDB blocks until the database answers, ctx is done, or the error is one
+// waiting cannot fix.
+//
+// The backoff is the point. This previously retried in a tight loop with no
+// delay at all, so a pod started while Postgres was down spun a full core and
+// opened connections as fast as the kernel allowed — during an outage, every
+// replica doing that is a connection storm that helps keep the database down.
+// Waiting is supposed to be cheap for the thing being waited on.
+func waitForDB(ctx context.Context, conn pinger) error {
+	log := monitor.FromContext(ctx)
+
+	err := conn.PingContext(ctx)
+	if err == nil {
+		return nil
+	}
+
+	delay := pingBackoffMin
+	sinceLog := time.Duration(0)
+
+	for {
+		// Checked before sleeping as well as after: a cancelled context should
+		// not buy the caller one more delay's worth of waiting.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("db.PingContext: %w (last error: %w)", ctxErr, err)
+		}
+
+		if sinceLog >= pingLogInterval || delay == pingBackoffMin {
+			log.Warn("database not reachable, retrying", "error", err, "retry_in", delay)
+			sinceLog = 0
+		}
+
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+
+			return fmt.Errorf("db.PingContext: %w (last error: %w)", ctx.Err(), err)
+		case <-timer.C:
+		}
+
+		sinceLog += delay
+		delay = min(delay*2, pingBackoffMax) //nolint:mnd // Doubling is the backoff.
+
+		err = conn.PingContext(ctx)
+		if err == nil {
+			log.Info("database reachable")
+
+			return nil
+		}
+	}
+}
+
 // Connector for making connection.
 type Connector interface {
 	// DSN returns connection string.
@@ -87,13 +155,9 @@ func NewSQL(ctx context.Context, driver string, cfg SQLConfig, connector Connect
 		return nil, fmt.Errorf("sql.Open: %w", err)
 	}
 
-	err = conn.PingContext(ctx)
-	for err != nil {
-		nextErr := conn.PingContext(ctx)
-		if errors.Is(nextErr, context.DeadlineExceeded) || errors.Is(nextErr, context.Canceled) {
-			return nil, fmt.Errorf("db.PingContext: %w", err)
-		}
-		err = nextErr
+	err = waitForDB(ctx, conn)
+	if err != nil {
+		return nil, err
 	}
 
 	if cfg.TracerProvider == nil {

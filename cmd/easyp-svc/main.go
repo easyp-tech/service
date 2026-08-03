@@ -17,6 +17,8 @@ import (
 const (
 	flagCfg            = "cfg"
 	flagFilter         = "filter"
+	flagPacked         = "packed"
+	flagParallel       = "parallel"
 	flagForce          = "force"
 	flagDryRun         = "dry-run"
 	flagNonInteractive = "non-interactive"
@@ -216,9 +218,11 @@ func getPluginsPushCommand() *cli.Command {
 		Name:  "push",
 		Usage: "Upload built plugin archives to S3 binary storage",
 		Description: "Packs each plugin version directory into a tar.gz and uploads it to " +
-			"{group}/{name}/{version}/plugin.tgz. Run before `plugins register`: the service " +
-			"records the archive checksum at registration time. Re-pushing an already " +
-			"registered plugin with --force invalidates its recorded checksum — re-register it.",
+			"{group}/{name}/{version}/plugin.tgz. With --packed the path is instead a tree " +
+			"already written by `plugins pack`, whose archives are uploaded as they are. " +
+			"Run before `plugins register`: the service records the archive checksum at " +
+			"registration time. Re-pushing an already registered plugin with --force " +
+			"invalidates its recorded checksum — re-register it.",
 		ArgsUsage: argPath,
 		Flags:     pushFlags(),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -246,6 +250,8 @@ func getPluginsPushCommand() *cli.Command {
 				scanPath:       scanPath,
 				filter:         cmd.String(flagFilter),
 				s3:             s3Opts,
+				packed:         cmd.Bool(flagPacked),
+				parallel:       cmd.Int(flagParallel),
 				force:          cmd.Bool(flagForce),
 				dryRun:         cmd.Bool(flagDryRun),
 				nonInteractive: cmd.Bool(flagNonInteractive),
@@ -324,6 +330,46 @@ func getPluginsBuildCommand() *cli.Command {
 
 // pushFlags defines the flags of the corresponding subcommand.
 func pushFlags() []cli.Flag {
+	return append(s3Flags(), []cli.Flag{
+		&cli.StringFlag{
+			Name:  flagFilter,
+			Usage: "glob filter pattern for plugins (e.g. 'protocolbuffers/*' or 'grpc/go:v1.6.2')",
+			Value: "",
+		},
+		&cli.BoolFlag{
+			Name:  flagPacked,
+			Usage: "the path is a tree of archives written by `plugins pack`, not built plugin directories",
+			Value: false,
+		},
+		&cli.IntFlag{
+			Name:    flagParallel,
+			Aliases: []string{"p"},
+			Usage:   "archives to upload at once; storage usually caps a single connection, so more streams means more throughput",
+			Value:   defaultPushParallel,
+		},
+		&cli.BoolFlag{
+			Name:  flagForce,
+			Usage: "re-upload even if the archive already exists in storage",
+			Value: false,
+		},
+		&cli.BoolFlag{
+			Name:  flagDryRun,
+			Usage: "print the upload plan without contacting storage",
+			Value: false,
+		},
+		&cli.BoolFlag{
+			Name:  flagNonInteractive,
+			Usage: usageNonInteractive,
+			Value: false,
+		},
+	}...)
+}
+
+// s3Flags defines where and with what credentials a command reaches object
+// storage. Anything left empty falls back to registry.s3 from --cfg, and the
+// credentials themselves to the default AWS chain, so they need not be typed
+// on a command line at all.
+func s3Flags() []cli.Flag {
 	return []cli.Flag{
 		&cli.StringFlag{
 			Name:  flagCfg,
@@ -353,26 +399,6 @@ func pushFlags() []cli.Flag {
 		&cli.BoolFlag{
 			Name:  "force-path-style",
 			Usage: "use path-style addressing (required by MinIO/RustFS)",
-			Value: false,
-		},
-		&cli.StringFlag{
-			Name:  flagFilter,
-			Usage: "glob filter pattern for plugins (e.g. 'protocolbuffers/*' or 'grpc/go:v1.6.2')",
-			Value: "",
-		},
-		&cli.BoolFlag{
-			Name:  flagForce,
-			Usage: "re-upload even if the archive already exists in storage",
-			Value: false,
-		},
-		&cli.BoolFlag{
-			Name:  flagDryRun,
-			Usage: "print the upload plan without contacting storage",
-			Value: false,
-		},
-		&cli.BoolFlag{
-			Name:  flagNonInteractive,
-			Usage: usageNonInteractive,
 			Value: false,
 		},
 	}
@@ -466,7 +492,7 @@ func buildFlags() []cli.Flag {
 			Value: "",
 		},
 		&cli.IntFlag{
-			Name:    "parallel",
+			Name:    flagParallel,
 			Aliases: []string{"p"},
 			Usage:   "number of concurrent docker builds",
 			Value:   defaultBuildParallel,

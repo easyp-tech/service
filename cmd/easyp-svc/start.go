@@ -35,6 +35,7 @@ import (
 	"github.com/easyp-tech/service/internal/license"
 	"github.com/easyp-tech/service/internal/monitor"
 	"github.com/easyp-tech/service/internal/ratelimiter"
+	"github.com/easyp-tech/service/internal/safe"
 	"github.com/easyp-tech/service/internal/serve"
 	"github.com/easyp-tech/service/internal/telemetry"
 )
@@ -61,14 +62,17 @@ func (m *grpcMetrics) PanicsTotal() prometheus.Counter { //nolint:ireturn // int
 
 // runServiceStart initializes and runs the complete service.
 func runServiceStart(ctx context.Context, cfgPath string, logLevelStr string) error {
-	// Parse log level
-	var slogLvl slog.Level
-	err := slogLvl.UnmarshalText([]byte(logLevelStr))
-	if err != nil {
-		slogLvl = slog.LevelDebug // fallback
-	}
+	slogLvl, levelErr := parseLogLevel(logLevelStr)
 
 	log := buildLogger(slogLvl)
+
+	// Reported rather than swallowed: an unreadable level and a deliberate one
+	// produce the same running service otherwise, and the operator who mistyped
+	// it has no way to tell which they got.
+	if levelErr != nil {
+		log.Warn("unrecognised log level, defaulting to info",
+			"requested", logLevelStr, "error", levelErr)
+	}
 
 	ctx = monitor.WithContext(ctx, log.With(
 		slog.String("version", "dev"),
@@ -80,7 +84,8 @@ func runServiceStart(ctx context.Context, cfgPath string, logLevelStr string) er
 	if cfgPath != "" {
 		// Use flags.File logic manually
 		configFile := &flags.File{DefaultPath: "", MaxSize: configFileSize}
-		err = configFile.Set(cfgPath)
+
+		err := configFile.Set(cfgPath)
 		if err != nil {
 			return fmt.Errorf("read config file: %w", err)
 		}
@@ -90,13 +95,13 @@ func runServiceStart(ctx context.Context, cfgPath string, logLevelStr string) er
 			return fmt.Errorf("yaml.NewDecoder.Decode: %w", err)
 		}
 	} else {
-		err = envconfig.Process(ctx, &cfg)
+		err := envconfig.Process(ctx, &cfg)
 		if err != nil {
 			return fmt.Errorf("envconfig.Process: %w", err)
 		}
 	}
 
-	err = cfg.Validate()
+	err := cfg.Validate()
 	if err != nil {
 		return fmt.Errorf("config validation: %w", err)
 	}
@@ -142,12 +147,12 @@ func run(ctx context.Context, cfg config.Config, reg *prometheus.Registry) error
 		return fmt.Errorf("grpchelper.BuildServerCreds: %w", err)
 	}
 
-	licenseCreds, err := resolveLicense(cfg.License)
+	licenseClient, err := buildLicenseClient(cfg.License, log)
 	if err != nil {
-		return fmt.Errorf("resolveLicense: %w", err)
+		return fmt.Errorf("buildLicenseClient: %w", err)
 	}
 
-	_, pool, _, grpcServer, apiSrv := initApp(ctx, cfg, repo, reg, namespace, auditWorker, grpcCreds, licenseCreds)
+	_, pool, _, grpcServer, apiSrv := initApp(ctx, cfg, repo, reg, namespace, auditWorker, grpcCreds, licenseClient)
 
 	defer func() {
 		lost := pool.Shutdown(cfg.WorkerPool.ShutdownTimeout)
@@ -294,11 +299,10 @@ func initApp(
 	namespace string,
 	auditSink core.AuditSink,
 	grpcCreds credentials.TransportCredentials,
-	licenseCreds licenseCredentials,
+	licenseClient core.LicenseClient,
 ) (*core.Core, *core.WorkerPool, *license.FeatureGate, *grpc.Server, *api.API) {
 	log := monitor.FromContext(ctx)
 
-	licenseClient := license.NewMockLicenseClient(licenseCreds.token, licenseCreds.publicKey, log)
 	lm, err := license.NewManager(ctx, licenseClient, license.Config{
 		CacheTTL: cfg.License.CacheTTL,
 	}, log, reg, namespace)
@@ -309,7 +313,7 @@ func initApp(
 
 	gate := license.NewFeatureGate(lm)
 
-	rl, cl := buildLimiters(ctx, cfg, gate, log, reg)
+	rl, cl := buildLimiters(ctx, cfg, gate, log, reg, namespace)
 
 	tracedRegistry := telemetry.NewTracingRegistry(repo)
 
@@ -347,7 +351,7 @@ func initApp(
 	// a new context is derived (as the auth interceptor does) and is empty
 	// ceremony when, as here, the stream's own context is merely read.
 	//nolint:contextcheck // limiter reads ss.Context() and derives nothing
-	grpcSrv, apiSrv := buildGRPCServer(log, reg, gate, rl, cl, tracedCore, grpcCreds, authenticator)
+	grpcSrv, apiSrv := buildGRPCServer(log, reg, gate, rl, cl, tracedCore, grpcCreds, authenticator, cfg.Server)
 
 	return module, pool, gate, grpcSrv, apiSrv
 }
@@ -361,17 +365,25 @@ func buildGRPCServer(
 	tracedCore *telemetry.TracingCore,
 	creds credentials.TransportCredentials,
 	authenticator auth.Authenticator,
+	srvCfg config.Server,
 ) (*grpc.Server, *api.API) {
 	serverMetrics := grpchelper.NewServerMetrics(reg, "easyp", "api")
 
-	panicsCounter := prometheus.NewCounter(prometheus.CounterOpts{
-		Namespace: "easyp",
-		Name:      "panics_total",
-		Help:      "Total number of panics recovered in gRPC handlers.",
-	})
-	reg.MustRegister(panicsCounter)
+	// The same counter the background barriers report into, not one of its own.
+	// Registering a second easyp_panics_total is not merely untidy — Prometheus
+	// rejects a duplicate name carrying a different help string, and the process
+	// dies at startup. Sharing it also means the existing alert covers panics
+	// wherever they happen, rather than only the ones a handler saw.
+	panicsCounter := safe.NewGuard(reg, serviceNamespace).Counter()
 
 	unaryExtra, streamExtra := buildExtraInterceptors(log, reg, gate, rl, cl, authenticator)
+
+	// Validate has already rejected an unparseable CIDR, so this cannot fail on
+	// a configuration that got this far.
+	trustedProxies, err := srvCfg.TrustedProxyPrefixes()
+	if err != nil {
+		log.Error("trusted proxies could not be parsed, treating the peer as the caller", "error", err)
+	}
 
 	grpcSrv, healthSrv := grpchelper.NewServer(
 		&grpcMetrics{panics: panicsCounter},
@@ -381,6 +393,12 @@ func buildGRPCServer(
 		creds,
 		unaryExtra,
 		streamExtra,
+		grpchelper.ServerOptions{
+			TrustedProxies:       trustedProxies,
+			MaxRecvMsgSize:       srvCfg.MaxRecvMsgSize,
+			MaxSendMsgSize:       srvCfg.MaxSendMsgSize,
+			MaxConcurrentStreams: srvCfg.MaxConcurrentStreams,
+		},
 	)
 	serverMetrics.InitializeMetrics(grpcSrv)
 
@@ -398,15 +416,16 @@ func buildLimiters(
 	gate *license.FeatureGate,
 	log *slog.Logger,
 	reg *prometheus.Registry,
+	namespace string,
 ) (*ratelimiter.RateLimiter, *ratelimiter.ConcurrencyLimiter) {
 	rl := ratelimiter.New(ratelimiter.Config{
 		RequestsPerSecond: cfg.RateLimit.RequestsPerSecond,
 		Burst:             cfg.RateLimit.Burst,
 		CleanupInterval:   cfg.RateLimit.CleanupInterval,
-	}, gate, nil, log, reg)
+	}, gate, nil, log, reg, namespace)
 	rl.StartCleanup(ctx)
 
-	cl := ratelimiter.NewConcurrencyLimiter(cfg.RateLimit.MaxConcurrentPerIP, gate, nil, log, reg)
+	cl := ratelimiter.NewConcurrencyLimiter(cfg.RateLimit.MaxConcurrentPerIP, gate, nil, log, reg, namespace)
 
 	return rl, cl
 }
@@ -581,6 +600,25 @@ func initHealthCheck(repo *registry.Registry, namespace string) (*health.Health,
 	}
 
 	return healthCheck, nil
+}
+
+// parseLogLevel resolves the --log_level flag, returning the level to use and
+// whether the value was understood.
+//
+// A value that does not parse falls back to Info, not Debug. Debug is the
+// loudest setting there is, so treating a typo as a request for it turns a
+// harmless mistake into a production incident: full request tracing, on a
+// service whose requests are other people's source code. The quiet direction is
+// the safe one to guess in.
+func parseLogLevel(s string) (slog.Level, error) {
+	var lvl slog.Level
+
+	err := lvl.UnmarshalText([]byte(s))
+	if err != nil {
+		return slog.LevelInfo, fmt.Errorf("slog.Level.UnmarshalText: %w", err)
+	}
+
+	return lvl, nil
 }
 
 func buildLogger(level slog.Level) *slog.Logger {

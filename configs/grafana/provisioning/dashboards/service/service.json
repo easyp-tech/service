@@ -2106,7 +2106,7 @@
       },
       "targets": [
         {
-          "expr": "easyp_business_audit_log_last_24h",
+          "expr": "sum(increase(easyp_operations_total[24h]))",
           "format": "time_series",
           "legendFormat": "",
           "refId": "A"
@@ -2182,7 +2182,7 @@
       },
       "targets": [
         {
-          "expr": "easyp_business_audit_log_by_operation",
+          "expr": "sum by (operation) (rate(easyp_operations_total[5m]))",
           "format": "time_series",
           "legendFormat": "{{operation}}",
           "refId": "A"
@@ -2220,7 +2220,7 @@
       },
       "targets": [
         {
-          "expr": "easyp_business_audit_log_by_status",
+          "expr": "sum by (status) (rate(easyp_operations_total[5m]))",
           "format": "time_series",
           "legendFormat": "{{status}}",
           "refId": "A"

@@ -8,7 +8,9 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/term"
 
 	"github.com/easyp-tech/service/internal/adapters/storage"
@@ -16,7 +18,13 @@ import (
 	"github.com/easyp-tech/service/internal/plugarchive"
 )
 
-const defaultS3Region = "us-east-1"
+const (
+	defaultS3Region = "us-east-1"
+	// defaultPushParallel is the number of archives uploaded at once. Object
+	// storage tends to cap a single connection far below the available link,
+	// so the default is well above one; raise it when the link allows.
+	defaultPushParallel = 8
+)
 
 var (
 	// ErrPushFailed is returned when one or more plugin archives failed to upload.
@@ -27,12 +35,37 @@ var (
 
 // pushOptions holds the resolved inputs of the plugins push command.
 type pushOptions struct {
-	scanPath       string
-	filter         string
-	s3             storage.S3Options
+	scanPath string
+	filter   string
+	s3       storage.S3Options
+	// packed says scanPath already holds archives written by `plugins pack`
+	// rather than built plugin directories, so nothing has to be packed again.
+	packed         bool
+	parallel       int
 	force          bool
 	dryRun         bool
 	nonInteractive bool
+}
+
+// scanPushSource lists the plugins under scanPath, in whichever of the two
+// layouts the command was pointed at.
+func scanPushSource(opts pushOptions) ([]pluginInfo, error) {
+	if opts.packed {
+		return scanPluginTree(opts.scanPath, opts.filter, plugarchive.ArchiveName)
+	}
+
+	return scanPlugins(opts.scanPath, opts.filter)
+}
+
+// pushSourcePath is the directory or archive a plugin is uploaded from, as
+// shown in the dry-run plan.
+func pushSourcePath(opts pushOptions, plg pluginInfo) string {
+	versionDir := filepath.Join(opts.scanPath, plg.group, plg.name, plg.version)
+	if opts.packed {
+		return filepath.Join(versionDir, plugarchive.ArchiveName)
+	}
+
+	return versionDir
 }
 
 // archiveObjectKey builds the storage object key for a plugin archive.
@@ -89,9 +122,9 @@ func fillFromConfig(opts *storage.S3Options, s3Cfg config.S3Config, pathStyleSet
 }
 
 func runPluginsPush(ctx context.Context, opts pushOptions) error {
-	plugins, err := scanPlugins(opts.scanPath, opts.filter)
+	plugins, err := scanPushSource(opts)
 	if err != nil {
-		return fmt.Errorf("scanPlugins: %w", err)
+		return fmt.Errorf("scanPushSource: %w", err)
 	}
 
 	total := len(plugins)
@@ -118,46 +151,154 @@ func runPluginsPush(ctx context.Context, opts pushOptions) error {
 }
 
 // pushAll uploads every plugin archive, reporting progress as it goes.
+//
+// Uploads run in parallel because object storage commonly rate-limits a single
+// connection well below the link it arrives on: with a per-stream ceiling, the
+// only way to use the available bandwidth is more streams.
 func pushAll(ctx context.Context, store *storage.S3Storage, plugins []pluginInfo, opts pushOptions) error {
-	total := len(plugins)
-	isInteractive := !opts.nonInteractive && term.IsTerminal(int(os.Stdout.Fd()))
+	tracker := newPushTracker(len(plugins), !opts.nonInteractive && term.IsTerminal(int(os.Stdout.Fd())))
 
-	var pushed, skipped, failed int
-	spinners := getSpinners()
-	spinIdx := 0
+	// A limit of zero would let errgroup start nothing at all, so anything
+	// below one is read as "one upload at a time".
+	parallel := max(opts.parallel, 1)
 
-	for idx, plg := range plugins {
-		ctxErr := ctx.Err()
-		if ctxErr != nil {
-			printPushSummary(total, pushed, skipped, failed)
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(parallel)
 
-			return fmt.Errorf("ctx.Err: %w", ctxErr)
-		}
+	for _, plg := range plugins {
+		group.Go(func() error {
+			// A failed upload must not strand the rest: it is counted and the
+			// run continues, so one bad archive does not cost a whole batch.
+			ctxErr := groupCtx.Err()
+			if ctxErr != nil {
+				return fmt.Errorf("groupCtx.Err: %w", ctxErr)
+			}
 
-		pName := pluginDisplayName(plg)
-		spinIdx = reportPushProgress(isInteractive, spinners, spinIdx, pName, idx, total)
+			wasSkipped, pushErr := pushSinglePlugin(groupCtx, store, plg, opts)
+			tracker.finish(pluginDisplayName(plg), wasSkipped, pushErr)
 
-		wasSkipped, pushErr := pushSinglePlugin(ctx, store, plg, opts)
-		recordPushResult(isInteractive, pName, wasSkipped, pushErr, &pushed, &skipped, &failed)
+			if errors.Is(pushErr, context.Canceled) {
+				return pushErr
+			}
+
+			return nil
+		})
 	}
 
-	if isInteractive {
-		_, _ = fmt.Fprintf(
-			os.Stdout,
-			"\r\033[K✓ %s Done! 100%% (%d/%d)\n",
-			renderProgressBar(percentMultiplier),
-			total,
-			total,
-		)
-	}
+	waitErr := group.Wait()
 
+	tracker.done()
+
+	total, pushed, skipped, failed := tracker.snapshot()
 	printPushSummary(total, pushed, skipped, failed)
+
+	ctxErr := ctx.Err()
+	if ctxErr != nil {
+		return fmt.Errorf("ctx.Err: %w", ctxErr)
+	}
+	if waitErr != nil {
+		return fmt.Errorf("group.Wait: %w", waitErr)
+	}
 
 	if failed > 0 {
 		return fmt.Errorf("%w: %d plugin(s) failed to push", ErrPushFailed, failed)
 	}
 
 	return nil
+}
+
+// pushTracker keeps concurrency-safe counters of the uploads in flight.
+type pushTracker struct {
+	mu          sync.Mutex
+	total       int
+	completed   int
+	pushed      int
+	skipped     int
+	failed      int
+	interactive bool
+	spinIdx     int
+}
+
+func newPushTracker(total int, interactive bool) *pushTracker {
+	return &pushTracker{total: total, interactive: interactive}
+}
+
+// finish records one plugin's outcome and refreshes the progress line.
+func (t *pushTracker) finish(name string, wasSkipped bool, pushErr error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.completed++
+
+	switch {
+	case pushErr != nil:
+		t.failed++
+	case wasSkipped:
+		t.skipped++
+	default:
+		t.pushed++
+	}
+
+	if t.interactive {
+		t.renderLocked()
+
+		return
+	}
+
+	switch {
+	case pushErr != nil:
+		_, _ = fmt.Fprintf(os.Stderr, "Error pushing %s: %v\n", name, pushErr)
+	case wasSkipped:
+		_, _ = fmt.Fprintf(os.Stdout, "Skipped (already in storage): %s\n", name)
+	default:
+		_, _ = fmt.Fprintf(os.Stdout, "Successfully pushed %s\n", name)
+	}
+}
+
+// renderLocked redraws the single progress line. The caller holds the mutex.
+func (t *pushTracker) renderLocked() {
+	spinners := getSpinners()
+	spinner := spinners[t.spinIdx%len(spinners)]
+	t.spinIdx++
+
+	pct := int(float64(t.completed) / float64(t.total) * percentMultiplier)
+	_, _ = fmt.Fprintf(
+		os.Stdout,
+		"\r\033[K%s %s %d%% (%d/%d) | ✅ %d  ⏭ %d  ❌ %d",
+		spinner,
+		renderProgressBar(pct),
+		pct,
+		t.completed,
+		t.total,
+		t.pushed,
+		t.skipped,
+		t.failed,
+	)
+}
+
+// done closes the progress line before the summary is printed.
+func (t *pushTracker) done() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if !t.interactive {
+		return
+	}
+
+	_, _ = fmt.Fprintf(
+		os.Stdout,
+		"\r\033[K✓ %s Done! %d/%d\n",
+		renderProgressBar(percentMultiplier),
+		t.completed,
+		t.total,
+	)
+}
+
+func (t *pushTracker) snapshot() (int, int, int, int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	return t.total, t.pushed, t.skipped, t.failed
 }
 
 // pushSinglePlugin packs one plugin version directory and uploads it.
@@ -180,13 +321,11 @@ func pushSinglePlugin(
 		}
 	}
 
-	versionDir := filepath.Join(opts.scanPath, plg.group, plg.name, plg.version)
-
-	archivePath, err := packPluginDir(versionDir)
+	archivePath, cleanup, err := resolveArchive(opts, plg)
 	if err != nil {
 		return false, err
 	}
-	defer func() { _ = os.Remove(archivePath) }()
+	defer cleanup()
 
 	err = store.UploadFile(ctx, key, archivePath)
 	if err != nil {
@@ -194,6 +333,25 @@ func pushSinglePlugin(
 	}
 
 	return false, nil
+}
+
+// resolveArchive returns the archive to upload for one plugin version and a
+// cleanup to run once it has been. A packed tree is uploaded from disk and its
+// archive is left in place; a built tree is packed into a temporary file that
+// the cleanup removes.
+func resolveArchive(opts pushOptions, plg pluginInfo) (string, func(), error) {
+	versionDir := filepath.Join(opts.scanPath, plg.group, plg.name, plg.version)
+
+	if opts.packed {
+		return filepath.Join(versionDir, plugarchive.ArchiveName), func() {}, nil
+	}
+
+	archivePath, err := packPluginDir(versionDir)
+	if err != nil {
+		return "", func() {}, err
+	}
+
+	return archivePath, func() { _ = os.Remove(archivePath) }, nil
 }
 
 // packPluginDir writes a tar.gz of versionDir to a temporary file and returns its path.
@@ -231,9 +389,8 @@ func runPluginsPushDryRun(plugins []pluginInfo, opts pushOptions) error {
 	_, _ = fmt.Fprintln(os.Stdout, "Dry-run: would push the following plugin archives")
 	_, _ = fmt.Fprintln(os.Stdout, strings.Repeat("-", separatorLength))
 	for _, plg := range plugins {
-		versionDir := filepath.Join(opts.scanPath, plg.group, plg.name, plg.version)
 		_, _ = fmt.Fprintf(os.Stdout, "%-40s  %s -> s3://%s/%s%s\n",
-			pluginDisplayName(plg), versionDir, bucket, opts.s3.Prefix, archiveObjectKey(plg))
+			pluginDisplayName(plg), pushSourcePath(opts, plg), bucket, opts.s3.Prefix, archiveObjectKey(plg))
 	}
 	_, _ = fmt.Fprintln(os.Stdout, strings.Repeat("-", separatorLength))
 	_, _ = fmt.Fprintf(os.Stdout, "Would push: %d plugin(s)\n", len(plugins))
@@ -249,48 +406,4 @@ func printPushSummary(total, pushed, skipped, failed int) {
 	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Skipped (already exists)", skipped)
 	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Failed", failed)
 	_, _ = fmt.Fprintln(os.Stdout, strings.Repeat("-", separatorLength))
-}
-
-// reportPushProgress renders the progress line and returns the next spinner index.
-func reportPushProgress(isInteractive bool, spinners []string, spinIdx int, pName string, idx, total int) int {
-	if !isInteractive {
-		_, _ = fmt.Fprintf(os.Stdout, "Pushing %s...\n", pName)
-
-		return spinIdx
-	}
-
-	pct := int(float64(idx) / float64(total) * percentMultiplier)
-	_, _ = fmt.Fprintf(
-		os.Stdout,
-		"\r\033[K%s %s Pushing %s... %d%% (%d/%d)",
-		spinners[spinIdx],
-		renderProgressBar(pct),
-		pName,
-		pct,
-		idx,
-		total,
-	)
-
-	return (spinIdx + 1) % len(spinners)
-}
-
-// recordPushResult tallies one plugin's outcome and reports it when not interactive.
-func recordPushResult(isInteractive bool, pName string, wasSkipped bool, pushErr error, pushed, skipped, failed *int) {
-	switch {
-	case pushErr != nil:
-		*failed++
-		if !isInteractive {
-			_, _ = fmt.Fprintf(os.Stderr, "Error pushing %s: %v\n", pName, pushErr)
-		}
-	case wasSkipped:
-		*skipped++
-		if !isInteractive {
-			_, _ = fmt.Fprintf(os.Stdout, "Skipped (already in storage): %s\n", pName)
-		}
-	default:
-		*pushed++
-		if !isInteractive {
-			_, _ = fmt.Fprintf(os.Stdout, "Successfully pushed %s\n", pName)
-		}
-	}
 }

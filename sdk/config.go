@@ -36,7 +36,19 @@ type config struct {
 
 	// Keepalive
 	keepaliveParams *keepalive.ClientParameters
+
+	// Transport
+	maxRecvMsgSize int
 }
+
+// DefaultMaxRecvMsgSize is the largest response the client accepts, matching
+// the service's own default output cap.
+//
+// gRPC's default is 4 MiB, which is smaller than the output a plugin is
+// permitted to produce. Left alone, a large generation runs to completion on
+// the server and then fails at the client with ResourceExhausted — all the work
+// done, none of it delivered.
+const DefaultMaxRecvMsgSize = 64 << 20
 
 func defaultConfig() *config {
 	return &config{
@@ -50,6 +62,7 @@ func defaultConfig() *config {
 		// the whole plugin archive from storage to compute its checksum.
 		createPluginTimeout: 120 * time.Second,
 		healthCheckInterval: 30 * time.Second,
+		maxRecvMsgSize:      DefaultMaxRecvMsgSize,
 	}
 }
 
@@ -69,6 +82,19 @@ func (f optionFunc) apply(c *config) {
 func WithInsecure() Option {
 	return optionFunc(func(c *config) {
 		c.transportCreds = insecure.NewCredentials()
+	})
+}
+
+// WithMaxRecvMsgSize sets the largest response the client will accept, in
+// bytes. Raise it when the service is configured to allow plugin output larger
+// than DefaultMaxRecvMsgSize; a value of zero or less restores the default.
+func WithMaxRecvMsgSize(n int) Option {
+	return optionFunc(func(c *config) {
+		if n <= 0 {
+			n = DefaultMaxRecvMsgSize
+		}
+
+		c.maxRecvMsgSize = n
 	})
 }
 

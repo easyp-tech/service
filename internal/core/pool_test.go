@@ -92,6 +92,7 @@ func (noopMetrics) ObserveGenerationDuration(_ context.Context, _ string, _ time
 func (noopMetrics) IncGenerationErrors(_ context.Context, _, _ string) {}
 
 func (noopMetrics) IncGenerationRetries(_ context.Context, _ string) {}
+func (noopMetrics) IncOperation(_ context.Context, _, _ string)      {}
 
 func newTestPool(t *testing.T, plugin Plugin, cfg WorkerPoolConfig) *WorkerPool {
 	t.Helper()

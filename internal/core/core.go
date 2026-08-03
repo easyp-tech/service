@@ -33,10 +33,28 @@ func New(metrics Metrics, registry Registry, featureGate FeatureGate, auditSink 
 	}
 }
 
-// sendAudit hands an audit entry to the sink.
+// sendAudit hands an audit entry to the sink, and counts the operation on the
+// way past.
+//
 // Audit is an Enterprise feature: without it the entry never leaves Core, so
 // nothing is written to storage. A nil gate means all features are available.
 func (c *Core) sendAudit(ctx context.Context, entry AuditEntry) { //nolint:funcorder,lll // sendAudit is a helper used by public methods above it
+	// Counted before either early return below, deliberately. This measures what
+	// the service did, not what reached the audit log, and an installation
+	// without an Enterprise licence still needs to see its own error rate —
+	// observability of your own service should not be something you buy.
+	//
+	// Every operation and every branch, success or failure, reaches here through
+	// auditSuccess or auditError, so this one call covers all of them.
+	c.metrics.IncOperation(ctx, entry.OperationType, entry.Status)
+
+	// No sink configured is a legitimate construction — audit is optional — and
+	// it has to be checked before the gate. With a nil gate every feature counts
+	// as available, so the branches below would both reach a nil interface.
+	if c.auditSink == nil {
+		return
+	}
+
 	if c.featureGate != nil && !c.featureGate.Enabled(FeatureAudit) {
 		c.auditSink.Skipped()
 
@@ -176,6 +194,16 @@ func (c *Core) checkFeature(feature Feature) error { //nolint:funcorder // check
 	return fmt.Errorf("%w: feature %s", ErrFeatureDenied, feature)
 }
 
+// maxPlugins reports the registration ceiling, or LicenseUnlimited when there is
+// no gate to ask.
+func (c *Core) maxPlugins() int { //nolint:funcorder // helper used by CreatePlugin below
+	if c.featureGate == nil {
+		return LicenseUnlimited
+	}
+
+	return c.featureGate.MaxPlugins()
+}
+
 // CreatePlugin registers a new plugin in the registry.
 func (c *Core) CreatePlugin(ctx context.Context, req CreatePluginRequest) (*PluginInfo, error) {
 	start := time.Now()
@@ -200,8 +228,10 @@ func (c *Core) CreatePlugin(ctx context.Context, req CreatePluginRequest) (*Plug
 		return nil, err
 	}
 
-	// Check MaxPlugins limit.
-	if limit := c.featureGate.MaxPlugins(); limit >= 0 {
+	// Check MaxPlugins limit. The nil check matches checkFeature above: a Core
+	// built without a gate treats everything as allowed, and dereferencing here
+	// would panic on the one path that reaches it.
+	if limit := c.maxPlugins(); limit >= 0 {
 		plugins, err := c.registry.List(ctx, PluginFilter{})
 		if err != nil {
 			c.auditError(ctx, OperationCreatePlugin, pluginName, start, err)

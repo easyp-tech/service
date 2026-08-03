@@ -36,13 +36,27 @@ topologySpreadConstraints: []
 reloader:
   enabled: true
 
+# Sized against what the service is configured to do, not guessed. The plugin's
+# output is read into memory whole, so peak usage tracks
+# config.workerPool.maxConcurrentGenerations × config.registry.maxOutputSize —
+# 16 × 64 MiB = 1 GiB of buffers with the defaults below, and the same bytes
+# again once marshalled into the gRPC response. _helpers.tpl refuses an install
+# where that product no longer fits in the limit.
+#
+# The earlier default was 1Gi, which the buffers alone filled. The pod was
+# OOMKilled under load, and an OOMKill reads as a crash rather than as overload:
+# no log line, no rejected-generation counter, no saturation alert.
 resources:
   requests:
-    cpu: 200m
-    memory: 256Mi
-  limits:
-    cpu: "2"
+    cpu: 500m
     memory: 1Gi
+  limits:
+    # Four cores for sixteen concurrent plugin processes. On two they each ran
+    # at an eighth speed and approached generationTimeoutSeconds, which would
+    # have surfaced as DeadlineExceeded — a broken plugin, to anyone reading —
+    # rather than as the honest ResourceExhausted the limiter returns.
+    cpu: "4"
+    memory: 4Gi
 
 # Ports the container listens on. The service defaults to 23410-23413 when no
 # configuration is given; the chart always sets them explicitly.
@@ -72,6 +86,33 @@ terminationGracePeriodSeconds: 180
 # ---------------------------------------------------------------------------
 config:
   logLevel: info
+
+  server:
+    # CIDRs whose X-Forwarded-For and X-Real-IP headers may be believed.
+    #
+    # Required once ingress.enabled is true, and the chart refuses the install
+    # without it. Behind a proxy every request arrives from the proxy's address,
+    # so with this empty the rate limit and the per-caller concurrency limit
+    # become one bucket shared by every client at once, and the audit log
+    # records the ingress instead of who acted. None of that fails visibly.
+    #
+    # Set it to the range your ingress controller's pods run in — the pod CIDR
+    # of that node pool, not the whole cluster: anything listed here can claim
+    # to be any client.
+    trustedProxies: []
+
+    # Largest single gRPC message accepted and sent. gRPC's own defaults are
+    # 4 MiB in — which a request carrying a large proto tree exceeds — and
+    # effectively unlimited out. maxSendMsgSize must be at least
+    # config.registry.maxOutputSize or the service refuses to start: a plugin
+    # allowed to produce more than can be sent does its work for nothing.
+    maxRecvMsgSize: 67108864
+    maxSendMsgSize: 67108864
+
+    # Concurrent streams one connection may hold. gRPC defaults to unlimited,
+    # which lets a single caller allocate goroutines and buffers until the pod
+    # is out of memory, before any limiter in the chain sees the requests.
+    maxConcurrentStreams: 256
 
   # Hard exit this long after SIGTERM, if graceful shutdown has not finished.
   # Expressed in seconds so the chart can compare it with the two numbers on
@@ -138,6 +179,24 @@ config:
     otlpEndpoint: ""
     pyroscopeEndpoint: ""
 
+  license:
+    # Public halves of the keys licence tokens are signed with, keyed by the key
+    # id that appears in the token footer. The token names one; the rest are
+    # here so that a signing key can be rotated without every deployment having
+    # to change key on the same day.
+    #
+    # These are the trust anchor: whoever sets them decides which authority may
+    # issue licences for this installation. The default below is easyp.tech's own
+    # published key, so a customer holding a LICENSE_KEY needs nothing else.
+    # Replace it only if you issue your own licences.
+    #
+    # Source of truth is keys/ in the licence registry (easyp-tech/licenses);
+    # these must be kept in step with it.
+    #
+    # Without a key, LICENSE_KEY is ignored and the service runs in community mode.
+    publicKeys:
+      "2026-08": "81322461987167d5cfd529e9cb8b96f4797f12fce6be4399a0866e250c9b6bb5"
+
 # Extra environment variables, appended last. Use for settings the chart does
 # not model yet.
 extraEnv: []
@@ -152,7 +211,9 @@ extraEnv: []
 #   REGISTRY_S3_ACCESS_KEY_ID       required when config.registry.s3.bucket is set
 #   REGISTRY_S3_SECRET_ACCESS_KEY   required when config.registry.s3.bucket is set
 #   LICENSE_KEY                     optional; absent means community mode
-#   LICENSE_PUBLIC_KEY              optional; required for LICENSE_KEY to count
+#   LICENSE_PUBLIC_KEY              optional; single-key alternative to
+#                                   config.license.publicKeys. One of the two is
+#                                   required for LICENSE_KEY to count.
 #   AUTH_WRITE_TOKENS               optional; absent means no writes are allowed
 #
 # AUTH_WRITE_TOKENS holds sha256 digests, never the tokens: "ci=<64 hex>,me=<64 hex>".
@@ -245,16 +306,46 @@ serviceMonitor:
   scrapeTimeout: 10s
   labels: {}
 
+# Alerting rules. Needs the Prometheus Operator CRDs, same as serviceMonitor,
+# which is why this defaults to off rather than failing the install where they
+# are absent. Turn it on wherever you actually run this.
+#
+# The rules worth having on day one are the licence ones: a licence that lapses
+# breaks nothing loudly. The tier drops to community, audit stops, and the
+# plugin limit starts rejecting registrations — all silently.
+prometheusRule:
+  enabled: false
+  # Extra labels, usually what your Prometheus selects rules by.
+  labels: {}
+  # How long before expiry to start warning. The token also carries its own
+  # grace period, which runs after this; both exist so a renewal that slips
+  # does not take a customer's pipeline down.
+  licenceExpiryWarningDays: 14
+  # Fraction of config.registry.cacheMaxBytes that counts as full.
+  cacheUsageWarningRatio: 0.95
+  # Fraction of generations allowed to fail before alerting.
+  generationErrorRatio: 0.05
+  # Rejected write credentials per second before alerting.
+  authFailureRate: 0.5
+
 podDisruptionBudget:
   enabled: false
   minAvailable: 1
 
+# On by default. This pod's whole job is running third-party binaries, so the
+# set of places it can reach should be stated rather than inherited.
+#
+# If your database, object storage or collector is not on one of the ports below,
+# add it here or the pod goes quiet in a way that looks like a hang. That is the
+# one thing to check first after enabling this.
 networkPolicy:
-  enabled: false
-  # Selector matching the namespace your ingress controller runs in.
+  enabled: true
+  # Selector matching the namespace your ingress controller runs in. Empty means
+  # the gRPC port accepts connections from anywhere in the cluster — set it once
+  # you know which namespace your controller runs in.
   ingressNamespaceSelector: {}
   # Ports the pod is allowed to reach outbound, beyond DNS.
   egressPorts:
-    - 5432
-    - 443
-    - 4317
+    - 5432  # PostgreSQL
+    - 443   # object storage, and anything a plugin fetches over HTTPS
+    - 4317  # OTLP

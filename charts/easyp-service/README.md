@@ -13,8 +13,8 @@ community mode.
   the service applies its own migrations at startup (serialised across replicas
   by a Postgres advisory lock, so concurrent starts are safe).
 - Optional: Traefik for ingress, cert-manager for certificates,
-  Prometheus Operator for `ServiceMonitor`, stakater/Reloader for certificate
-  rotation.
+  Prometheus Operator for `ServiceMonitor` and `PrometheusRule`,
+  stakater/Reloader for certificate rotation.
 
 ## Install
 
@@ -43,7 +43,7 @@ environment variable names**:
 | `REGISTRY_S3_ACCESS_KEY_ID` | when S3 is configured | must be set together with the secret key |
 | `REGISTRY_S3_SECRET_ACCESS_KEY` | when S3 is configured | |
 | `LICENSE_KEY` | no | absent ⇒ community mode |
-| `LICENSE_PUBLIC_KEY` | no | without it `LICENSE_KEY` is ignored |
+| `LICENSE_PUBLIC_KEY` | no | single-key alternative to `config.license.publicKeys`; without one of the two, `LICENSE_KEY` is ignored |
 | `AUTH_WRITE_TOKENS` | no | absent ⇒ all writes rejected |
 
 `AUTH_WRITE_TOKENS` holds sha256 digests, never tokens:
@@ -53,6 +53,35 @@ the digest is safe to store, the token is not.
 `secrets.create=true` renders a secret from `secrets.data`, but those values end
 up in Helm release history and in `helm get values`. It exists for throwaway
 clusters; bring your own secret anywhere else.
+
+## Licence
+
+The token is a secret and arrives through the secret above. The keys it is
+verified against are not, and live in values:
+
+```yaml
+config:
+  license:
+    publicKeys:
+      "2026-08": "<64 hex characters>"
+```
+
+They render into `LICENSE_PUBLIC_KEYS`. The chart ships easyp.tech's own
+published key as the default, so an installation with a `LICENSE_KEY` needs no
+further configuration.
+
+More than one entry is allowed, which is how a signing key gets rotated without
+every deployment having to change key on the same day: issue under the new key
+id while the old one is still accepted, then drop the old entry.
+
+These keys are the trust anchor — whoever sets them decides which authority may
+issue licences for this installation. Replacing the default means you issue your
+own licences; clearing it (`--set config.license.publicKeys=null`) means no token
+is honoured at all.
+
+Without a key, `LICENSE_KEY` is ignored and the service runs in community mode.
+A key that is not 64 hex characters fails `helm install` rather than producing a
+pod that starts and quietly serves community.
 
 ## Transport security
 
@@ -71,6 +100,37 @@ startup. `reloader.enabled` adds the stakater/Reloader annotation so a changed
 secret triggers a rollout; without that controller installed, renewal means
 `kubectl rollout restart`.
 
+## Memory
+
+Peak memory is not a guess — it follows from two settings you can change:
+
+```
+maxConcurrentGenerations × maxOutputSize × 2  ≤  resources.limits.memory
+        16              ×    64 MiB     × 2  =  2 GiB   ≤  4 GiB
+```
+
+A plugin's output is read into memory in one piece, and the same bytes exist a
+second time once marshalled into the gRPC response — hence the factor of two.
+Everything else the pod does comes out of the remaining headroom.
+
+The chart refuses the install when that product exceeds the limit. It is worth
+refusing because the failure is otherwise unreadable: the pod is OOMKilled,
+which looks like a crash and not like overload. Nothing is logged,
+`easyp_pool_generations_rejected_total` does not move, and the saturation alerts
+stay quiet. That combination shipped once, at 16 × 64 MiB against a 1Gi limit,
+where the buffers alone accounted for the whole limit.
+
+Raising `config.registry.maxOutputSize` or
+`config.workerPool.maxConcurrentGenerations` therefore means raising the memory
+limit with it. Leaving `resources.limits.memory` unset skips the check entirely,
+for clusters that set limits by namespace policy.
+
+CPU is sized alongside: four cores for sixteen concurrent plugin processes. With
+fewer, each process runs proportionally slower and generations start reaching
+`generationTimeoutSeconds` — which surfaces as `DeadlineExceeded` and reads as a
+broken plugin, rather than as the `ResourceExhausted` the limiter returns when it
+is genuinely the load.
+
 ## Storage
 
 Plugin archives are downloaded on demand and unpacked into
@@ -79,9 +139,11 @@ Plugin archives are downloaded on demand and unpacked into
 plugins are removed. Only local files go: the archive in object storage stays,
 so an evicted plugin is one download away rather than lost.
 
-Keep `persistence.size` above `cacheMaxBytes` — eviction begins at the limit, so
-a volume sized exactly to it would already be full when the cache first needs
-room. The defaults leave 5 GiB of headroom.
+`persistence.size` must exceed `cacheMaxBytes`, and the chart refuses the install
+otherwise: eviction begins at the limit, so a volume sized exactly to it is
+already full by the time the cache first needs room. A full volume fails
+generation with an I/O error that names nothing useful. The defaults leave 5 GiB
+of headroom.
 
 A plugin used within the last few minutes is never evicted, even if that means
 overshooting the limit: removing a binary out from under a running process would
@@ -94,6 +156,80 @@ costs more than the disk.
 
 `replicaCount > 1` needs `persistence.accessMode=ReadWriteMany`; the chart fails
 the install otherwise rather than leaving pods stuck in Pending.
+
+### Upgrades take the service down briefly
+
+With a `ReadWriteOnce` volume the deployment uses `strategy: Recreate`, so an
+upgrade stops the running pod before starting its replacement. That gap is
+deliberate. A rolling update would start the new pod first, and because a
+ReadWriteOnce volume attaches to one node at a time, a replacement scheduled
+anywhere else waits on a Multi-Attach error indefinitely — `helm upgrade` neither
+completes nor fails.
+
+If the gap is unacceptable, the answer is a `ReadWriteMany` volume, not a
+different strategy: with a shared volume the chart rolls, and `replicaCount` can
+exceed one.
+
+## Behind an ingress: `config.server.trustedProxies`
+
+`ingress.enabled: true` requires it, and the chart refuses the install without
+it.
+
+Every request then reaches the pod from the ingress controller's address. The
+rate limiter and the per-caller concurrency limiter key on who is calling, so
+with nothing configured they see one caller: 10 requests per second and two
+concurrent requests shared by every client at once, and no protection against
+any individual one. The audit log records the ingress as the actor for the same
+reason. Nothing about that fails visibly — hence the refusal rather than a note.
+
+Set it to the pod CIDR of the node pool your ingress controller runs in:
+
+```yaml
+config:
+  server:
+    trustedProxies:
+      - 10.42.0.0/16
+```
+
+`X-Forwarded-For` and `X-Real-IP` are then believed for connections from that
+range and ignored from anywhere else, so a client cannot pick its own identity
+to escape a limit. Keep the range tight: whatever is listed here can claim to be
+any caller.
+
+## Network policy
+
+On by default. This pod's job is executing third-party binaries, so where it may
+connect is stated rather than inherited.
+
+Outbound is limited to DNS plus `networkPolicy.egressPorts` — 5432, 443 and 4317,
+covering PostgreSQL, object storage and OTLP. **If your database, object storage
+or collector listens elsewhere, add the port**, or the pod goes quiet in a way
+that reads as a hang rather than a refusal. That is the first thing to check
+after a fresh install stalls.
+
+Inbound, gRPC is restricted to `networkPolicy.ingressNamespaceSelector` when set,
+and open cluster-wide when it is not. Set it once you know which namespace your
+ingress controller runs in — the mutual-TLS leg is what actually protects the
+listener, but two locks are better than one.
+
+## Alerting
+
+`prometheusRule.enabled` ships ten alerts. It defaults to off only because it
+needs the Prometheus Operator CRDs and would otherwise fail the install where
+they are absent — turn it on wherever you actually run this.
+
+The licence ones matter most, because a lapsed licence breaks nothing loudly:
+the tier drops to community, audit stops being written, and the plugin limit
+starts refusing registrations, all silently. `EasypLicenceExpiringSoon` fires
+two weeks out (`prometheusRule.licenceExpiryWarningDays`) and
+`EasypLicenceInGrace` once the token is running on borrowed time. Installations
+with no licence at all are excluded rather than alerted on forever.
+
+The rest cover capacity (`EasypGenerationsRejected`,
+`EasypGenerationQueueSaturated`, `EasypPluginCacheAtLimit`), the audit pipeline
+(`EasypAuditEventsLost`, `EasypAuditMaintenanceStale`) and failures
+(`EasypGenerationErrorRate`, `EasypPanics`, `EasypAuthFailures`). Thresholds are
+values, not template edits.
 
 ## Shutdown timing
 
@@ -127,4 +263,5 @@ Anything the chart does not model can be added through `extraEnv`.
 See `values.yaml`; every key is commented. The install-time checks in
 `_helpers.tpl` reject combinations that would otherwise fail confusingly at
 runtime — missing DSN, plaintext router against a TLS listener, multi-replica
-`ReadWriteOnce`, grace period shorter than the generation timeout.
+`ReadWriteOnce`, grace period shorter than the generation timeout, an ingress
+with no trusted proxies, peak generation buffers larger than the memory limit.

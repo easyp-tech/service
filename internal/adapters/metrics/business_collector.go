@@ -23,11 +23,7 @@ type BusinessMetricsCollector struct {
 	pluginsTotal        *prometheus.Desc
 	pluginsByGroup      *prometheus.Desc
 	auditLogTotal       *prometheus.Desc
-	auditLogByOperation *prometheus.Desc
-	auditLogByStatus    *prometheus.Desc
 	pluginVersionsCount *prometheus.Desc
-	auditLogLast24h     *prometheus.Desc
-	auditLogDefaultRows *prometheus.Desc
 }
 
 // NewBusinessMetricsCollector creates a new BusinessMetricsCollector.
@@ -47,34 +43,13 @@ func NewBusinessMetricsCollector(db *sql.DB, namespace string, log *slog.Logger)
 		),
 		auditLogTotal: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "business", "audit_log_total"),
-			"Total number of audit log entries.",
+			"Approximate number of audit log entries, from the planner's row estimate. Lags bulk changes until autovacuum runs.",
 			nil, nil,
-		),
-		auditLogByOperation: prometheus.NewDesc(
-			prometheus.BuildFQName(namespace, "business", "audit_log_by_operation"),
-			"Number of audit log entries per operation type.",
-			[]string{"operation"}, nil,
-		),
-		auditLogByStatus: prometheus.NewDesc(
-			prometheus.BuildFQName(namespace, "business", "audit_log_by_status"),
-			"Number of audit log entries per status.",
-			[]string{"status"}, nil,
 		),
 		pluginVersionsCount: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "business", "plugin_versions_count"),
 			"Number of unique versions per plugin.",
 			[]string{"group", "name"}, nil,
-		),
-		auditLogLast24h: prometheus.NewDesc(
-			prometheus.BuildFQName(namespace, "business", "audit_log_last_24h"),
-			"Number of audit log entries in the last 24 hours.",
-			nil, nil,
-		),
-		auditLogDefaultRows: prometheus.NewDesc(
-			prometheus.BuildFQName(namespace, "business", "audit_log_default_rows"),
-			"Audit rows that landed in the default partition. Must stay zero: "+
-				"a non-empty default partition blocks creating the month it overlaps.",
-			nil, nil,
 		),
 	}
 }
@@ -84,32 +59,58 @@ func (c *BusinessMetricsCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.pluginsTotal
 	ch <- c.pluginsByGroup
 	ch <- c.auditLogTotal
-	ch <- c.auditLogByOperation
-	ch <- c.auditLogByStatus
 	ch <- c.pluginVersionsCount
-	ch <- c.auditLogLast24h
-	ch <- c.auditLogDefaultRows
 }
 
+// auditRowEstimate reads the planner's row estimate for every partition of
+// audit_log instead of counting the rows.
+//
+// count(*) on this table is a sequential scan of the whole retention window, and
+// the collector runs it on every scrape. Measured on real data: 58 ms at 4M rows,
+// 1245 ms at 16M, growing linearly, against a 5-second query timeout and a
+// 30-second scrape interval — so on a year of history the metric would quietly
+// start timing out, blanking the dashboards exactly when the service is busiest.
+// The estimate answers the same question in 4 ms.
+//
+// It is an estimate, and it lags. Once ANALYZE has run it is accurate to a
+// handful of rows in sixteen million, but immediately after a bulk load it can
+// be out by a factor of several until autovacuum catches up — observed at 2.4M
+// against a true 16M. That is fine for what this metric is for: whether
+// retention is working and how fast the table is growing, on a twelve-month
+// window. Do not build anything on it that needs the exact number.
+//
+// The sum runs over pg_inherits: audit_log is partitioned, so its parent holds
+// no rows and reltuples on the parent alone reports zero.
+const auditRowEstimate = `
+SELECT coalesce(sum(GREATEST(c.reltuples, 0)), 0)::bigint
+FROM pg_class c
+JOIN pg_inherits i ON i.inhrelid = c.oid
+WHERE i.inhparent = 'audit_log'::regclass`
+
 // Collect implements prometheus.Collector.
+//
+// Everything here runs synchronously on every scrape, so nothing may grow with
+// the amount of history. What is left describes *state* — how many plugins exist
+// — which only the database knows: a gauge kept in memory would start at zero
+// after a restart and never learn the truth until someone happened to create a
+// plugin, and with several replicas each would answer for itself.
+//
+// Everything that described *events* has moved out. Counts by operation and by
+// status are now easyp_operations_total, incremented where the events happen;
+// activity over a window is increase() over that counter, computed by Prometheus;
+// and the default-partition tripwire moved to the six-hourly partition
+// maintenance, where its cadence belongs. Between them those three were 2.3
+// seconds of sequential scanning on every scrape at sixteen million audit rows,
+// and they grew from there.
 func (c *BusinessMetricsCollector) Collect(ch chan<- prometheus.Metric) {
 	// Scalar metrics
 	c.collectScalar(ch, c.pluginsTotal, "plugins_total",
 		"SELECT count(*) FROM plugins")
-	c.collectScalar(ch, c.auditLogTotal, "audit_log_total",
-		"SELECT count(*) FROM audit_log")
-	c.collectScalar(ch, c.auditLogLast24h, "audit_log_last_24h",
-		"SELECT count(*) FROM audit_log WHERE created_at > now() - interval '24 hours'")
-	c.collectScalar(ch, c.auditLogDefaultRows, "audit_log_default_rows",
-		"SELECT count(*) FROM audit_log_default")
+	c.collectScalar(ch, c.auditLogTotal, "audit_log_total", auditRowEstimate)
 
 	// Grouped metrics
 	c.collectGrouped(ch, c.pluginsByGroup, "plugins_by_group",
 		"SELECT group_name, count(*) FROM plugins GROUP BY group_name")
-	c.collectGrouped(ch, c.auditLogByOperation, "audit_log_by_operation",
-		"SELECT operation_type, count(*) FROM audit_log GROUP BY operation_type")
-	c.collectGrouped(ch, c.auditLogByStatus, "audit_log_by_status",
-		"SELECT status, count(*) FROM audit_log GROUP BY status")
 	c.collectGrouped2(ch, c.pluginVersionsCount, "plugin_versions_count",
 		"SELECT group_name, name, count(DISTINCT version) FROM plugins GROUP BY group_name, name")
 }

@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/easyp-tech/service/internal/core"
+	"github.com/easyp-tech/service/internal/safe"
 )
 
 // clientBucket хранит rate.Limiter и время последнего обращения.
@@ -29,6 +30,7 @@ type RateLimiter struct {
 	cfg          Config
 	gate         core.FeatureGate
 	keyExtractor KeyExtractor
+	guard        *safe.Guard
 	logger       *slog.Logger
 	buckets      sync.Map // map[string]*clientBucket
 
@@ -45,6 +47,7 @@ func New(
 	keyExtractor KeyExtractor,
 	logger *slog.Logger,
 	reg *prometheus.Registry,
+	namespace string,
 ) *RateLimiter {
 	if keyExtractor == nil {
 		keyExtractor = PeerIPExtractor
@@ -55,16 +58,18 @@ func New(
 	// time series. The address stays in the log line instead.
 	requestsTotal := prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "easyp_rate_limit_requests_total",
-			Help: "Total number of requests processed by rate limiter",
+			Namespace: namespace,
+			Name:      "rate_limit_requests_total",
+			Help:      "Total number of requests processed by rate limiter",
 		},
 		[]string{"status"},
 	)
 
 	activeClients := prometheus.NewGauge(
 		prometheus.GaugeOpts{
-			Name: "easyp_rate_limit_active_clients",
-			Help: "Current number of active client buckets",
+			Namespace: namespace,
+			Name:      "rate_limit_active_clients",
+			Help:      "Current number of active client buckets",
 		},
 	)
 
@@ -77,6 +82,7 @@ func New(
 		cfg:           cfg,
 		gate:          gate,
 		keyExtractor:  keyExtractor,
+		guard:         safe.NewGuard(reg, namespace),
 		logger:        logger,
 		requestsTotal: requestsTotal,
 		activeClients: activeClients,
@@ -158,6 +164,11 @@ func (rl *RateLimiter) Limit(ctx context.Context) error {
 
 // StartCleanup запускает фоновую горутину очистки stale buckets.
 // Останавливается при отмене контекста.
+//
+// Барьер стоит вокруг одной уборки, а не вокруг цикла: паника, пойманная
+// снаружи, оставила бы процесс живым и навсегда без очистки, а вёдра растут по
+// одному на каждый адрес и никогда не исчезают — то есть утечка памяти вместо
+// падения.
 func (rl *RateLimiter) StartCleanup(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(rl.cfg.CleanupInterval)
@@ -168,7 +179,7 @@ func (rl *RateLimiter) StartCleanup(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				rl.cleanup()
+				rl.guard.Do(ctx, "ratelimiter.cleanup", rl.cleanup)
 			}
 		}
 	}()

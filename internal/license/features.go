@@ -11,23 +11,19 @@ const (
 	featureRateLimiting                  // Rate limiting
 	featurePluginCRUD                    // CRUD операции с плагинами
 	// Enterprise-only features.
-	featureMultiTenancy    // Мультитенантность
-	featureResponseCaching // Кэширование ответов
-	featureAudit           // Аудит
+	featureAudit // Аудит
 
 	featureCount // sentinel для валидации
 )
 
 // featureNames содержит строковые представления feature для метрик и логирования.
 var featureNames = [featureCount]string{
-	featureCodeGeneration:  "code_generation",
-	featurePluginListing:   "plugin_listing",
-	featureMCPServerTools:  "mcp_server_tools",
-	featureRateLimiting:    "rate_limiting",
-	featurePluginCRUD:      "plugin_crud",
-	featureMultiTenancy:    "multi_tenancy",
-	featureResponseCaching: "response_caching",
-	featureAudit:           "audit",
+	featureCodeGeneration: "code_generation",
+	featurePluginListing:  "plugin_listing",
+	featureMCPServerTools: "mcp_server_tools",
+	featureRateLimiting:   "rate_limiting",
+	featurePluginCRUD:     "plugin_crud",
+	featureAudit:          "audit",
 }
 
 // String возвращает строковое представление feature для метрик и логирования.
@@ -40,8 +36,12 @@ func (f feature) String() string {
 }
 
 // IsEnterprise возвращает true, если функция доступна только в Enterprise.
+//
+// Сейчас такая одна. Мультитенантность и кэширование ответов были объявлены
+// здесь до того, как появились, и удалены: константа, за которой ничего нет,
+// заставляет верить, что фича есть. См. .spec/ROADMAP.md.
 func (f feature) IsEnterprise() bool {
-	return f == featureMultiTenancy || f == featureResponseCaching || f == featureAudit
+	return f == featureAudit
 }
 
 // Valid возвращает true, если значение feature определено.

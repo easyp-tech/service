@@ -94,6 +94,53 @@ what a cert-manager CA issuer produces.
 {{- end }}
 
 {{/*
+Converts a Kubernetes quantity like "25Gi" to plain bytes, so that the volume
+size and the cache limit can be compared. Only the suffixes a volume size
+realistically carries are handled; anything else fails loudly rather than
+comparing nonsense.
+*/}}
+{{- define "easyp-service.toBytes" -}}
+{{- $q := . | toString -}}
+{{- if hasSuffix "Gi" $q -}}
+{{- mulf (trimSuffix "Gi" $q | float64) 1073741824 | int64 -}}
+{{- else if hasSuffix "Mi" $q -}}
+{{- mulf (trimSuffix "Mi" $q | float64) 1048576 | int64 -}}
+{{- else if hasSuffix "Ti" $q -}}
+{{- mulf (trimSuffix "Ti" $q | float64) 1099511627776 | int64 -}}
+{{- else if hasSuffix "G" $q -}}
+{{- mulf (trimSuffix "G" $q | float64) 1000000000 | int64 -}}
+{{- else if hasSuffix "M" $q -}}
+{{- mulf (trimSuffix "M" $q | float64) 1000000 | int64 -}}
+{{- else if regexMatch "^[0-9]+$" $q -}}
+{{- $q -}}
+{{- else -}}
+{{- fail (printf "easyp-service: cannot read %q as a size; use Mi, Gi, Ti, M, G or plain bytes." $q) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Encodes config.license.publicKeys as LICENSE_PUBLIC_KEYS: "<kid>:<hex>,<kid>:<hex>".
+
+Both separators are rejected inside a key id, because a key id carrying one
+would silently produce a different map than the one written in values.yaml.
+Range over a map yields keys in sorted order, so the rendered value does not
+churn between otherwise identical templates.
+*/}}
+{{- define "easyp-service.licensePublicKeys" -}}
+{{- $pairs := list -}}
+{{- range $kid, $hex := .Values.config.license.publicKeys -}}
+  {{- if or (contains ":" $kid) (contains "," $kid) -}}
+    {{- fail (printf "easyp-service: config.license.publicKeys key id %q must not contain ':' or ','." $kid) -}}
+  {{- end -}}
+  {{- if not (regexMatch "^[0-9a-fA-F]{64}$" (trim $hex)) -}}
+    {{- fail (printf "easyp-service: config.license.publicKeys[%s] must be a hex-encoded Ed25519 public key (64 hex characters), got %q." $kid $hex) -}}
+  {{- end -}}
+  {{- $pairs = append $pairs (printf "%s:%s" $kid (trim $hex)) -}}
+{{- end -}}
+{{- join "," $pairs -}}
+{{- end }}
+
+{{/*
 Preflight checks.
 
 Every one of these fails a `helm install` that would otherwise produce a pod
@@ -113,6 +160,48 @@ inside the cluster.
 {{- if gt (int .Values.replicaCount) 1 }}
 {{- if and .Values.persistence.enabled (eq .Values.persistence.accessMode "ReadWriteOnce") }}
 {{- fail "easyp-service: replicaCount > 1 needs persistence.accessMode=ReadWriteMany, otherwise only one pod can mount the plugin cache and the rest stay Pending." }}
+{{- end }}
+{{- end }}
+
+{{/*
+Eviction triggers at cacheMaxBytes, so the volume has to be bigger than that or
+the disk fills before the cache ever decides it is full. A full volume fails
+generation with an I/O error rather than anything that names the real cause,
+which is why this is worth refusing at install time.
+*/}}
+{{- if and .Values.persistence.enabled (gt (int64 .Values.config.registry.cacheMaxBytes) 0) }}
+{{- $volume := include "easyp-service.toBytes" .Values.persistence.size | int64 }}
+{{- $cache := int64 .Values.config.registry.cacheMaxBytes }}
+{{- if le $volume $cache }}
+{{- fail (printf "easyp-service: persistence.size (%s, %d bytes) must exceed config.registry.cacheMaxBytes (%d bytes). Eviction starts at the cache limit, so a volume sized to it is already full by the time the cache needs room." .Values.persistence.size $volume $cache) }}
+{{- end }}
+{{- end }}
+
+{{/*
+Peak memory against the pod's limit. The plugin's output is read into memory in
+one piece, so the buffers alone come to maxConcurrentGenerations ×
+maxOutputSize, and the same bytes exist a second time once marshalled into the
+gRPC response — hence the factor of two. Anything else the pod needs comes out
+of what is left.
+
+Shipped once as 16 × 64 MiB against a 1Gi limit, i.e. the buffers accounted for
+the entire limit on their own. The pod is OOMKilled, which presents as a crash
+rather than as overload: nothing logged, no rejected-generation counter, no
+saturation alert. Refusing the arithmetic at install time is the only place it
+is visible.
+
+Skipped when no memory limit is set: limits are optional, and a namespace that
+sets them by policy should not be unable to install the chart.
+*/}}
+{{- if .Values.resources.limits }}
+{{- if .Values.resources.limits.memory }}
+{{- $limit := include "easyp-service.toBytes" .Values.resources.limits.memory | int64 }}
+{{- $concurrent := int64 .Values.config.workerPool.maxConcurrentGenerations }}
+{{- $output := int64 .Values.config.registry.maxOutputSize }}
+{{- $peak := mul $concurrent $output 2 | int64 }}
+{{- if gt $peak $limit }}
+{{- fail (printf "easyp-service: config.workerPool.maxConcurrentGenerations (%d) × config.registry.maxOutputSize (%d bytes) × 2 = %d bytes exceeds resources.limits.memory (%s, %d bytes). Plugin output is buffered whole and exists again once marshalled, so this is the floor the pod needs before anything else; exceeding it means an OOMKill under load, which looks like a crash rather than overload. Lower maxConcurrentGenerations or maxOutputSize, or raise the memory limit." $concurrent $output $peak .Values.resources.limits.memory $limit) }}
+{{- end }}
 {{- end }}
 {{- end }}
 
@@ -145,6 +234,17 @@ process kill itself mid-generation while the grace period still looked generous.
 {{- if .Values.ingress.enabled }}
 {{- if not .Values.ingress.host }}
 {{- fail "easyp-service: ingress.enabled requires ingress.host." }}
+{{- end }}
+{{/*
+Refused rather than warned about, because the failure it prevents is silent.
+Behind an ingress every request reaches the pod from the controller's address,
+so without trusted proxies configured the rate limit and the per-caller
+concurrency limit collapse into a single bucket shared by every client, and the
+audit log attributes every action to the ingress. The install succeeds, the pod
+runs, and nothing says otherwise.
+*/}}
+{{- if not .Values.config.server.trustedProxies }}
+{{- fail "easyp-service: ingress.enabled requires config.server.trustedProxies. Behind a proxy every caller arrives from the proxy's address, so with this empty the rate limit and per-client concurrency limit apply to all callers combined, and the audit log records the ingress rather than who acted. Set it to the CIDR your ingress controller's pods run in." }}
 {{- end }}
 {{- if and .Values.tls.enabled .Values.ingress.serversTransport.enabled }}
 {{- if and (not .Values.ingress.serversTransport.clientSecret) (not .Values.certManager.clientCertificate.enabled) }}

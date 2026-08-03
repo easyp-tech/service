@@ -95,6 +95,7 @@ func TestReflectionIsNotRegistered(t *testing.T) {
 		insecure.NewCredentials(),
 		nil,
 		nil,
+		grpchelper.ServerOptions{},
 	)
 	defer srv.Stop()
 
@@ -125,6 +126,7 @@ func callHealth(t *testing.T, extra []grpc.UnaryServerInterceptor) codes.Code {
 		insecure.NewCredentials(),
 		extra,
 		nil,
+		grpchelper.ServerOptions{},
 	)
 	healthSrv.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 

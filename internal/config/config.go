@@ -4,8 +4,11 @@ package config
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
+	"net/netip"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -35,6 +38,58 @@ type Server struct {
 	// service has already accepted, or every rolling deploy severs work in
 	// progress; Validate enforces that against worker_pool.generation_timeout.
 	ForceShutdownAfter time.Duration `env:"FORCE_SHUTDOWN_AFTER,default=150s" yaml:"force_shutdown_after"`
+
+	// TrustedProxies lists the CIDRs whose X-Forwarded-For and X-Real-IP
+	// headers may be believed. Anything else is taken at its connecting
+	// address, so a header from an untrusted source cannot forge a caller.
+	//
+	// Empty means the TCP peer is the client. That is right for a listener
+	// clients reach directly and wrong behind a proxy, where every caller
+	// arrives from the proxy's address: rate limits and the per-caller
+	// concurrency limit collapse into a single bucket shared by the world, and
+	// the audit log records the proxy instead of who acted. Set this to the
+	// range your ingress runs in.
+	TrustedProxies []string `env:"TRUSTED_PROXIES" yaml:"trusted_proxies"`
+
+	// MaxRecvMsgSize and MaxSendMsgSize bound one gRPC message in each
+	// direction. They are set explicitly because gRPC's own defaults do not fit
+	// this service: 4 MiB received, which a request carrying a large proto tree
+	// exceeds, and effectively unlimited sent, which lets a plugin's output
+	// leave without anything having agreed to its size.
+	//
+	// MaxSendMsgSize must be at least registry.max_output_size, otherwise the
+	// output a plugin is permitted to produce cannot be delivered; Validate
+	// enforces it.
+	MaxRecvMsgSize int `env:"MAX_RECV_MSG_SIZE,default=67108864" yaml:"max_recv_msg_size"`
+	MaxSendMsgSize int `env:"MAX_SEND_MSG_SIZE,default=67108864" yaml:"max_send_msg_size"`
+
+	// MaxConcurrentStreams bounds concurrent streams on one connection. gRPC
+	// defaults to math.MaxUint32, so a single caller could open streams until
+	// the process ran out of memory — each costs goroutines and buffers before
+	// any limiter in the chain sees the request.
+	MaxConcurrentStreams uint32 `env:"MAX_CONCURRENT_STREAMS,default=256" yaml:"max_concurrent_streams"`
+}
+
+// TrustedProxyPrefixes parses TrustedProxies. Validate has already rejected
+// anything unparseable, so a bad entry here cannot reach a running server.
+func (s Server) TrustedProxyPrefixes() ([]netip.Prefix, error) {
+	prefixes := make([]netip.Prefix, 0, len(s.TrustedProxies))
+
+	for _, raw := range s.TrustedProxies {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+
+		prefix, err := netip.ParsePrefix(trimmed)
+		if err != nil {
+			return nil, fmt.Errorf("server.trusted_proxies: %q is not a CIDR: %w", trimmed, err)
+		}
+
+		prefixes = append(prefixes, prefix)
+	}
+
+	return prefixes, nil
 }
 
 // TLSConfig configures transport security for the gRPC server.
@@ -151,12 +206,64 @@ type LicenseConfig struct {
 	File string `env:"FILE" yaml:"file"`
 
 	// PublicKey is the hex-encoded Ed25519 key that licence tokens are verified
-	// against. Note that this makes the trust anchor configuration rather than a
-	// property of the build: whoever can edit this file — or set
-	// LICENSE_PUBLIC_KEY — decides which authority may issue licences.
+	// against, for installations that trust a single key. Note that this makes
+	// the trust anchor configuration rather than a property of the build:
+	// whoever can edit this file — or set LICENSE_PUBLIC_KEY — decides which
+	// authority may issue licences.
+	//
+	// It applies to any token whose key id names nothing in PublicKeys.
 	PublicKey string `env:"PUBLIC_KEY" yaml:"public_key"`
 
+	// PublicKeys maps key id to hex-encoded Ed25519 public key. The key id in
+	// the token footer selects one of these, which is what lets a signing key be
+	// rotated without every deployment having to change key on the same day.
+	//
+	// Through the environment: LICENSE_PUBLIC_KEYS="<kid>:<hex>,<kid>:<hex>".
+	PublicKeys map[string]string `env:"PUBLIC_KEYS" yaml:"public_keys"`
+
 	CacheTTL time.Duration `env:"CACHE_TTL" yaml:"cache_ttl"`
+}
+
+// hexEd25519KeyLength is the length of a hex-encoded Ed25519 public key.
+const hexEd25519KeyLength = 64
+
+// Validate reports configuration that could only be a mistake: a key that
+// cannot be a key, or a key id that would not survive being written to an
+// environment variable.
+func (c LicenseConfig) Validate() error {
+	for kid, hexKey := range c.PublicKeys {
+		if kid == "" {
+			return fmt.Errorf("license.public_keys: key id must not be empty")
+		}
+
+		if strings.ContainsAny(kid, ",:") {
+			return fmt.Errorf("license.public_keys: key id %q must not contain ',' or ':'", kid)
+		}
+
+		if err := validateHexKey(fmt.Sprintf("license.public_keys[%s]", kid), hexKey); err != nil {
+			return err
+		}
+	}
+
+	if c.PublicKey != "" {
+		return validateHexKey("license.public_key", c.PublicKey)
+	}
+
+	return nil
+}
+
+func validateHexKey(name, hexKey string) error {
+	trimmed := strings.TrimSpace(hexKey)
+
+	if len(trimmed) != hexEd25519KeyLength {
+		return fmt.Errorf("%s: expected %d hex characters, got %d", name, hexEd25519KeyLength, len(trimmed))
+	}
+
+	if _, err := hex.DecodeString(trimmed); err != nil {
+		return fmt.Errorf("%s: not valid hex: %w", name, err)
+	}
+
+	return nil
 }
 
 // RateLimitConfig configures per-IP rate limiting.
@@ -207,6 +314,25 @@ func (c *Config) Validate() error {
 
 	if c.Server.TLS.ClientCAFile != "" && !c.Server.TLS.Enabled() {
 		return fmt.Errorf("server.tls.client_ca_file requires server.tls.cert_file and server.tls.key_file")
+	}
+
+	// Rejected at startup rather than skipped. A CIDR with a typo in it would
+	// otherwise leave the list effectively empty, which is exactly the
+	// misconfiguration this setting exists to prevent — and it would look like
+	// it had been configured.
+	if _, err := c.Server.TrustedProxyPrefixes(); err != nil {
+		return err
+	}
+
+	// A send limit below what a plugin may produce is a request that does all
+	// its work and then cannot be answered. Better to refuse the combination at
+	// startup than to discover it on the first large generation.
+	if int64(c.Server.MaxSendMsgSize) < c.Registry.MaxOutputSize {
+		return fmt.Errorf(
+			"server.max_send_msg_size (%d) must be at least registry.max_output_size (%d), "+
+				"otherwise a plugin's permitted output cannot be delivered",
+			c.Server.MaxSendMsgSize, c.Registry.MaxOutputSize,
+		)
 	}
 
 	if c.DB.Driver == "" {
@@ -266,6 +392,10 @@ func (c *Config) Validate() error {
 	}
 
 	if err := c.Auth.Validate(); err != nil {
+		return err
+	}
+
+	if err := c.License.Validate(); err != nil {
 		return err
 	}
 

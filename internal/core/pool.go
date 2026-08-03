@@ -17,6 +17,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/semaphore"
 	"google.golang.org/protobuf/types/pluginpb"
+
+	"github.com/easyp-tech/service/internal/safe"
 )
 
 const (
@@ -68,6 +70,7 @@ type WorkerPool struct {
 	rejectedTotal prometheus.Counter
 	jobsTotal     prometheus.Counter
 	tracer        trace.Tracer
+	guard         *safe.Guard
 
 	// gen ограничивает одновременный запуск процессов плагинов. Воркеры для
 	// этого не годятся: воркер освобождается, отдав plugin в канал, а Generate
@@ -163,6 +166,7 @@ func NewWorkerPool(
 		jobsTotal:     jobsTotal,
 		tracer:        otel.Tracer("pool"),
 		gen:           newGenLimiter(cfg, reg, namespace),
+		guard:         safe.NewGuard(reg, namespace),
 	}
 }
 
@@ -247,28 +251,61 @@ func (p *WorkerPool) worker(ctx context.Context) { //nolint:funcorder // worker 
 	}
 }
 
+// processJob resolves one plugin and answers the caller waiting on work.result.
+//
+// The panic barrier sits here rather than around the worker loop on purpose.
+// Recovering in worker would end that goroutine, so the pool would quietly shed
+// one worker per panic until it had none left — a process that is alive and
+// answers nothing, which takes far longer to diagnose than the crash it
+// replaced. Recovering per job leaves the worker free to take the next one.
+//
+// Locating a plugin means a database read, a download from object storage and a
+// tar extraction, all driven by an artifact somebody else built. This is the
+// path a malformed archive takes, and until this barrier existed it took the
+// whole process down with it.
 func (p *WorkerPool) processJob(_ context.Context, work job) { //nolint:funcorder,lll // worker and processJob are implementation details of the pool
 	p.activeWorkers.Inc()
 	defer p.activeWorkers.Dec()
 
-	pyroscope.TagWrapper(work.ctx, pyroscope.Labels("operation", "worker.process_job"), func(ctx context.Context) {
-		plugin, err := p.inner.Get(ctx, work.pluginGroup, work.pluginName, work.pluginVersion)
-		if err != nil {
-			work.result <- jobResult{err: err}
-
+	// answered guards against replying twice: the happy path already sent, and
+	// a panic after that must not send again. The channel is buffered for one.
+	answered := false
+	answer := func(res jobResult) {
+		if answered {
 			return
 		}
 
-		wrapped := &poolPlugin{
-			inner:   plugin,
-			cfg:     p.cfg,
-			logger:  p.logger,
-			metrics: p.metrics,
-			gen:     p.gen,
-		}
+		answered = true
+		work.result <- res
+	}
 
-		work.result <- jobResult{plugin: wrapped}
+	panicked := p.guard.Do(work.ctx, "worker.process_job", func() {
+		pyroscope.TagWrapper(work.ctx, pyroscope.Labels("operation", "worker.process_job"), func(ctx context.Context) {
+			plugin, err := p.inner.Get(ctx, work.pluginGroup, work.pluginName, work.pluginVersion)
+			if err != nil {
+				answer(jobResult{err: err})
+
+				return
+			}
+
+			wrapped := &poolPlugin{
+				inner:   plugin,
+				cfg:     p.cfg,
+				logger:  p.logger,
+				metrics: p.metrics,
+				gen:     p.gen,
+			}
+
+			answer(jobResult{plugin: wrapped})
+		})
 	})
+
+	// Without this the caller waits out its whole request deadline for a reply
+	// that is never coming, so a panic would present as a timeout rather than
+	// as the failure it is.
+	if panicked {
+		answer(jobResult{err: ErrGenerationFailed})
+	}
 }
 
 // Get создаёт задание и отправляет его в очередь с backpressure.

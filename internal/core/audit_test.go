@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -47,6 +48,43 @@ func (s *fakeSink) skippedCount() int {
 
 	return s.skipped
 }
+
+// countingMetrics records IncOperation calls so a test can assert on what the
+// service counted. The other methods are unused here.
+//
+// Core takes metrics as a required dependency — Generate dereferences it without
+// a guard — so tests pass this rather than nil.
+type countingMetrics struct {
+	mu  sync.Mutex
+	ops []operationCount
+}
+
+type operationCount struct {
+	operation string
+	status    string
+}
+
+func (m *countingMetrics) IncOperation(_ context.Context, operation, status string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.ops = append(m.ops, operationCount{operation: operation, status: status})
+}
+
+func (m *countingMetrics) recorded() []operationCount {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := make([]operationCount, len(m.ops))
+	copy(out, m.ops)
+
+	return out
+}
+
+func (*countingMetrics) GenerateCode(context.Context, PluginInfo) error                   { return nil }
+func (*countingMetrics) ObserveGenerationDuration(context.Context, string, time.Duration) {}
+func (*countingMetrics) IncGenerationErrors(context.Context, string, string)              {}
+func (*countingMetrics) IncGenerationRetries(context.Context, string)                     {}
 
 // fakeGate is an in-memory FeatureGate whose enabled set is fixed per test.
 type fakeGate struct {
@@ -119,7 +157,7 @@ func TestAuditIsGatedByLicense(t *testing.T) {
 			t.Parallel()
 
 			sink := &fakeSink{}
-			module := New(nil, failingRegistry{}, tt.gate, sink, testLogger())
+			module := New(&countingMetrics{}, failingRegistry{}, tt.gate, sink, testLogger())
 
 			_, err := module.ListPlugins(t.Context(), PluginFilter{})
 			require.Error(t, err)
@@ -136,7 +174,7 @@ func TestAuditErrorEntryCarriesErrorCode(t *testing.T) {
 	t.Parallel()
 
 	sink := &fakeSink{}
-	module := New(nil, failingRegistry{}, enterpriseGate(), sink, testLogger())
+	module := New(&countingMetrics{}, failingRegistry{}, enterpriseGate(), sink, testLogger())
 
 	_, err := module.ListPlugins(t.Context(), PluginFilter{})
 	require.Error(t, err)
@@ -182,7 +220,7 @@ func TestAuditRecordsActor(t *testing.T) {
 			}
 
 			sink := &fakeSink{}
-			module := New(nil, failingRegistry{}, enterpriseGate(), sink, testLogger())
+			module := New(&countingMetrics{}, failingRegistry{}, enterpriseGate(), sink, testLogger())
 
 			_, err := module.ListPlugins(ctx, PluginFilter{})
 			require.Error(t, err)

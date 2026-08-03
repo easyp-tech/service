@@ -31,6 +31,7 @@ import (
 	"github.com/easyp-tech/service/internal/database"
 	"github.com/easyp-tech/service/internal/monitor"
 	"github.com/easyp-tech/service/internal/plugarchive"
+	"github.com/easyp-tech/service/internal/safe"
 )
 
 const (
@@ -73,6 +74,7 @@ type (
 		storage       core.BinaryStorage
 		downloads     singleflight.Group
 		cache         *pluginCache
+		guard         *safe.Guard
 	}
 
 	// plugin is a plugin in the registry.
@@ -87,6 +89,7 @@ type (
 
 		maxOutputSize int64        `db:"-"`
 		pluginConfig  PluginConfig `db:"-"`
+		guard         *safe.Guard  `db:"-"`
 	}
 )
 
@@ -142,6 +145,8 @@ func New(
 		return nil, ErrEmptyPluginsDir
 	}
 
+	guard := safe.NewGuard(cacheOpts.Registry, cacheOpts.Namespace)
+
 	var cache *pluginCache
 
 	// Eviction only makes sense with object storage behind it: without one the
@@ -150,8 +155,11 @@ func New(
 	if bStorage != nil {
 		cache = newPluginCache(pluginsDir, cacheOpts)
 		// Scanning an existing cache walks every unpacked file, so it runs in the
-		// background rather than delaying readiness.
-		go cache.warm(ctx)
+		// background rather than delaying readiness. It reads whatever is on the
+		// volume, including whatever a previous run left half-written, so it goes
+		// behind the barrier: a panic here would otherwise end the process during
+		// startup, before anything had a chance to serve.
+		guard.Go(ctx, "plugin_cache.warm", func() { cache.warm(ctx) })
 	}
 
 	return &Registry{
@@ -160,6 +168,7 @@ func New(
 		maxOutputSize: maxOutputSize,
 		storage:       bStorage,
 		cache:         cache,
+		guard:         guard,
 	}, nil
 }
 
@@ -201,6 +210,7 @@ func (r *Registry) Get(ctx context.Context, pluginGroup, pluginName, pluginVersi
 	}
 
 	dbFormat.maxOutputSize = r.maxOutputSize
+	dbFormat.guard = r.guard
 
 	return &dbFormat, nil
 }
@@ -315,7 +325,15 @@ func (r *Registry) Health(ctx context.Context) error {
 func (r *Registry) DB() *database.SQL { return r.db }
 
 // readPipes reads stdout and stderr in parallel up to limits and returns data.
-func readPipes(stdout io.Reader, stderr io.Reader, maxStdout int64) ([]byte, []byte, error) {
+//
+// Both readers sit behind the panic barrier, and `defer wg.Done()` is the
+// outermost defer in each so that it runs whatever happens. Get that wrong and a
+// panic here stops being a crash and becomes a hang: wg.Wait would never return
+// and the generation would occupy its slot until the request deadline, which is
+// a worse failure than the one being fixed.
+func readPipes(
+	ctx context.Context, guard *safe.Guard, stdout io.Reader, stderr io.Reader, maxStdout int64,
+) ([]byte, []byte, error) {
 	var stdoutData, stderrData []byte
 	var stdoutErr, stderrErr error
 
@@ -325,15 +343,19 @@ func readPipes(stdout io.Reader, stderr io.Reader, maxStdout int64) ([]byte, []b
 	go func() {
 		defer wg.Done()
 
-		lr := io.LimitReader(stdout, maxStdout+1)
-		stdoutData, stdoutErr = io.ReadAll(lr)
+		guard.Do(ctx, "plugin.read_stdout", func() {
+			lr := io.LimitReader(stdout, maxStdout+1)
+			stdoutData, stdoutErr = io.ReadAll(lr)
+		})
 	}()
 
 	go func() {
 		defer wg.Done()
 
-		lr := io.LimitReader(stderr, stderrLimit)
-		stderrData, stderrErr = io.ReadAll(lr)
+		guard.Do(ctx, "plugin.read_stderr", func() {
+			lr := io.LimitReader(stderr, stderrLimit)
+			stderrData, stderrErr = io.ReadAll(lr)
+		})
 	}()
 
 	wg.Wait()
@@ -418,7 +440,7 @@ func (p *plugin) Generate(ctx context.Context, req *pluginpb.CodeGeneratorReques
 	doneChan := make(chan struct{})
 	defer close(doneChan)
 
-	go func() {
+	p.guard.Go(ctx, "plugin.kill_process_group", func() {
 		select {
 		case <-ctx.Done():
 			if cmd.Process != nil {
@@ -427,10 +449,10 @@ func (p *plugin) Generate(ctx context.Context, req *pluginpb.CodeGeneratorReques
 			}
 		case <-doneChan:
 		}
-	}()
+	})
 
 	// Read outputs concurrently with size limits.
-	stdoutData, stderrData, readErr := readPipes(stdoutPipe, stderrPipe, p.maxOutputSize)
+	stdoutData, stderrData, readErr := readPipes(ctx, p.guard, stdoutPipe, stderrPipe, p.maxOutputSize)
 	if readErr != nil {
 		return nil, readErr
 	}

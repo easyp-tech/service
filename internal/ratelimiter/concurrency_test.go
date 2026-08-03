@@ -23,7 +23,7 @@ func keyFor(client string) ratelimiter.KeyExtractor {
 }
 
 func newLimiter(limit int, key ratelimiter.KeyExtractor) *ratelimiter.ConcurrencyLimiter {
-	return ratelimiter.NewConcurrencyLimiter(limit, nil, key, slog.New(slog.DiscardHandler), nil)
+	return ratelimiter.NewConcurrencyLimiter(limit, nil, key, slog.New(slog.DiscardHandler), nil, "easyp")
 }
 
 func streamInfo() *grpc.StreamServerInfo {
@@ -103,7 +103,7 @@ func TestConcurrencyIsPerClient(t *testing.T) {
 	limiter := ratelimiter.NewConcurrencyLimiter(
 		1, nil,
 		func(context.Context) string { return client },
-		slog.New(slog.DiscardHandler), nil,
+		slog.New(slog.DiscardHandler), nil, "easyp",
 	)
 	interceptor := limiter.UnaryServerInterceptor()
 

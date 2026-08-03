@@ -41,6 +41,7 @@ worker_pool:
 license:
   key: ""
   file: ""
+  public_keys: {}
   public_key: ""
   cache_ttl: 5m
 rate_limit:

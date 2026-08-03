@@ -9,6 +9,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/easyp-tech/service/internal/core"
+	"github.com/easyp-tech/service/internal/safe"
 )
 
 const defaultCacheTTL = 5 * time.Minute
@@ -28,6 +29,7 @@ type Manager struct {
 	cfg     Config
 	logger  *slog.Logger
 	metrics *Metrics
+	guard   *safe.Guard
 }
 
 // NewManager creates a Manager backed by the given LicenseClient.
@@ -52,6 +54,7 @@ func NewManager(
 		cfg:     cfg,
 		logger:  logger,
 		metrics: metrics,
+		guard:   safe.NewGuard(reg, namespace),
 	}
 
 	if lm.cfg.CacheTTL <= 0 {
@@ -82,7 +85,11 @@ func (lm *Manager) StartRefreshWatcher(ctx context.Context) {
 		for {
 			select {
 			case <-ticker.C:
-				lm.refresh(ctx)
+				// Вокруг одного обновления, а не вокруг цикла: паника снаружи
+				// оставила бы процесс живым и навсегда с устаревшей лицензией —
+				// то есть после истечения срока установка молча свалилась бы в
+				// community, а метрика срока замерла бы на старом значении.
+				lm.guard.Do(ctx, "license.refresh", func() { lm.refresh(ctx) })
 			case <-ctx.Done():
 				return
 			}
@@ -100,31 +107,35 @@ func (lm *Manager) Metrics() *Metrics {
 func (lm *Manager) refresh(ctx context.Context) {
 	claims, err := lm.client.ValidateLicense(ctx)
 	if err != nil {
+		// Deliberately does not touch the gauges: the previous claims are still
+		// what the service is enforcing, so the metrics should keep describing
+		// them rather than report a state nothing is acting on.
 		lm.logger.Warn("failed to validate license, keeping previous claims", "error", err)
-		lm.updateMetrics(false)
 
 		return
 	}
 
 	lm.mu.Lock()
+	changed := lm.claims.Tier != claims.Tier ||
+		lm.claims.MaxWorkers != claims.MaxWorkers ||
+		lm.claims.MaxPlugins != claims.MaxPlugins ||
+		len(lm.claims.Features) != len(claims.Features)
 	lm.claims = claims
 	lm.mu.Unlock()
 
-	lm.logger.Info("license refreshed",
+	// Once every CacheTTL, indefinitely. At Info this buries the one event worth
+	// seeing — the moment the tier actually changes — under identical lines.
+	level := slog.LevelDebug
+	if changed {
+		level = slog.LevelInfo
+	}
+
+	lm.logger.Log(ctx, level, "license refreshed",
 		"tier", claims.Tier,
 		"max_workers", claims.MaxWorkers,
 		"max_plugins", claims.MaxPlugins,
 		"features_count", len(claims.Features),
 	)
 
-	lm.updateMetrics(true)
-}
-
-// updateMetrics sets the Prometheus license validity gauge.
-func (lm *Manager) updateMetrics(valid bool) {
-	if valid {
-		lm.metrics.valid.Set(1)
-	} else {
-		lm.metrics.valid.Set(0)
-	}
+	lm.metrics.observe(claims)
 }

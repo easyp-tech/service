@@ -9,6 +9,23 @@ server:
   # worker_pool.generation_timeout, otherwise a rolling deploy severs work the
   # service already accepted; startup refuses a shorter value.
   force_shutdown_after: 150s
+  # CIDRs whose X-Forwarded-For and X-Real-IP headers may be believed. Empty
+  # means the connecting address is the caller, which is right for a listener
+  # clients reach directly and wrong behind a proxy: there every request arrives
+  # from the proxy, so the rate limit and the per-caller concurrency limit apply
+  # to everyone combined and the audit log names the proxy rather than who acted.
+  trusted_proxies: []
+  # Largest single gRPC message in each direction. gRPC's own defaults are 4 MiB
+  # inbound — smaller than a request carrying a large proto tree — and
+  # effectively unlimited outbound. max_send_msg_size must cover
+  # registry.max_output_size, or a plugin's permitted output cannot be
+  # delivered; startup refuses the combination.
+  max_recv_msg_size: 67108864
+  max_send_msg_size: 67108864
+  # Concurrent streams one connection may hold. gRPC defaults to unlimited, so a
+  # single caller could allocate goroutines and buffers until the process ran out
+  # of memory, before any limiter in the chain saw the requests.
+  max_concurrent_streams: 256
   # Transport security for the gRPC listener. Leaving cert_file empty serves
   # plaintext, which the service logs a warning about on every start.
   # client_ca_file turns the listener into mutual TLS: only certificates signed
@@ -46,17 +63,23 @@ worker_pool:
   generation_timeout: 120s
   max_retries: 3
   shutdown_timeout: 30s
-# Enterprise needs both a token and the public key it is verified against.
-# Without them the service runs in community mode: no audit, at most 4 workers
-# and 10 registered plugins. Empty fields fall back to the LICENSE_KEY and
-# LICENSE_PUBLIC_KEY environment variables, which is how docker-compose passes
-# them. Note that keeping the public key here makes the trust anchor editable:
-# whoever can change this file decides which authority may issue licences.
+# Enterprise needs both a token and a public key to verify it against. Without
+# them the service runs in community mode: no audit, at most 4 workers and 10
+# registered plugins. Empty fields fall back to the LICENSE_KEY,
+# LICENSE_PUBLIC_KEYS and LICENSE_PUBLIC_KEY environment variables, which is how
+# docker-compose passes them. Note that keeping the public key here makes the
+# trust anchor editable: whoever can change this file decides which authority may
+# issue licences.
 license:
-  key: ""         # inline PASETO token (takes priority over file)
-  file: ""        # path to a file holding the token
-  public_key: ""  # hex-encoded Ed25519 verification key
-  cache_ttl: 5m   # how often the token is re-validated
+  key: ""          # inline PASETO token (takes priority over file)
+  file: ""         # path to a file holding the token
+  # Key id -> hex-encoded Ed25519 verification key. The key id in the token
+  # footer picks one. Two entries at once is how a signing key gets rotated
+  # without every deployment having to change key on the same day.
+  public_keys: {}
+  # Single verification key, used for tokens whose key id matches nothing above.
+  public_key: ""
+  cache_ttl: 5m    # how often the token is re-validated
 rate_limit:
   requests_per_second: 10.0  # token refill rate (tokens/sec)
   burst: 20                   # max tokens (burst size)

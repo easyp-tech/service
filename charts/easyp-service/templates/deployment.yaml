@@ -14,6 +14,19 @@ metadata:
   {{- end }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  {{- if and .Values.persistence.enabled (ne .Values.persistence.accessMode "ReadWriteMany") }}
+  # Recreate, because a ReadWriteOnce volume can be attached to one node at a
+  # time. A rolling update starts the replacement pod before retiring the old
+  # one, and if the scheduler picks a different node that pod waits on a
+  # Multi-Attach error forever — the rollout never completes and never fails.
+  # The choice is not between downtime and none; it is between a short gap and
+  # a stuck upgrade. Give the pod a ReadWriteMany volume to roll instead.
+  strategy:
+    type: Recreate
+  {{- else }}
+  strategy:
+    type: RollingUpdate
+  {{- end }}
   selector:
     matchLabels:
       {{- include "easyp-service.selectorLabels" . | nindent 6 }}
@@ -82,6 +95,19 @@ spec:
               value: "{{ .Values.ports.mcp | int }}"
             - name: SERVER_FORCE_SHUTDOWN_AFTER
               value: "{{ .Values.config.forceShutdownAfterSeconds }}s"
+            {{- with .Values.config.server.trustedProxies }}
+            - name: SERVER_TRUSTED_PROXIES
+              value: {{ join "," . | quote }}
+            {{- end }}
+            # int64 on purpose: Helm parses YAML numbers as float64, so a large
+            # byte count rendered through quote alone comes out in scientific
+            # notation and the service refuses to start on it.
+            - name: SERVER_MAX_RECV_MSG_SIZE
+              value: "{{ .Values.config.server.maxRecvMsgSize | int64 }}"
+            - name: SERVER_MAX_SEND_MSG_SIZE
+              value: "{{ .Values.config.server.maxSendMsgSize | int64 }}"
+            - name: SERVER_MAX_CONCURRENT_STREAMS
+              value: "{{ .Values.config.server.maxConcurrentStreams | int }}"
             {{- if .Values.tls.enabled }}
             - name: SERVER_TLS_CERT_FILE
               value: "{{ .Values.tls.mountPath }}/server/tls.crt"
@@ -164,6 +190,13 @@ spec:
             {{- if .Values.config.telemetry.pyroscopeEndpoint }}
             - name: TELEMETRY_PYROSCOPE_ENDPOINT
               value: {{ .Values.config.telemetry.pyroscopeEndpoint | quote }}
+            {{- end }}
+            {{- if .Values.config.license.publicKeys }}
+            # The keys licence tokens are verified against. Public halves only —
+            # this is what the token is checked with, not what signs it. The
+            # token itself is a secret and arrives through envFrom.
+            - name: LICENSE_PUBLIC_KEYS
+              value: {{ include "easyp-service.licensePublicKeys" . | quote }}
             {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}

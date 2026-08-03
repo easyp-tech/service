@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/easyp-tech/service/internal/core"
+	"github.com/easyp-tech/service/internal/safe"
 )
 
 // Loss reasons reported through the audit_events_lost_total counter.
@@ -71,6 +72,7 @@ type Worker struct {
 	saveFailures  prometheus.Counter
 	batchSize     prometheus.Histogram
 
+	guard  *safe.Guard
 	tracer trace.Tracer
 }
 
@@ -138,6 +140,7 @@ func NewWorker(
 		eventsSkipped: eventsSkipped,
 		saveFailures:  saveFailures,
 		batchSize:     batchSize,
+		guard:         safe.NewGuard(reg, namespace),
 		tracer:        otel.Tracer("audit"),
 	}
 }
@@ -199,21 +202,38 @@ func (w *Worker) Run(ctx context.Context) {
 // flush writes the accumulated batch and clears it. The batch is cleared
 // whether or not the write succeeded — a batch that survived its retries is
 // unrecoverable and must not block the ones behind it.
+//
+// The barrier is here, around the write, rather than around Run: a panic caught
+// outside the loop would leave the process running with audit silently switched
+// off, and audit is an Enterprise commitment, so stopping quietly is the one
+// outcome that must not happen.
+//
+// Placing it here is also what keeps a failed batch from repeating. Were the
+// barrier outside flush, a panic would skip the clearing below and hand the same
+// entries to the next tick, and the one after — an endless panic loop that never
+// drains the queue. Clearing is deferred so that stays true if the barrier ever
+// moves.
 func (w *Worker) flush(ctx context.Context) { //nolint:funcorder // flush is a helper called by Run above it
 	if len(w.batch) == 0 {
 		return
 	}
 
-	err := w.saveWithRetry(ctx, w.batch)
-	if err != nil {
-		w.eventsLost.WithLabelValues(reasonSaveFailed).Add(float64(len(w.batch)))
-		w.logger.Error("audit batch lost", "error", err, "count", len(w.batch))
-	} else {
-		w.batchSize.Observe(float64(len(w.batch)))
-	}
+	defer func() {
+		w.batch = w.batch[:0]
+		w.pending.Store(0)
+	}()
 
-	w.batch = w.batch[:0]
-	w.pending.Store(0)
+	w.guard.Do(ctx, "audit.flush", func() {
+		err := w.saveWithRetry(ctx, w.batch)
+		if err != nil {
+			w.eventsLost.WithLabelValues(reasonSaveFailed).Add(float64(len(w.batch)))
+			w.logger.Error("audit batch lost", "error", err, "count", len(w.batch))
+
+			return
+		}
+
+		w.batchSize.Observe(float64(len(w.batch)))
+	})
 }
 
 // saveWithRetry writes a batch, retrying transient failures with exponential

@@ -30,26 +30,22 @@ var (
 type Feature int
 
 const (
-	FeatureCodeGeneration  Feature = iota // Базовая генерация кода
-	FeaturePluginListing                  // Листинг плагинов
-	FeatureMCPServerTools                 // MCP server tools
-	FeatureRateLimiting                   // Rate limiting
-	FeaturePluginCRUD                     // CRUD операции с плагинами
-	FeatureMultiTenancy                   // Мультитенантность (Enterprise)
-	FeatureResponseCaching                // Кэширование ответов (Enterprise)
-	FeatureAudit                          // Аудит (Enterprise)
+	FeatureCodeGeneration Feature = iota // Базовая генерация кода
+	FeaturePluginListing                 // Листинг плагинов
+	FeatureMCPServerTools                // MCP server tools
+	FeatureRateLimiting                  // Rate limiting
+	FeaturePluginCRUD                    // CRUD операции с плагинами
+	FeatureAudit                         // Аудит (Enterprise)
 )
 
 // featureNames содержит строковые представления Feature для метрик и логирования.
 var featureNames = [...]string{
-	FeatureCodeGeneration:  "code_generation",
-	FeaturePluginListing:   "plugin_listing",
-	FeatureMCPServerTools:  "mcp_server_tools",
-	FeatureRateLimiting:    "rate_limiting",
-	FeaturePluginCRUD:      "plugin_crud",
-	FeatureMultiTenancy:    "multi_tenancy",
-	FeatureResponseCaching: "response_caching",
-	FeatureAudit:           "audit",
+	FeatureCodeGeneration: "code_generation",
+	FeaturePluginListing:  "plugin_listing",
+	FeatureMCPServerTools: "mcp_server_tools",
+	FeatureRateLimiting:   "rate_limiting",
+	FeaturePluginCRUD:     "plugin_crud",
+	FeatureAudit:          "audit",
 }
 
 // String возвращает строковое представление Feature для метрик и логирования.
@@ -88,6 +84,16 @@ type (
 		IncGenerationErrors(ctx context.Context, pluginName string, errorType string)
 		// IncGenerationRetries increments the generation retry counter.
 		IncGenerationRetries(ctx context.Context, pluginName string)
+		// IncOperation counts one completed operation by type and outcome.
+		//
+		// This is what the service did, not what reached the audit log: it is
+		// recorded for every tier, including community, where audit is switched
+		// off. How often generation fails is not a licensed feature.
+		//
+		// Both arguments are constants from this package — the Operation* and
+		// AuditStatus* values above — so the label set stays bounded. Passing
+		// anything derived from a request would make it unbounded.
+		IncOperation(ctx context.Context, operation, status string)
 	}
 
 	// Registry provides access to available plugins.
@@ -228,6 +234,15 @@ type (
 		MaxWorkers int
 		// MaxPlugins is the maximum number of registered plugins; -1 means unlimited.
 		MaxPlugins int
+		// ExpiresAt is when the licence stops being valid, zero in community mode.
+		// Carried out of verification so that it can be exported as a metric: a
+		// licence lapsing unnoticed downgrades the whole installation, and that
+		// is worth alerting on well before it happens.
+		ExpiresAt time.Time
+		// InGrace reports that the licence has expired and the service is running
+		// on the grace period the token granted. It is a distinct state from both
+		// "valid" and "expired", and the only one with a deadline attached.
+		InGrace bool
 	}
 
 	// LicenseClient is the interface for communicating with the license server.
@@ -259,6 +274,10 @@ const (
 
 	communityMaxWorkers = 4
 	communityMaxPlugins = 10
+
+	// LicenseUnlimited is what MaxWorkers and MaxPlugins hold when the licence
+	// imposes no ceiling of its own.
+	LicenseUnlimited = -1
 )
 
 // CommunityLicenseClaims returns the default LicenseClaims used in community mode
@@ -272,10 +291,39 @@ func CommunityLicenseClaims() LicenseClaims {
 		FeaturePluginCRUD,
 	}
 
+	// ExpiresAt stays zero: a community installation has no licence to expire,
+	// and exporting a zero timestamp is what tells the alert rule to stay quiet.
 	return LicenseClaims{
 		Tier:       LicenseTierCommunity,
 		Features:   communityFeatures,
 		MaxWorkers: communityMaxWorkers,
 		MaxPlugins: communityMaxPlugins,
+	}
+}
+
+// EnterpriseLicenseClaims returns the LicenseClaims a valid Enterprise token
+// grants, for a token expiring at expiresAt. inGrace says whether that moment
+// has already passed and the service is running on the grace period.
+//
+// The token names a tier and nothing else: which features that tier unlocks is
+// decided here, in the release, so that changing the offering does not mean
+// reissuing every licence in the field.
+func EnterpriseLicenseClaims(expiresAt time.Time, inGrace bool) LicenseClaims {
+	enterpriseFeatures := []Feature{
+		FeatureCodeGeneration,
+		FeaturePluginListing,
+		FeatureMCPServerTools,
+		FeatureRateLimiting,
+		FeaturePluginCRUD,
+		FeatureAudit,
+	}
+
+	return LicenseClaims{
+		Tier:       LicenseTierEnterprise,
+		Features:   enterpriseFeatures,
+		MaxWorkers: LicenseUnlimited,
+		MaxPlugins: LicenseUnlimited,
+		ExpiresAt:  expiresAt,
+		InGrace:    inGrace,
 	}
 }
