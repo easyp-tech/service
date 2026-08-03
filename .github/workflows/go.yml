@@ -44,6 +44,91 @@ jobs:
       - name: Test
         run: go test -race ./...
 
+  tidy:
+    name: Tidy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # A dependency left in the indirect block still builds and still passes
+      # every other job here, so nothing else notices.
+      - name: Tidy
+        run: go mod tidy
+
+      - name: No pending tidy changes
+        run: git diff --exit-code go.mod go.sum
+
+  integration:
+    name: Integration
+    runs-on: ubuntu-latest
+
+    # A real database rather than a mock, because the defects these tests exist
+    # to catch — a NOT NULL column, a pool whose workers were never started —
+    # are invisible to anything that stands in for Postgres.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: easyp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test
+        env:
+          EASYP_TEST_DSN: postgres://postgres:postgres@localhost:5432/easyp?sslmode=disable
+        run: go test -tags integration -timeout 10m ./test/...
+
+  vuln:
+    name: Vulnerabilities
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The module pulls the AWS SDK, gRPC, goose and the Postgres driver. A
+      # known CVE in any of them is not something anyone will notice by reading
+      # go.sum, and this runs in seconds.
+      - name: govulncheck
+        run: |
+          go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  chart:
+    name: Chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+
+      # Templates are code nothing else compiles. These checks cover the two
+      # ways that has bitten: a value rendered in a form the service cannot
+      # parse, and a values.yaml key with no env var behind it.
+      - name: Lint and render
+        run: charts/easyp-service/tests/render.sh
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

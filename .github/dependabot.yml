@@ -1,0 +1,38 @@
+version: 2
+
+# Weekly rather than daily on purpose: a stream of individual bumps gets ignored,
+# and ignored update PRs are worse than none — they make the queue look busy
+# while nothing is actually reviewed. Minor and patch upgrades are grouped for
+# the same reason.
+
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for the routine bumps. Majors stay separate: they need reading.
+      go-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # The runtime image. A base image with a known CVE ships to every customer
+  # who pulls a release.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday

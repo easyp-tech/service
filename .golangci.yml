@@ -1,6 +1,10 @@
 version: "2"
 run:
   tests: true
+  # Without this the integration package is invisible to the linter, and code
+  # nobody lints is code that drifts.
+  build-tags:
+    - integration
 linters:
   default: all
   disable:
@@ -171,9 +175,6 @@ linters:
           - funlen
           - mnd
         path: cmd/mcp-smoke/
-      - linters:
-          - godox
-        path: internal/license/client\.go
     paths:
       - bin
       - config
