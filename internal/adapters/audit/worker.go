@@ -20,7 +20,7 @@ import (
 
 // Loss reasons reported through the audit_events_lost_total counter.
 const (
-	reasonSendCancelled   = "send_cancelled"
+	reasonEnqueueTimeout  = "enqueue_timeout"
 	reasonSaveFailed      = "save_failed"
 	reasonShutdownTimeout = "shutdown_timeout"
 )
@@ -30,6 +30,18 @@ const (
 
 	// retryBaseDelay is the first back-off step; each retry doubles it.
 	retryBaseDelay = 100 * time.Millisecond
+
+	// defaultEnqueueTimeout bounds how long a caller waits for room in the
+	// queue. A healthy worker drains at least BatchSize/FlushInterval entries a
+	// second — a hundred, at the shipped defaults — so this expires only when
+	// the queue is genuinely backed up, never in normal operation.
+	defaultEnqueueTimeout = time.Second
+
+	// defaultFlushTimeout bounds one write to storage, retries included. A
+	// batch that cannot be written inside it is lost and counted; without a
+	// bound a hung database would stall the worker and back the queue up behind
+	// it.
+	defaultFlushTimeout = 5 * time.Second
 )
 
 // ErrWorkerStopped is returned when a batch cannot be retried because the
@@ -46,9 +58,16 @@ type Config struct {
 	FlushInterval time.Duration
 	// MaxSaveRetries is how many extra attempts a failing batch gets.
 	MaxSaveRetries int
+	// EnqueueTimeout bounds how long Send waits for room in the queue before
+	// giving up on an entry. Zero selects defaultEnqueueTimeout.
+	EnqueueTimeout time.Duration
+	// FlushTimeout bounds a single write to storage. Zero selects
+	// defaultFlushTimeout.
+	FlushTimeout time.Duration
 	// ShutdownFlushTimeout bounds the final write performed after the queue
 	// closes. It must be smaller than the timeout passed to Shutdown, so the
-	// write can finish before Shutdown gives up on it.
+	// write can finish before Shutdown gives up on it. Zero selects
+	// defaultFlushTimeout.
 	ShutdownFlushTimeout time.Duration
 }
 
@@ -84,6 +103,20 @@ func NewWorker(
 	store core.AuditLog, cfg Config, logger *slog.Logger,
 	reg *prometheus.Registry, namespace string,
 ) *Worker {
+	// A zero timeout would make every context expire on creation, so an
+	// unset field has to mean "the default" rather than "no time at all".
+	if cfg.EnqueueTimeout <= 0 {
+		cfg.EnqueueTimeout = defaultEnqueueTimeout
+	}
+
+	if cfg.FlushTimeout <= 0 {
+		cfg.FlushTimeout = defaultFlushTimeout
+	}
+
+	if cfg.ShutdownFlushTimeout <= 0 {
+		cfg.ShutdownFlushTimeout = defaultFlushTimeout
+	}
+
 	ch := make(chan core.AuditEntry, cfg.BufferSize)
 
 	eventsLost := prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -121,7 +154,7 @@ func NewWorker(
 
 	// Pre-create every reason series so a zero value is visible before the
 	// first loss ever happens.
-	for _, reason := range []string{reasonSendCancelled, reasonSaveFailed, reasonShutdownTimeout} {
+	for _, reason := range []string{reasonEnqueueTimeout, reasonSaveFailed, reasonShutdownTimeout} {
 		eventsLost.WithLabelValues(reason)
 	}
 
@@ -145,14 +178,29 @@ func NewWorker(
 	}
 }
 
-// Send implements core.AuditSink. It blocks until the entry is queued or the
-// context is cancelled; a cancelled send is a lost event and is counted.
+// Send implements core.AuditSink. It blocks until the entry is queued or
+// EnqueueTimeout passes; an entry that never found room is a lost event and is
+// counted.
+//
+// The caller's cancellation is deliberately dropped. The entry is already
+// built, so queueing it needs nothing from the request, and riding the request
+// context made an entry race its own cancellation: with room in the queue both
+// select cases are ready at once and Go picks between them at random, losing
+// about half the records of any cancelled call. Graceful shutdown made that
+// systematic rather than rare — it cancels this context while handlers are
+// still running, so every rollout dropped a share of what it audited.
+//
+// Values survive WithoutCancel, so the trace and the actor still travel with
+// the entry.
 func (w *Worker) Send(ctx context.Context, entry core.AuditEntry) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), w.cfg.EnqueueTimeout)
+	defer cancel()
+
 	select {
 	case w.entries <- entry:
 	case <-ctx.Done():
-		w.eventsLost.WithLabelValues(reasonSendCancelled).Inc()
-		w.logger.Warn("audit send cancelled", "entry_id", entry.ID, "operation", entry.OperationType)
+		w.eventsLost.WithLabelValues(reasonEnqueueTimeout).Inc()
+		w.logger.Warn("audit enqueue timed out", "entry_id", entry.ID, "operation", entry.OperationType)
 	}
 }
 
@@ -166,6 +214,18 @@ func (w *Worker) Skipped() {
 func (w *Worker) Run(ctx context.Context) {
 	defer close(w.done)
 
+	// Every write runs on a context detached from the application's. The select
+	// below has no ctx.Done() case — Run ends when the queue closes, not when
+	// the context is cancelled — so ctx serves here purely as the write
+	// context, and leaving it attached meant every flush after SIGTERM reached
+	// ExecContext already cancelled and lost its whole batch. That window lasts
+	// as long as graceful shutdown does, up to the generation timeout, at one
+	// flush per FlushInterval.
+	//
+	// Each flush still gets a deadline of its own below, so detaching bounds
+	// nothing less than it did before.
+	base := context.WithoutCancel(ctx)
+
 	ticker := time.NewTicker(w.cfg.FlushInterval)
 	defer ticker.Stop()
 
@@ -173,16 +233,9 @@ func (w *Worker) Run(ctx context.Context) {
 		select {
 		case entry, ok := <-w.entries:
 			if !ok {
-				// Queue closed by Shutdown. By then the application context is
-				// usually already cancelled by the signal handler, so detach
-				// from it — otherwise the final write would fail on a cancelled
-				// context and the batch would be lost exactly when we are
-				// trying hardest to save it.
-				flushCtx, cancel := context.WithTimeout(
-					context.WithoutCancel(ctx), w.cfg.ShutdownFlushTimeout,
-				)
-				w.flush(flushCtx)
-				cancel()
+				// Queue closed by Shutdown. This last write gets its own budget:
+				// it is the one the caller is waiting on.
+				w.flushWithin(base, w.cfg.ShutdownFlushTimeout)
 
 				return
 			}
@@ -191,12 +244,25 @@ func (w *Worker) Run(ctx context.Context) {
 			w.pending.Store(int64(len(w.batch)))
 
 			if len(w.batch) >= w.cfg.BatchSize {
-				w.flush(ctx)
+				w.flushWithin(base, w.cfg.FlushTimeout)
 			}
 		case <-ticker.C:
-			w.flush(ctx)
+			w.flushWithin(base, w.cfg.FlushTimeout)
 		}
 	}
+}
+
+// flushWithin runs flush under a deadline of its own, derived from base rather
+// than from any caller's context.
+func (w *Worker) flushWithin(base context.Context, timeout time.Duration) { //nolint:funcorder // helper called by Run above it
+	if len(w.batch) == 0 {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(base, timeout)
+	defer cancel()
+
+	w.flush(ctx)
 }
 
 // flush writes the accumulated batch and clears it. The batch is cleared

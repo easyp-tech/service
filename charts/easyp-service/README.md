@@ -139,11 +139,23 @@ Plugin archives are downloaded on demand and unpacked into
 plugins are removed. Only local files go: the archive in object storage stays,
 so an evicted plugin is one download away rather than lost.
 
-`persistence.size` must exceed `cacheMaxBytes`, and the chart refuses the install
-otherwise: eviction begins at the limit, so a volume sized exactly to it is
-already full by the time the cache first needs room. A full volume fails
-generation with an I/O error that names nothing useful. The defaults leave 5 GiB
-of headroom.
+Whatever the cache is written to must exceed `cacheMaxBytes`, and the chart
+refuses the install otherwise: eviction begins at the limit, so storage sized
+exactly to it is already full by the time the cache first needs room. A full
+volume fails generation with an I/O error that names nothing useful. The
+defaults leave 5 GiB of headroom.
+
+That check applies to both storage paths — `persistence.size` with a volume,
+`persistence.ephemeralSizeLimit` without one. It once applied only to the first,
+which meant disabling persistence quietly removed the ceiling while
+`cacheMaxBytes` stayed where it was.
+
+Running without persistence needs one more number raised. An emptyDir counts
+against the pod's `resources.limits.ephemeral-storage`, so that limit and
+`ephemeralSizeLimit` sit over the same bytes and the lower one decides; the
+shipped figures assume a volume, where only logs and the writable layer are
+charged. The chart refuses the combination rather than letting the kubelet evict
+the pod well short of the limit the operator set.
 
 A plugin used within the last few minutes is never evicted, even if that means
 overshooting the limit: removing a binary out from under a running process would

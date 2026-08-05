@@ -1,5 +1,11 @@
 {{- if .Values.prometheusRule.enabled }}
 {{- $cacheLimit := .Values.config.registry.cacheMaxBytes | int64 }}
+{{/*
+Anchors are the alert name lower-cased, which is what GitHub generates for the
+headings in RUNBOOKS.md. Renaming an alert or a heading breaks the link silently,
+so the two are meant to be changed together.
+*/}}
+{{- $runbook := .Values.prometheusRule.runbookBaseUrl }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -27,6 +33,7 @@ spec:
           labels:
             severity: warning
           annotations:
+            runbook_url: "{{ $runbook }}#easyplicenceexpiringsoon"
             summary: "EasyP licence expires in under {{ .Values.prometheusRule.licenceExpiryWarningDays }} days"
             description: >-
               Renew it in the licence registry and roll out the new LICENSE_KEY.
@@ -39,6 +46,7 @@ spec:
           labels:
             severity: critical
           annotations:
+            runbook_url: "{{ $runbook }}#easyplicenceingrace"
             summary: "EasyP licence has expired and is running on its grace period"
             description: >-
               Enterprise features are still on, but only until the grace period
@@ -53,6 +61,7 @@ spec:
           labels:
             severity: warning
           annotations:
+            runbook_url: "{{ $runbook }}#easypgenerationsrejected"
             summary: "EasyP is refusing code generation requests"
             description: >-
               Clients are getting ResourceExhausted. Raise
@@ -64,6 +73,7 @@ spec:
           labels:
             severity: warning
           annotations:
+            runbook_url: "{{ $runbook }}#easypgenerationqueuesaturated"
             summary: "EasyP has had generations queued for ten minutes"
             description: >-
               Sustained queueing means the concurrency limit is the bottleneck.
@@ -78,6 +88,7 @@ spec:
           labels:
             severity: warning
           annotations:
+            runbook_url: "{{ $runbook }}#easypplugincacheatlimit"
             summary: "EasyP plugin cache is at its size limit"
             description: >-
               Raise config.registry.cacheMaxBytes and persistence.size together,
@@ -94,10 +105,15 @@ spec:
           labels:
             severity: critical
           annotations:
+            runbook_url: "{{ $runbook }}#easypauditeventslost"
             summary: "EasyP is dropping audit events"
             description: >-
-              The audit buffer overflowed or writes are failing. Raise
-              config.audit.bufferSize, or look for database trouble.
+              Audit is an Enterprise commitment, so any sustained loss here is a
+              gap in what was promised. The reason label says which: enqueue_timeout
+              means the writer is not draining — raise config.audit.bufferSize or
+              look at why the database is slow; save_failed means writes are being
+              rejected outright; shutdown_timeout means a pod stopped before it
+              finished draining.
 
         - alert: EasypAuditMaintenanceStale
           expr: time() - easyp_audit_partition_maintenance_last_success_seconds > 86400
@@ -105,6 +121,7 @@ spec:
           labels:
             severity: critical
           annotations:
+            runbook_url: "{{ $runbook }}#easypauditmaintenancestale"
             summary: "EasyP has not maintained audit partitions for a day"
             description: >-
               Future partitions are not being created. Audit writes fail once
@@ -116,6 +133,7 @@ spec:
           labels:
             severity: warning
           annotations:
+            runbook_url: "{{ $runbook }}#easypauditdefaultpartitionused"
             summary: "EasyP audit rows have landed in the default partition"
             description: >-
               Maintenance did not create the month these rows belong to in time.
@@ -136,6 +154,7 @@ spec:
           labels:
             severity: warning
           annotations:
+            runbook_url: "{{ $runbook }}#easypgenerationerrorrate"
             summary: "More than {{ .Values.prometheusRule.generationErrorRatio }} of EasyP generations are failing"
             description: "A plugin is broken, or its binary does not match the checksum recorded for it."
 
@@ -144,6 +163,7 @@ spec:
           labels:
             severity: critical
           annotations:
+            runbook_url: "{{ $runbook }}#easyppanics"
             summary: "EasyP recovered from a panic"
             description: "A recovered panic is still a bug. Check the logs for the stack."
 
@@ -153,6 +173,7 @@ spec:
           labels:
             severity: warning
           annotations:
+            runbook_url: "{{ $runbook }}#easypauthfailures"
             summary: "EasyP is rejecting write credentials"
             description: >-
               Either a token was rotated without updating a caller, or somebody

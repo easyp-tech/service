@@ -166,6 +166,44 @@ expect_failure "an unreadable volume size is rejected" "cannot read" \
   --set persistence.size=25TB
 
 echo
+echo "== the cache ceiling holds on both storage paths =="
+
+# This guard once sat behind persistence.enabled, so turning persistence off
+# removed the ceiling while cacheMaxBytes stayed where it was — and the
+# ephemeral path is the one where an overrun fills the node's disk and the
+# kubelet may evict a neighbouring pod instead of this one.
+expect_failure "an emptyDir smaller than the cache limit is rejected" "must exceed config.registry.cacheMaxBytes" \
+  --set persistence.enabled=false \
+  --set persistence.ephemeralSizeLimit=10Gi \
+  --set resources.limits.ephemeral-storage=30Gi
+
+# An emptyDir counts against the pod's ephemeral-storage limit, so the two
+# ceilings sit over the same bytes and the lower one decides. Contradictory,
+# the pod is evicted well short of the number the operator set.
+expect_failure "an ephemeral-storage limit below the emptyDir limit is rejected" "would evict the pod at the resource limit" \
+  --set persistence.enabled=false
+
+if expect_render "the emptyDir carries a size limit" \
+     --set persistence.enabled=false \
+     --set resources.limits.ephemeral-storage=30Gi; then
+  if grep -qE 'sizeLimit: 25Gi' <<<"$out"; then
+    pass "the emptyDir carries a size limit"
+  else
+    fail "the emptyDir carries a size limit: emptyDir rendered without sizeLimit"$'\n'"$(grep -A2 emptyDir <<<"$out")"
+  fi
+fi
+
+# The scheduler places pods on what it was told to reserve; storage it does not
+# know about is storage it will happily overcommit.
+if expect_render "ephemeral storage is declared" ; then
+  if grep -qE 'ephemeral-storage:' <<<"$out"; then
+    pass "ephemeral storage is declared"
+  else
+    fail "ephemeral storage is declared: no ephemeral-storage in resources"
+  fi
+fi
+
+echo
 echo "== trusted proxies =="
 
 # Behind an ingress every request arrives from the controller's address. Without
@@ -280,7 +318,8 @@ fi
 # Without persistence the volume is an emptyDir, which every pod gets its own
 # copy of. Nothing to conflict over, so nothing to take downtime for.
 if expect_render "no persistence rolls" \
-     --set persistence.enabled=false; then
+     --set persistence.enabled=false \
+     --set resources.limits.ephemeral-storage=30Gi; then
   if grep -q "type: RollingUpdate" <<<"$out"; then
     pass "no persistence rolls"
   else
@@ -360,6 +399,30 @@ if grep -q 'easyp_license_expiry_timestamp_seconds > 0' "$rules_yaml"; then
   pass "the expiry alert ignores installs with no licence"
 else
   fail "the expiry alert ignores installs with no licence: guard missing from the expression"
+fi
+
+# An alert that arrives with no procedure attached is where the time goes, so
+# every one carries a runbook_url. The anchors are derived from alert names and
+# the headings are written by hand, which is exactly the pair that drifts apart
+# without something comparing them.
+runbooks="$CHART/../../.spec/RUNBOOKS.md"
+missing=""
+
+while read -r alert; do
+  if ! grep -q "runbook_url:.*#${alert,,}\"" "$rules_yaml"; then
+    missing+=" $alert(no url)"
+    continue
+  fi
+
+  if ! grep -qi "^## ${alert}\$" "$runbooks"; then
+    missing+=" $alert(no heading)"
+  fi
+done < <(grep -oE '^\s*- alert: \w+' "$rules_yaml" | awk '{print $3}')
+
+if [[ -z "$missing" ]]; then
+  pass "every alert links to a runbook section that exists"
+else
+  fail "every alert links to a runbook section that exists:$missing"
 fi
 
 echo

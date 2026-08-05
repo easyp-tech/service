@@ -164,16 +164,47 @@ inside the cluster.
 {{- end }}
 
 {{/*
-Eviction triggers at cacheMaxBytes, so the volume has to be bigger than that or
-the disk fills before the cache ever decides it is full. A full volume fails
-generation with an I/O error rather than anything that names the real cause,
-which is why this is worth refusing at install time.
+Eviction triggers at cacheMaxBytes, so whatever the cache is written to has to
+be bigger than that or the disk fills before the cache ever decides it is full.
+A full volume fails generation with an I/O error rather than anything that names
+the real cause, which is why this is worth refusing at install time.
+
+Checked on both storage paths deliberately. This guard once sat behind
+`persistence.enabled`, which meant turning persistence off silently took the
+ceiling away while cacheMaxBytes stayed where it was — and the ephemeral path is
+where an overrun hurts most, because it is the node's disk that fills and the
+kubelet may evict a neighbour rather than the pod responsible.
 */}}
-{{- if and .Values.persistence.enabled (gt (int64 .Values.config.registry.cacheMaxBytes) 0) }}
-{{- $volume := include "easyp-service.toBytes" .Values.persistence.size | int64 }}
+{{- if gt (int64 .Values.config.registry.cacheMaxBytes) 0 }}
 {{- $cache := int64 .Values.config.registry.cacheMaxBytes }}
+{{- $sizeKey := ternary "persistence.size" "persistence.ephemeralSizeLimit" .Values.persistence.enabled }}
+{{- $size := ternary .Values.persistence.size .Values.persistence.ephemeralSizeLimit .Values.persistence.enabled }}
+{{- $volume := include "easyp-service.toBytes" $size | int64 }}
 {{- if le $volume $cache }}
-{{- fail (printf "easyp-service: persistence.size (%s, %d bytes) must exceed config.registry.cacheMaxBytes (%d bytes). Eviction starts at the cache limit, so a volume sized to it is already full by the time the cache needs room." .Values.persistence.size $volume $cache) }}
+{{- fail (printf "easyp-service: %s (%s, %d bytes) must exceed config.registry.cacheMaxBytes (%d bytes). Eviction starts at the cache limit, so storage sized to it is already full by the time the cache needs room." $sizeKey $size $volume $cache) }}
+{{- end }}
+{{- end }}
+
+{{/*
+An emptyDir counts against the pod's ephemeral-storage limit, so with
+persistence off there are two ceilings over the same bytes and the lower one
+wins. Left contradictory, the kubelet evicts the pod at the resource limit while
+persistence.ephemeralSizeLimit still reads as the real bound — the pod dies well
+short of the number the operator set, and nothing says why.
+
+The shipped ephemeral-storage figures assume the default, persistence enabled,
+where the cache lives on its own volume and only logs and the writable layer are
+charged here. Turning persistence off means raising them.
+*/}}
+{{- if not .Values.persistence.enabled }}
+{{- if .Values.resources.limits }}
+{{- if index .Values.resources.limits "ephemeral-storage" }}
+{{- $limit := include "easyp-service.toBytes" (index .Values.resources.limits "ephemeral-storage") | int64 }}
+{{- $emptyDir := include "easyp-service.toBytes" .Values.persistence.ephemeralSizeLimit | int64 }}
+{{- if le $limit $emptyDir }}
+{{- fail (printf "easyp-service: with persistence disabled the plugin cache lives in an emptyDir, which counts against resources.limits.ephemeral-storage (%s, %d bytes) — currently at or below persistence.ephemeralSizeLimit (%s, %d bytes). The kubelet would evict the pod at the resource limit, before the cache ever reached its own. Raise resources.limits.ephemeral-storage (and requests, so the scheduler reserves the room) above the emptyDir limit, or lower persistence.ephemeralSizeLimit." (index .Values.resources.limits "ephemeral-storage") $limit .Values.persistence.ephemeralSizeLimit $emptyDir) }}
+{{- end }}
+{{- end }}
 {{- end }}
 {{- end }}
 

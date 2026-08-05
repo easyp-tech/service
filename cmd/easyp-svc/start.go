@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/ratelimit"
@@ -46,6 +49,9 @@ const (
 	exitCode                 = 2
 	configFileSize           = 1024 * 1024
 	componentShutdownTimeout = 5 * time.Second
+	// healthReadHeaderTimeout bounds how long a probe may take to send its
+	// headers. Probes are local and instant; anything slower is not a probe.
+	healthReadHeaderTimeout = 5 * time.Second
 	// auditFlushHeadroom keeps the worker's final write strictly inside the
 	// shutdown budget, so a slow write is reported rather than cut off.
 	auditFlushHeadroom = 500 * time.Millisecond
@@ -133,6 +139,18 @@ func run(ctx context.Context, cfg config.Config, reg *prometheus.Registry) error
 	// Update context with the new telemetry-enabled logger
 	ctx = monitor.WithContext(ctx, log)
 
+	// Before initInfrastructure, because that runs the migrations and the
+	// startup probe is already counting by then. Readiness stays negative until
+	// the database is actually usable; only liveness answers early, which is the
+	// distinction that keeps a slow migration from looking like a hung process
+	// and getting the pod killed and restarted into the same migration.
+	readiness := new(atomic.Pointer[health.Health])
+
+	waitHealth, err := startHealthServer(ctx, log, cfg, readiness)
+	if err != nil {
+		return err
+	}
+
 	repo, cleanupInfra, err := initInfrastructure(ctx, cfg, reg, namespace)
 	if err != nil {
 		return err
@@ -166,12 +184,91 @@ func run(ctx context.Context, cfg config.Config, reg *prometheus.Registry) error
 		return fmt.Errorf("initHealthCheck: %w", err)
 	}
 
-	err = serveApp(ctx, log, cfg, reg, grpcServer, apiSrv.MCPHandler(), healthCheck, partitions.Run)
-	if err != nil {
-		return fmt.Errorf("serveApp: %w", err)
+	// From here readiness reports the database rather than "starting".
+	readiness.Store(healthCheck)
+
+	serveErr := serveApp(ctx, log, cfg, reg, grpcServer, apiSrv.MCPHandler(), partitions.Run)
+	if serveErr != nil {
+		serveErr = fmt.Errorf("serveApp: %w", serveErr)
 	}
 
-	return nil
+	// The health server outlives the others on purpose: while the rest drain,
+	// an unready answer is what takes this pod out of load balancing. A closed
+	// port would too, but it reads as a crash in every dashboard.
+	return errors.Join(serveErr, waitHealth())
+}
+
+// startHealthServer brings the health endpoints up before anything slow enough
+// to matter, and returns a function that waits for the server to stop.
+//
+// The listener is bound synchronously so that a port already in use fails the
+// startup instead of being logged into the void while the process runs on.
+func startHealthServer(
+	ctx context.Context,
+	log *slog.Logger,
+	cfg config.Config,
+	readiness *atomic.Pointer[health.Health],
+) (func() error, error) {
+	healthPort, err := strconv.ParseUint(cfg.Server.Port.Health, 10, 16)
+	if err != nil {
+		return nil, fmt.Errorf("invalid health port: %w", err)
+	}
+
+	mux := http.NewServeMux()
+
+	// "/live" reports liveness and deliberately checks nothing. Pointing a
+	// liveness probe at the readiness handler would restart every pod at once
+	// during a database blip — turning a recoverable outage into a rolling
+	// crash loop.
+	mux.HandleFunc("/live", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// "/" reports readiness: once wired up it checks postgres, so a pod drops
+	// out of load balancing while the database is unreachable. Until then there
+	// is nothing truthful to report but "not yet".
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		checker := readiness.Load()
+		if checker == nil {
+			http.Error(w, "starting", http.StatusServiceUnavailable)
+
+			return
+		}
+
+		checker.Handler().ServeHTTP(w, r)
+	})
+
+	addr := net.JoinHostPort(cfg.Server.Host, strconv.FormatUint(healthPort, 10))
+
+	listener, err := new(net.ListenConfig).Listen(ctx, "tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("listen health: %w", err)
+	}
+
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: healthReadHeaderTimeout} //nolint:exhaustruct
+
+	errc := make(chan error, 1)
+	go func() { errc <- srv.Serve(listener) }()
+
+	log.Info("started health server", "host", cfg.Server.Host, "port", healthPort)
+
+	return func() error {
+		<-ctx.Done()
+
+		// Detached: the shutdown is triggered by this context being cancelled,
+		// so passing it back in would abandon in-flight probes instead of
+		// letting them finish.
+		shutdownErr := srv.Shutdown(context.WithoutCancel(ctx))
+
+		serveErr := <-errc
+		if errors.Is(serveErr, http.ErrServerClosed) {
+			serveErr = nil
+		}
+
+		log.Info("shutdown health server")
+
+		return errors.Join(serveErr, shutdownErr)
+	}, nil
 }
 
 func initObservability(ctx context.Context, cfg config.Config, namespace string, log **slog.Logger) func(context.Context) {
@@ -266,6 +363,8 @@ func initAudit(
 		BatchSize:      cfg.Audit.BatchSize,
 		FlushInterval:  cfg.Audit.FlushInterval,
 		MaxSaveRetries: cfg.Audit.MaxSaveRetries,
+		EnqueueTimeout: cfg.Audit.EnqueueTimeout,
+		FlushTimeout:   cfg.Audit.FlushTimeout,
 		// Leave the worker room to finish its last write before Shutdown stops
 		// waiting for it.
 		ShutdownFlushTimeout: componentShutdownTimeout - auditFlushHeadroom,
@@ -466,23 +565,10 @@ func serveApp(
 	reg *prometheus.Registry,
 	grpcServer *grpc.Server,
 	mcpHandler http.Handler,
-	healthCheck *health.Health,
 	jobs ...func(context.Context) error,
 ) error {
 	mcpMux := http.NewServeMux()
 	mcpMux.Handle("/mcp", mcpHandler)
-
-	healthMux := http.NewServeMux()
-	// "/" reports readiness: it checks postgres, so a pod drops out of load
-	// balancing while the database is unreachable.
-	healthMux.Handle("/", healthCheck.Handler())
-	// "/live" reports liveness and deliberately checks nothing. Pointing a
-	// liveness probe at the readiness handler would restart every pod at once
-	// during a database blip — turning a recoverable outage into a rolling
-	// crash loop.
-	healthMux.HandleFunc("/live", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
 
 	grpcPort, err := strconv.ParseUint(cfg.Server.Port.GRPC, 10, 16)
 	if err != nil {
@@ -499,19 +585,15 @@ func serveApp(
 		return fmt.Errorf("invalid mcp port: %w", err)
 	}
 
-	healthPort, err := strconv.ParseUint(cfg.Server.Port.Health, 10, 16)
-	if err != nil {
-		return fmt.Errorf("invalid health port: %w", err)
-	}
-
-	const builtinServices = 4
+	// Health is not among them: it is started before the migrations, back in
+	// run, and outlives these.
+	const builtinServices = 3
 
 	services := make([]func(context.Context) error, 0, builtinServices+len(jobs))
 	services = append(services,
 		serve.Metrics(log.With("module", "metric"), cfg.Server.Host, uint16(metricPort), reg),
 		serve.GRPC(log.With("module", "gRPC"), cfg.Server.Host, uint16(grpcPort), grpcServer),
 		serve.HTTP(log.With("module", "mcp"), cfg.Server.Host, uint16(mcpPort), mcpMux),
-		serve.HTTP(log.With("module", "health"), cfg.Server.Host, uint16(healthPort), healthMux),
 	)
 
 	// Background jobs are supervised alongside the servers so they are

@@ -171,6 +171,10 @@ spec:
               value: {{ .flushInterval | quote }}
             - name: AUDIT_MAX_SAVE_RETRIES
               value: "{{ .maxSaveRetries | int }}"
+            - name: AUDIT_ENQUEUE_TIMEOUT
+              value: {{ .enqueueTimeout | quote }}
+            - name: AUDIT_FLUSH_TIMEOUT
+              value: {{ .flushTimeout | quote }}
             - name: AUDIT_RETENTION_MONTHS
               value: "{{ .retentionMonths | int }}"
             - name: AUDIT_PRE_CREATE_MONTHS
@@ -249,7 +253,11 @@ spec:
             claimName: {{ .Values.persistence.existingClaim | default (printf "%s-plugins" (include "easyp-service.fullname" .)) }}
           {{- else }}
           # Ephemeral: every restart re-downloads plugin archives from S3.
-          emptyDir: {}
+          # sizeLimit is what keeps an overrun local to this pod — without it the
+          # cache grows into the node's ephemeral storage, and the kubelet
+          # resolves disk pressure by evicting pods that need not be this one.
+          emptyDir:
+            sizeLimit: {{ .Values.persistence.ephemeralSizeLimit }}
           {{- end }}
         {{- if .Values.tls.enabled }}
         - name: server-tls

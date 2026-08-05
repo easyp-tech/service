@@ -1,0 +1,71 @@
+server:
+  host: "0.0.0.0"
+  port:
+    grpc: 8080
+    metric: 8081
+    health: 8082
+    mcp: 8083
+  force_shutdown_after: 150s
+  trusted_proxies: []
+  max_recv_msg_size: 67108864
+  max_send_msg_size: 67108864
+  max_concurrent_streams: 256
+  tls:
+    cert_file: "/certs/server.crt"
+    key_file: "/certs/server.key"
+    client_ca_file: "/certs/ca.crt"
+
+db:
+  driver: "postgres"
+  postgres: "postgres://easyp_svc:easyp_pass@postgres:5432/easyp_enterprise_db?sslmode=disable"
+
+registry:
+  plugins_dir: "/plugins"
+  cache_max_bytes: 21474836480   # 20 GiB
+  s3:
+    endpoint: "https://storage.h3llo.cloud"
+    bucket: "easyp-plugins"
+    region: "us-east-1"
+    access_key_id: "7XGW20YEPHHJL1NXFAIF"
+    secret_access_key: "jeFFI1YEXvlwwxv7uPMdwM4sujJFA08Gphv89z74"
+    force_path_style: true
+
+telemetry:
+  otlp_endpoint: ""
+  pyroscope_endpoint: ""
+
+worker_pool:
+  workers: 16
+  queue_size: 64
+  max_concurrent_generations: 64
+  generation_timeout: 120s
+  max_retries: 3
+  shutdown_timeout: 30s
+
+license:
+  key: ""
+  file: ""
+  public_keys: {}
+  public_key: ""
+  cache_ttl: 5m
+
+rate_limit:
+  requests_per_second: 50.0
+  burst: 100
+  cleanup_interval: 10m
+  max_concurrent_per_ip: 10
+
+audit:
+  buffer_size: 1000
+  batch_size: 100
+  flush_interval: 1s
+  max_save_retries: 3
+  retention_months: 12
+  pre_create_months: 3
+  partition_check_interval: 6h
+  partition_op_timeout: 30s
+
+auth:
+  write_tokens:
+    - name: "local-dev"
+      sha256: "0cd48eed49739dfdd99efaef37d251aae5a80866e5954763c6597943fff5ce9b"

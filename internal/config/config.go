@@ -286,6 +286,16 @@ type AuditConfig struct {
 	FlushInterval  time.Duration `env:"FLUSH_INTERVAL,default=1s"  yaml:"flush_interval"`
 	MaxSaveRetries int           `env:"MAX_SAVE_RETRIES,default=3" yaml:"max_save_retries"`
 
+	// EnqueueTimeout bounds how long an operation waits for room in the audit
+	// queue. It is the one place audit can slow a request down, and only when
+	// the queue is genuinely backed up: a healthy writer drains
+	// BatchSize/FlushInterval entries a second.
+	EnqueueTimeout time.Duration `env:"ENQUEUE_TIMEOUT,default=1s" yaml:"enqueue_timeout"`
+	// FlushTimeout bounds one write to storage, retries included. A batch that
+	// misses it is lost and counted rather than holding the writer up behind a
+	// database that has stopped answering.
+	FlushTimeout time.Duration `env:"FLUSH_TIMEOUT,default=5s" yaml:"flush_timeout"`
+
 	// RetentionMonths is how many months of audit history to keep. 0 keeps everything.
 	RetentionMonths        int           `env:"RETENTION_MONTHS,default=12"         yaml:"retention_months"`
 	PreCreateMonths        int           `env:"PRE_CREATE_MONTHS,default=3"         yaml:"pre_create_months"`

@@ -59,6 +59,23 @@ Three things worth checking before you call it done:
    clear. Acceptable for a throwaway cluster, not for anything else.
 {{- end }}
 
+{{- if not .Values.persistence.enabled }}
+
+PLUGIN CACHE IS ON NODE DISK.
+
+  persistence is disabled, so each pod keeps its own copy of the plugin cache in
+  an emptyDir. That is a supported way to run several replicas without
+  ReadWriteMany storage, but the space is the node's, and it is charged per
+  replica rather than once:
+
+    {{ .Values.replicaCount }} × {{ .Values.persistence.ephemeralSizeLimit }} across the nodes these pods land on
+
+  Both ceilings are enforced — persistence.ephemeralSizeLimit on the volume and
+  resources.limits.ephemeral-storage on the pod — so an overrun evicts the pod
+  responsible rather than a neighbour. Neither reserves node capacity for you;
+  resources.requests.ephemeral-storage is what the scheduler actually reads.
+{{- end }}
+
 {{ if not .Values.ingress.enabled }}
 The API is not exposed outside the cluster (ingress.enabled=false). To try it:
 

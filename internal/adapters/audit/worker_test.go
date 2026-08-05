@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -37,8 +38,16 @@ func newFakeStore() *fakeStore {
 	return &fakeStore{saved: make(chan struct{}, 128)}
 }
 
-func (s *fakeStore) SaveBatch(_ context.Context, entries []core.AuditEntry) error {
+// SaveBatch honours the context the way the real store does: it reaches
+// db.ExecContext, which fails immediately on a cancelled one. A fake that
+// ignored the context would let a flush wired to a dead context look healthy
+// here and lose every batch in production.
+func (s *fakeStore) SaveBatch(ctx context.Context, entries []core.AuditEntry) error {
 	s.calls.Add(1)
+
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("fake store: %w", err)
+	}
 
 	if s.failTimes.Load() > 0 {
 		s.failTimes.Add(-1)
@@ -88,10 +97,14 @@ func discardLogger() *slog.Logger {
 
 func testConfig() Config {
 	return Config{
-		BufferSize:           64,
-		BatchSize:            3,
-		FlushInterval:        time.Hour, // effectively disabled unless a test wants it
-		MaxSaveRetries:       0,
+		BufferSize:     64,
+		BatchSize:      3,
+		FlushInterval:  time.Hour, // effectively disabled unless a test wants it
+		MaxSaveRetries: 0,
+		// Short so a test that deliberately fills the queue does not spend the
+		// production second waiting for it.
+		EnqueueTimeout:       50 * time.Millisecond,
+		FlushTimeout:         time.Second,
 		ShutdownFlushTimeout: time.Second,
 	}
 }
@@ -264,7 +277,7 @@ func TestWorkerShutdownFlushesPendingBatch(t *testing.T) {
 	assert.Equal(t, 2, store.totalSaved())
 }
 
-func TestWorkerSendCancelledIsCounted(t *testing.T) {
+func TestWorkerEnqueueTimeoutIsCounted(t *testing.T) {
 	t.Parallel()
 
 	cfg := testConfig()
@@ -273,20 +286,120 @@ func TestWorkerSendCancelledIsCounted(t *testing.T) {
 	store := newFakeStore()
 	worker := NewWorker(store, cfg, discardLogger(), nil, "test")
 
-	// Run is never started, so the queue fills and the send blocks until the
-	// context is cancelled.
+	// Run is never started, so the one queue slot fills and the second send has
+	// nowhere to go. This is the only loss Send is allowed to cause: real
+	// pressure, not a cancelled caller.
+	ctx := t.Context()
+	worker.Send(ctx, entry(core.OperationGenerateCode))
+
+	start := time.Now()
+	worker.Send(ctx, entry(core.OperationGenerateCode))
+	waited := time.Since(start)
+
+	assert.Equal(t, 1, lostValue(t, worker, reasonEnqueueTimeout),
+		"an event dropped because the queue stayed full must be counted as lost")
+	assert.GreaterOrEqual(t, waited, cfg.EnqueueTimeout,
+		"Send should wait out the enqueue timeout before giving up")
+	assert.Less(t, waited, time.Second,
+		"Send should give up at the timeout rather than block indefinitely")
+}
+
+// A cancelled caller must not cost the entry its place in the queue.
+//
+// Send used to select on the request context alongside the queue write. With
+// room in the queue both cases are ready at once, and Go picks between ready
+// cases at random — so a cancelled call lost about half of its audit records,
+// measured at 478-515 of every 1000. The count here is what makes that visible:
+// a single send would pass the old code half the time.
+//
+// This matters most on shutdown, where the application context is cancelled
+// while handlers still run, making the loss systematic on every rollout rather
+// than occasional.
+func TestSendIgnoresCallerCancellation(t *testing.T) {
+	t.Parallel()
+
+	cfg := testConfig()
+	cfg.BufferSize = 1000
+
+	worker := NewWorker(newFakeStore(), cfg, discardLogger(), nil, "test")
+
 	ctx, cancel := context.WithCancel(context.Background())
-	worker.Send(ctx, entry(core.OperationGenerateCode))
+	cancel()
 
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		cancel()
-	}()
+	const sends = 1000
+	for range sends {
+		worker.Send(ctx, entry(core.OperationGenerateCode))
+	}
 
-	worker.Send(ctx, entry(core.OperationGenerateCode))
+	assert.Len(t, worker.entries, sends,
+		"every entry should be queued: the queue was empty, so nothing but the caller's cancellation could have dropped one")
+	assert.Zero(t, lostValue(t, worker, reasonEnqueueTimeout),
+		"a cancelled caller is not queue pressure and must not be counted as such")
+}
 
-	assert.Equal(t, 1, lostValue(t, worker, reasonSendCancelled),
-		"an event dropped because the context was cancelled must be counted as lost")
+// The flush path must not inherit the application's cancellation either.
+//
+// Run ends when the queue closes, not when the context is cancelled, so the
+// context it is handed serves purely as the write context. Left attached, every
+// timer flush between SIGTERM and the queue closing reached ExecContext already
+// cancelled and lost its whole batch — for as long as graceful shutdown took.
+func TestTimerFlushSurvivesCancelledParentContext(t *testing.T) {
+	t.Parallel()
+
+	cfg := testConfig()
+	cfg.FlushInterval = 10 * time.Millisecond
+
+	store := newFakeStore()
+	worker := NewWorker(store, cfg, discardLogger(), nil, "test")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go worker.Run(ctx)
+
+	// Cancel first, then produce: every flush from here on runs under a context
+	// that is already dead.
+	cancel()
+
+	worker.Send(ctx, entry(core.OperationListPlugins))
+
+	require.True(t, waitFor(t, func() bool { return store.totalSaved() == 1 }),
+		"the timer flush should reach storage even though the parent context is cancelled")
+
+	assert.Zero(t, lostValue(t, worker, reasonSaveFailed))
+	assert.Zero(t, worker.Shutdown(2*time.Second))
+}
+
+// Send must never outlive the queue it writes to.
+//
+// Nothing in the running service can reach this: Shutdown closes the queue from
+// a defer that runs only after serveApp returns, and serveApp returns only once
+// GracefulStop and srv.Shutdown(context.Background()) have waited out every
+// handler. That invariant rests on serve.HTTP passing an uncancellable context
+// to Shutdown, which is easy to lose in an unrelated edit — hence a test rather
+// than a comment.
+func TestShutdownDoesNotRaceSend(t *testing.T) {
+	t.Parallel()
+
+	worker := NewWorker(newFakeStore(), testConfig(), discardLogger(), nil, "test")
+
+	ctx := t.Context()
+	go worker.Run(ctx)
+
+	var wg sync.WaitGroup
+
+	for range 8 {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for range 50 {
+				worker.Send(ctx, entry(core.OperationGenerateCode))
+			}
+		}()
+	}
+
+	wg.Wait()
+	worker.Shutdown(2 * time.Second)
 }
 
 func TestWorkerSkippedIsCounted(t *testing.T) {

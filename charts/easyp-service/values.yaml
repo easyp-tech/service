@@ -50,6 +50,11 @@ resources:
   requests:
     cpu: 500m
     memory: 1Gi
+    # Writable layer and logs only. The plugin cache is a volume of its own and
+    # is not charged here — but the scheduler knows nothing about a volume it
+    # was not told about, so with persistence disabled see
+    # persistence.ephemeralSizeLimit, which is what actually bounds the cache.
+    ephemeral-storage: 1Gi
   limits:
     # Four cores for sixteen concurrent plugin processes. On two they each ran
     # at an eighth speed and approached generationTimeoutSeconds, which would
@@ -57,6 +62,7 @@ resources:
     # rather than as the honest ResourceExhausted the limiter returns.
     cpu: "4"
     memory: 4Gi
+    ephemeral-storage: 2Gi
 
 # Ports the container listens on. The service defaults to 23410-23413 when no
 # configuration is given; the chart always sets them explicitly.
@@ -149,8 +155,23 @@ config:
     batchSize: 100
     flushInterval: 1s
     maxSaveRetries: 3
-    # Partitions older than this are dropped on a schedule. Make sure your
-    # backups outlive it, or history disappears with no archive anywhere.
+    # How long an operation waits for room in the audit queue. This is the only
+    # place audit can slow a request down, and it takes a backed-up queue to get
+    # there: a healthy writer drains batchSize/flushInterval — a hundred entries
+    # a second — so this expires only when the database has stopped keeping up.
+    # An entry that never finds room is dropped and counted under
+    # easyp_audit_events_lost_total{reason="enqueue_timeout"}; the operation
+    # itself still succeeds.
+    enqueueTimeout: 1s
+    # Bound on one write to storage, retries included. A batch that misses it is
+    # lost rather than holding the writer up behind a database that has stopped
+    # answering.
+    flushTimeout: 5s
+    # Partitions older than this are dropped on a schedule — a real delete, so
+    # afterwards the only copy of that month is in a backup taken while it still
+    # existed. Backup retention has to *exceed* this rather than match it:
+    # matching means the month leaves the database and the archive at about the
+    # same time, leaving it nowhere. See .spec/DEPLOYMENT.md.
     retentionMonths: 12
     preCreateMonths: 3
     partitionCheckInterval: 6h
@@ -287,18 +308,35 @@ ingress:
 
 # ---------------------------------------------------------------------------
 # Storage for the plugin cache. Plugin archives are downloaded lazily and
-# unpacked here; the directory is never pruned by the current release, so size
-# it for everything you expect to be requested.
+# unpacked here, and the directory is pruned: once it passes
+# config.registry.cacheMaxBytes the least recently used plugin versions are
+# removed. So size this for the working set you want resident, not for every
+# plugin that could ever be requested.
+#
+# Eviction only ever removes local files. The archive stays in object storage,
+# so an evicted plugin costs one download on its next request rather than being
+# lost — which is why the cache can be sized to taste.
+#
+# Whichever of the two sizes below applies has to exceed cacheMaxBytes, and the
+# chart refuses to install when it does not: eviction starts at the limit, so
+# storage sized exactly to it is already full by the time the cache first needs
+# headroom.
 # ---------------------------------------------------------------------------
 persistence:
   enabled: true
   existingClaim: ""
   storageClass: ""
   accessMode: ReadWriteOnce
-  # Larger than config.registry.cacheMaxBytes on purpose: eviction triggers at
-  # the limit, so a volume sized exactly to it would be full at the moment the
-  # cache first needs headroom.
   size: 25Gi
+  # Used when enabled=false, where the cache lives in an emptyDir on the node
+  # instead of a volume of its own. Without a limit here the cache grows into
+  # the node's ephemeral storage, and disk pressure there is resolved by the
+  # kubelet evicting pods — not necessarily this one. With it, an overrun stops
+  # at the pod that caused it.
+  #
+  # Remember this is per replica: with persistence off, every pod keeps its own
+  # copy, so plan for replicaCount × this much on the nodes.
+  ephemeralSizeLimit: 25Gi
 
 serviceMonitor:
   enabled: false
@@ -317,6 +355,11 @@ prometheusRule:
   enabled: false
   # Extra labels, usually what your Prometheus selects rules by.
   labels: {}
+  # Where each alert's runbook_url points. Every alert gets one, anchored on its
+  # own name. Point this at your own copy if you keep runbooks internally —
+  # an alert that arrives at 3am with no procedure attached is where most of the
+  # time goes.
+  runbookBaseUrl: https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md
   # How long before expiry to start warning. The token also carries its own
   # grace period, which runs after this; both exist so a renewal that slips
   # does not take a customer's pipeline down.
