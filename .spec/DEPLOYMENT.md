@@ -8,8 +8,31 @@ Deployment and infrastructure configuration for EasyP Service.
 ### Service Dockerfile
 
 `Dockerfile` — multi-stage build:
-1. Build stage: `golang:alpine` → static binary
-2. Runtime stage: minimal image
+1. Build stage: `golang:1.26-bookworm` → static binary (`CGO_ENABLED=0`)
+2. Runtime stage: `debian:bookworm-slim`, non-root at the distroless UID 65532
+
+The build stage is pinned to `$BUILDPLATFORM` and cross-compiles via `GOOS`/
+`GOARCH`. Without that the arm64 release runs the Go compiler itself under QEMU
+rather than just producing arm64 output, which costs minutes per release and
+buys nothing: CGO is off, so cross-compiling is two environment variables.
+
+### Published images
+
+Releases go to `ghcr.io/easyp-tech/service`, built for `linux/amd64` and
+`linux/arm64` and joined under one manifest list, so `docker pull` picks the
+architecture on its own. Each release publishes `:vX.Y.Z` and moves `:latest`.
+The chart defaults to `Chart.appVersion` and ships no `imagePullSecrets`, which
+is only correct while the package is public.
+
+**The package's visibility is not in this repository.** GHCR creates every
+package private, and there is no API for changing it — the only way is
+`Organization -> Packages -> service -> Package settings -> Danger Zone ->
+Change visibility`. Three things follow from that. It is set once and applies
+to the package as a whole, so every tag already published and every tag pushed
+afterwards is covered; there is no per-version visibility. It is one-way: a
+package made public cannot be made private again. And nothing here fails if it
+is missed — the release goes green either way, and the symptom appears at the
+far end as pods in `ImagePullBackOff`.
 
 ### Plugin Dockerfiles
 

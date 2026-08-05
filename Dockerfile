@@ -1,5 +1,16 @@
 # syntax=docker/dockerfile:1.23
-FROM golang:1.26-bookworm AS builder
+
+# Pinned to the machine doing the building, not to the image being built. The
+# release builds linux/amd64 and linux/arm64, and without this the arm64 pass
+# runs the whole Go toolchain under QEMU — the compiler, not just the output.
+# CGO is off, so cross-compiling is a matter of two environment variables and
+# the emulator is pure cost.
+FROM --platform=$BUILDPLATFORM golang:1.26-bookworm AS builder
+
+# Supplied by BuildKit from the requested platform. They default to the host's
+# when nothing is requested, so a plain `docker build` is unaffected.
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /app
 
@@ -12,8 +23,11 @@ COPY . .
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o easyp-svc ./cmd/easyp-svc/
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o easyp-svc ./cmd/easyp-svc/
 
+# No --platform here on purpose: this stage is the image being shipped, so it
+# has to be the target's. Only the apt step is emulated, which is seconds.
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*

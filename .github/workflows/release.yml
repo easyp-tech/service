@@ -56,7 +56,10 @@ jobs:
       # pulling the tag, not that customers were spared it — treat a failure as
       # a reason to cut a patch release, not as noise.
       - name: Scan the published image
-        uses: aquasecurity/trivy-action@0.28.0
+        # The tags on this action carry a leading v. Referencing 0.28.0 without
+        # it does not fail the step — it fails the whole job at set-up, before
+        # anything is built, which is how v0.9.0 came to publish nothing at all.
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ghcr.io/easyp-tech/service:${{ github.ref_name }}
           format: table

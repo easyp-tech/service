@@ -7,7 +7,7 @@ type: application
 version: 0.1.0
 # appVersion tracks the service release this chart was validated against and is
 # the default image tag.
-appVersion: "0.8.0"
+appVersion: "0.9.0"
 
 home: https://github.com/easyp-tech/service
 sources:
