@@ -1,3 +1,8 @@
+# Pinned rather than inferred. Compose names the project after the directory
+# holding this file, which is now deploy/ — so without this the volumes would
+# have been renamed by the move, silently orphaning the existing dev database.
+name: easyp
+
 networks:
   easyp_network:
     name: easyp_network
@@ -17,8 +22,8 @@ services:
     command:
       - "--configFile=/etc/traefik/traefik.yml"
     volumes:
-      - "./configs/traefik/traefik.yml:/etc/traefik/traefik.yml:ro"
-      - "./configs/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro"
+      - "./observability/traefik/traefik.yml:/etc/traefik/traefik.yml:ro"
+      - "./observability/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro"
       # Edge certificate plus the client key pair traefik presents to the
       # service. Run `task certs` before the first `docker compose up`.
       - "./certs:/certs:ro"
@@ -75,7 +80,7 @@ services:
       init-buckets:
         condition: service_completed_successfully
     volumes:
-      - "./configs/mimir/mimir.yaml:/etc/mimir/mimir.yaml:ro"
+      - "./observability/mimir/mimir.yaml:/etc/mimir/mimir.yaml:ro"
     command: ["-config.file=/etc/mimir/mimir.yaml"]
     networks:
       - easyp_network
@@ -88,7 +93,7 @@ services:
       init-buckets:
         condition: service_completed_successfully
     volumes:
-      - "./configs/loki/loki.yml:/etc/loki/loki.yml:ro"
+      - "./observability/loki/loki.yml:/etc/loki/loki.yml:ro"
     command: ["-config.file=/etc/loki/loki.yml"]
     networks:
       - easyp_network
@@ -101,7 +106,7 @@ services:
       init-buckets:
         condition: service_completed_successfully
     volumes:
-      - "./configs/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro"
+      - "./observability/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro"
     command: ["-config.file=/etc/tempo/tempo.yaml"]
     networks:
       - easyp_network
@@ -115,7 +120,7 @@ services:
       - mimir
       - tempo
     volumes:
-      - "./configs/alloy/config.alloy:/etc/alloy/config.alloy:ro"
+      - "./observability/alloy/config.alloy:/etc/alloy/config.alloy:ro"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - "/var/lib/docker/containers:/var/lib/docker/containers:ro"
     command:
@@ -135,7 +140,7 @@ services:
       init-buckets:
         condition: service_completed_successfully
     volumes:
-      - "./configs/pyroscope/pyroscope.yaml:/etc/pyroscope/pyroscope.yaml:ro"
+      - "./observability/pyroscope/pyroscope.yaml:/etc/pyroscope/pyroscope.yaml:ro"
     command: ["-config.file=/etc/pyroscope/pyroscope.yaml"]
     networks:
       - easyp_network
@@ -150,8 +155,8 @@ services:
       - tempo
       - pyroscope
     volumes:
-      - "./configs/grafana/config.ini:/etc/grafana/grafana.ini:ro"
-      - "./configs/grafana/provisioning:/etc/grafana/provisioning:ro"
+      - "./observability/grafana/config.ini:/etc/grafana/grafana.ini:ro"
+      - "./observability/grafana/provisioning:/etc/grafana/provisioning:ro"
       - grafana-data:/var/lib/grafana
     environment:
       GF_PATHS_CONFIG: "/etc/grafana/grafana.ini"
@@ -187,11 +192,14 @@ services:
 
   service:
     build:
-      context: .
-      dockerfile: ./Dockerfile
+      # The repository root, not this directory: the Dockerfile compiles from
+      # source and needs the module, and it stays at the root because
+      # .goreleaser.yaml builds the release image from there too.
+      context: ..
+      dockerfile: Dockerfile
     container_name: easyp-api-service
     restart: always
-    # The image runs as 65532, but ./plugins below is a bind mount whose owner
+    # The image runs as 65532, but ../plugins below is a bind mount whose owner
     # comes from the host. On Linux that makes the mount unwritable unless the
     # container UID matches: set EASYP_UID=$(id -u) EASYP_GID=$(id -g), or chown
     # the directory to 65532. Docker Desktop remaps ownership, so the default
@@ -206,11 +214,11 @@ services:
         condition: service_completed_successfully
     command: ["service", "start", "--cfg=/config.yml", "--log_level=debug"]
     volumes:
-      - "./config.yml:/config.yml:ro"
+      - "./config/config.yml:/config.yml:ro"
       # Server key pair and the CA that signs the certificates it accepts.
       - "./certs:/certs:ro"
       # rw: the service writes lazily downloaded plugin binaries here.
-      - "./plugins:/plugins"
+      - "../plugins:/plugins"
     environment:
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://alloy:4317"
       OTEL_SERVICE_NAME: "easyp-api-service"

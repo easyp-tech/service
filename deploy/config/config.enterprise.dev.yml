@@ -17,7 +17,7 @@ server:
 
 db:
   driver: "postgres"
-  postgres: "postgres://easyp_svc:easyp_pass@postgres:5432/easyp_community_db?sslmode=disable"
+  postgres: "postgres://easyp_svc:easyp_pass@postgres:5432/easyp_enterprise_db?sslmode=disable"
 
 registry:
   plugins_dir: "/plugins"
@@ -26,18 +26,20 @@ registry:
     endpoint: "https://storage.h3llo.cloud"
     bucket: "easyp-plugins"
     region: "us-east-1"
-    access_key_id: "7XGW20YEPHHJL1NXFAIF"
-    secret_access_key: "jeFFI1YEXvlwwxv7uPMdwM4sujJFA08Gphv89z74"
     force_path_style: true
+    # access_key_id and secret_access_key are deliberately absent. They arrive as
+    # REGISTRY_S3_ACCESS_KEY_ID and REGISTRY_S3_SECRET_ACCESS_KEY from
+    # deploy/.env.dev, which is not committed. This file is, and a previous
+    # version of it put a live key pair in a public repository.
 
 telemetry:
   otlp_endpoint: ""
   pyroscope_endpoint: ""
 
 worker_pool:
-  workers: 4
-  queue_size: 16
-  max_concurrent_generations: 16
+  workers: 16
+  queue_size: 64
+  max_concurrent_generations: 64
   generation_timeout: 120s
   max_retries: 3
   shutdown_timeout: 30s
@@ -50,10 +52,10 @@ license:
   cache_ttl: 5m
 
 rate_limit:
-  requests_per_second: 10.0
-  burst: 20
+  requests_per_second: 50.0
+  burst: 100
   cleanup_interval: 10m
-  max_concurrent_per_ip: 2
+  max_concurrent_per_ip: 10
 
 audit:
   buffer_size: 1000

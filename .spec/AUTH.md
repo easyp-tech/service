@@ -165,7 +165,7 @@ every deployment having to change key on the same day: issue under the new key
 id while the old one is still accepted, then drop the old entry.
 
 > **Threat model.** Because the verification key is configuration rather than a
-> property of the build, anyone able to edit `config.yml` or set
+> property of the build, anyone able to edit `deploy/config/config.yml` or set
 > `LICENSE_PUBLIC_KEYS` can substitute their own signing authority and issue
 > themselves a licence. Protect the config file accordingly.
 

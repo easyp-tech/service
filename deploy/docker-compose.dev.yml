@@ -1,3 +1,7 @@
+# Distinct from the main stack's `easyp`, so the two can be up at once and
+# `down` on one does not take the other's volumes with it.
+name: easyp-dev
+
 networks:
   easyp_network:
     name: easyp_network
@@ -15,15 +19,13 @@ services:
     command:
       - "--configFile=/etc/traefik/traefik.yml"
     volumes:
-      - "./configs/traefik/traefik.yml:/etc/traefik/traefik.yml:ro"
-      - "./configs/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro"
+      - "./observability/traefik/traefik.yml:/etc/traefik/traefik.yml:ro"
+      - "./observability/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro"
       - "./certs:/certs:ro"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
     ports:
       - "80:80"
       - "443:443"
-      - "8443:8443"
-      - "9443:9443"
     networks:
       - easyp_network
 
@@ -62,9 +64,7 @@ services:
       - easyp_network
 
   service-community:
-    build:
-      context: .
-      dockerfile: ./Dockerfile
+    image: ghcr.io/easyp-tech/service:latest
     container_name: easyp-api-community
     restart: always
     user: "${EASYP_UID:-65532}:${EASYP_GID:-65532}"
@@ -75,10 +75,17 @@ services:
         condition: service_completed_successfully
     command: ["service", "start", "--cfg=/config.community.dev.yml", "--log_level=debug"]
     volumes:
-      - "./config.community.dev.yml:/config.community.dev.yml:ro"
+      - "./config/config.community.dev.yml:/config.community.dev.yml:ro"
       - "./certs:/certs:ro"
       - "./plugins-community:/plugins"
+    environment:
+      # Storage credentials only. No LICENSE_* here, deliberately: this container
+      # is the control in the experiment, and a licence reaching it would make
+      # the stack unable to tell the two tiers apart.
+      REGISTRY_S3_ACCESS_KEY_ID: "${REGISTRY_S3_ACCESS_KEY_ID:-}"
+      REGISTRY_S3_SECRET_ACCESS_KEY: "${REGISTRY_S3_SECRET_ACCESS_KEY:-}"
     ports:
+      - "8080:8080"
       - "8081:8081"
       - "8082:8082"
       - "8083:8083"
@@ -96,9 +103,7 @@ services:
       - easyp_network
 
   service-enterprise:
-    build:
-      context: .
-      dockerfile: ./Dockerfile
+    image: ghcr.io/easyp-tech/service:latest
     container_name: easyp-api-enterprise
     restart: always
     user: "${EASYP_UID:-65532}:${EASYP_GID:-65532}"
@@ -109,14 +114,20 @@ services:
         condition: service_completed_successfully
     command: ["service", "start", "--cfg=/config.enterprise.dev.yml", "--log_level=debug"]
     volumes:
-      - "./config.enterprise.dev.yml:/config.enterprise.dev.yml:ro"
+      - "./config/config.enterprise.dev.yml:/config.enterprise.dev.yml:ro"
       - "./certs:/certs:ro"
       - "./plugins-enterprise:/plugins"
     environment:
+      # What makes this container the enterprise one. An unset or unverifiable
+      # key is not a startup failure — the service logs it and runs as community,
+      # so `task tier-dev` exists to assert the difference rather than assume it.
       LICENSE_KEY: "${LICENSE_KEY:-}"
       LICENSE_PUBLIC_KEY: "${LICENSE_PUBLIC_KEY:-}"
       LICENSE_PUBLIC_KEYS: "${LICENSE_PUBLIC_KEYS:-}"
+      REGISTRY_S3_ACCESS_KEY_ID: "${REGISTRY_S3_ACCESS_KEY_ID:-}"
+      REGISTRY_S3_SECRET_ACCESS_KEY: "${REGISTRY_S3_SECRET_ACCESS_KEY:-}"
     ports:
+      - "9080:8080"
       - "9081:8081"
       - "9082:8082"
       - "9083:8083"

@@ -154,19 +154,16 @@ Uploads run `--parallel` at a time (8 by default). Object storage commonly rate-
 │   ├── grpc-ecosystem/gateway/v2.27.3/
 │   └── grpc-ecosystem/openapiv2/v2.27.3/
 ├── plugins/                           # Built plugin binaries (gitignored)
-├── configs/                           # Observability configs
-│   ├── alloy/                        # OpenTelemetry collector
-│   ├── grafana/                      # Dashboards + datasources
-│   ├── loki/                         # Log aggregation
-│   ├── tempo/                        # Distributed tracing
-│   ├── mimir/                        # Metrics storage
-│   ├── pyroscope/                    # Continuous profiling
-│   └── traefik/                      # Reverse proxy
-├── build-plugins.sh                   # Build plugin binaries from Dockerfiles
-├── register-plugins.sh                # Register plugins via gRPC API
-├── config.yml                        # Docker-compose service config
-├── config.local.yml                  # Local development config
-├── docker-compose.yml               # Development infrastructure
+├── deploy/                            # Everything that runs the service somewhere
+│   ├── docker-compose.yml            # Full dev stack
+│   ├── docker-compose.dev.yml        # Community and enterprise side by side
+│   ├── .env.example                  # Template for the full stack
+│   ├── .env.dev.example              # Template for the two-tier stack
+│   ├── config/                       # Service configs, one per way of running it
+│   ├── observability/                # Alloy, Grafana, Loki, Tempo, Mimir, Pyroscope, Traefik
+│   ├── charts/easyp-service/         # Helm chart
+│   ├── scripts/                      # gen-dev-certs.sh
+│   └── certs/                        # Throwaway dev TLS material (gitignored)
 ├── easyp.yaml                       # Protobuf lint + generation config
 ├── easyp.local.yaml                 # Local easyp config
 └── Taskfile.yml                     # Task automation
@@ -252,7 +249,7 @@ open http://localhost:3000
 
 **Endpoint:** `easyp.api.localhost:4443` (gRPC over TLS, through traefik) in the
 compose stack; `localhost:8080` (plaintext) when the service runs from source
-with `config.local.yml`. See [Transport security](#transport-security).
+with `deploy/config/config.local.yml`. See [Transport security](#transport-security).
 
 ```protobuf
 service ServiceAPI {
@@ -336,8 +333,8 @@ REGISTRY_S3_FORCE_PATH_STYLE=true
 
 | File | Purpose |
 |------|---------|
-| `config.yml` | Docker-compose service config (internal hostnames) |
-| `config.local.yml` | Local development config (localhost, port 5433) |
+| `deploy/config/config.yml` | Docker-compose service config (internal hostnames) |
+| `deploy/config/config.local.yml` | Local development config (localhost, port 5433) |
 
 ```yaml
 server:
@@ -405,7 +402,7 @@ task certs
 
 # Talk to the service through traefik
 easyp-svc plugins register plugins \
-  --addr easyp.api.localhost:4443 --tls-ca certs/ca.crt --cfg config.yml
+  --addr easyp.api.localhost:4443 --tls-ca deploy/certs/ca.crt --cfg deploy/config/config.yml
 ```
 
 Client-side flags: `--tls-ca` overrides the trust store, `--tls-cert`/`--tls-key`
@@ -427,7 +424,7 @@ easyp-svc auth new-token --name ci
 ```
 
 The command prints the token once and a `sha256` digest. Only the digest goes
-into the configuration, so `config.yml` stays safe to commit; the token belongs
+into the configuration, so `deploy/config/config.yml` stays safe to commit; the token belongs
 in your secret manager:
 
 ```yaml
@@ -477,7 +474,7 @@ key be rotated without every deployment having to change key on the same day.
 A key that is not a valid hex Ed25519 key stops startup rather than quietly
 dropping the service to community mode.
 
-Because the verification key is configuration, whoever can edit `config.yml` can
+Because the verification key is configuration, whoever can edit `deploy/config/config.yml` can
 point the service at a different signing authority — protect that file the way
 you protect the database password next to it.
 
@@ -574,7 +571,7 @@ git commit -m "Add {group}/{plugin-name}:{version} plugin"
 go build -o bin/server ./cmd/main.go
 
 # Run
-./bin/server -cfg config.local.yml -log_level debug
+./bin/server -cfg deploy/config/config.local.yml -log_level debug
 ```
 
 ### Generating Protobuf Code
@@ -721,7 +718,7 @@ task register-plugins
 easyp-svc api descriptor -o api.protoset
 
 # Compose stack (TLS through traefik):
-grpcurl -protoset api.protoset -cacert certs/ca.crt \
+grpcurl -protoset api.protoset -cacert deploy/certs/ca.crt \
   easyp.api.localhost:4443 api.generator.v1.ServiceAPI/Plugins
 # Service run from source with config.local.yml (plaintext):
 grpcurl -protoset api.protoset -plaintext \

@@ -14,7 +14,12 @@
 
 set -euo pipefail
 
-CERT_DIR="${CERT_DIR:-certs}"
+# Resolved from this script rather than from the caller's directory: the compose
+# files mount ./certs relative to deploy/, so writing them anywhere else produces
+# a stack that starts and then fails its TLS handshake with nothing obvious to
+# look at.
+DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CERT_DIR="${CERT_DIR:-$DEPLOY_DIR/certs}"
 DAYS="${DAYS:-825}"
 
 mkdir -p "$CERT_DIR"

@@ -1,6 +1,6 @@
 # Runbooks
 
-One section per alert in `charts/easyp-service/templates/prometheusrule.yaml`.
+One section per alert in `deploy/charts/easyp-service/templates/prometheusrule.yaml`.
 Each alert's `runbook_url` annotation points at the matching anchor here, so the
 heading text is load-bearing: renaming one breaks the link from the alert.
 

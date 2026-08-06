@@ -143,4 +143,4 @@ telemetry:
 
 `tempo`, `mimir-blocks`, `mimir-ruler`, `mimir-alertmanager`, `loki-chunks`, `loki-ruler`, `pyroscope`
 
-Configs: `configs/` directory (alloy, grafana, loki, tempo, mimir, pyroscope, traefik)
+Configs: `deploy/observability/` directory (alloy, grafana, loki, tempo, mimir, pyroscope, traefik)
