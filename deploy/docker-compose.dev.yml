@@ -1,6 +1,8 @@
 # Distinct from the main stack's `easyp`, so the two can be up at once and
-# `down` on one does not take the other's volumes with it.
-name: easyp-dev
+# `down` on one does not take the other's volumes with it. Pinned rather than
+# inferred: compose otherwise names the project after the directory holding this
+# file, which changes the volume names the moment anyone moves or renames it.
+name: easyp-svc
 
 networks:
   easyp_network:
@@ -23,6 +25,10 @@ services:
       - "./observability/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro"
       - "./certs:/certs:ro"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    # The only service published on all interfaces, because it is the entry
+    # point: it terminates the edge certificate and is the single party holding
+    # a client certificate for the mTLS leg inward. Everything else below binds
+    # to loopback — see EASYP_BIND.
     ports:
       - "80:80"
       - "443:443"
@@ -39,8 +45,12 @@ services:
       POSTGRES_DB: easyp_community_db
       POSTGRES_USER: easyp_svc
       POSTGRES_PASSWORD: easyp_pass
+    # Loopback by default. This password is committed, in a public repository,
+    # so a stack brought up on a machine with a public address hands the database
+    # to anyone who reads the file. That is not hypothetical: the dev host had
+    # 5432 open to the internet, and its logs show it being scanned.
     ports:
-      - "5432:5432"
+      - "${EASYP_BIND:-127.0.0.1}:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U easyp_svc -d easyp_community_db"]
       interval: 2s
@@ -85,10 +95,10 @@ services:
       REGISTRY_S3_ACCESS_KEY_ID: "${REGISTRY_S3_ACCESS_KEY_ID:-}"
       REGISTRY_S3_SECRET_ACCESS_KEY: "${REGISTRY_S3_SECRET_ACCESS_KEY:-}"
     ports:
-      - "8080:8080"
-      - "8081:8081"
-      - "8082:8082"
-      - "8083:8083"
+      - "${EASYP_BIND:-127.0.0.1}:8080:8080"
+      - "${EASYP_BIND:-127.0.0.1}:8081:8081"
+      - "${EASYP_BIND:-127.0.0.1}:8082:8082"
+      - "${EASYP_BIND:-127.0.0.1}:8083:8083"
     labels:
       service: easyp-api-community
       traefik.enable: "true"
@@ -127,10 +137,10 @@ services:
       REGISTRY_S3_ACCESS_KEY_ID: "${REGISTRY_S3_ACCESS_KEY_ID:-}"
       REGISTRY_S3_SECRET_ACCESS_KEY: "${REGISTRY_S3_SECRET_ACCESS_KEY:-}"
     ports:
-      - "9080:8080"
-      - "9081:8081"
-      - "9082:8082"
-      - "9083:8083"
+      - "${EASYP_BIND:-127.0.0.1}:9080:8080"
+      - "${EASYP_BIND:-127.0.0.1}:9081:8081"
+      - "${EASYP_BIND:-127.0.0.1}:9082:8082"
+      - "${EASYP_BIND:-127.0.0.1}:9083:8083"
     labels:
       service: easyp-api-enterprise
       traefik.enable: "true"

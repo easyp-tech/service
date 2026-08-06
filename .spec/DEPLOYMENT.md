@@ -178,6 +178,40 @@ the endpoint, bucket and region, and take the key pair from
 `REGISTRY_S3_ACCESS_KEY_ID` / `REGISTRY_S3_SECRET_ACCESS_KEY` in
 `deploy/.env.dev`, which is gitignored.
 
+### On a remote host
+
+`deploy/` is the unit that gets copied. A host running the stack needs no source
+checkout, no Go toolchain and no task runner — only Docker and this directory:
+
+```bash
+rsync -a --delete deploy/ user@host:~/easyp/     # excluding .env and certs/
+ssh user@host 'cd ~/easyp && ./scripts/gen-dev-certs.sh'
+# put the licence and the storage key pair in ~/easyp/.env, mode 600
+ssh user@host 'cd ~/easyp && docker compose -f docker-compose.dev.yml up -d'
+ssh user@host 'cd ~/easyp && ./scripts/check-tiers.sh'
+```
+
+Paths inside the compose file resolve against the file itself, so the copy works
+unedited — which is the property the `deploy/` layout was arranged for.
+
+Two things do not travel. `docker-compose.yml`, the full observability stack,
+builds the image from source (`context: ..`) and cannot run where there is no
+source; the two-tier file pulls the published image instead and is the one to
+use remotely. And `easyp-svc` itself is gone from the host, so plugins are
+registered from a machine that has the CLI, pointed at the host through traefik.
+
+`check-tiers.sh` is deliberately a script rather than a Taskfile target, so the
+same implementation runs in both places. `HOST`, `COMMUNITY_METRICS_PORT` and
+`ENTERPRISE_METRICS_PORT` let it run over an SSH tunnel once the metrics ports
+are on loopback.
+
+**Publishing.** Only traefik binds to all interfaces. Everything else — both
+services and the database — binds to `127.0.0.1` unless `EASYP_BIND` says
+otherwise. The database password sits in the committed compose file, so on a
+host with a public address the default is the difference between a dev stack and
+an open database. The dev host ran with 5432 exposed; its traefik log shows the
+scanning that follows.
+
 ## GoReleaser
 
 `.goreleaser.yaml` configures release builds:

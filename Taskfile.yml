@@ -77,37 +77,9 @@ tasks:
     desc: "Check that the dev stack's two tiers are actually different tiers"
     dir: "{{.USER_WORKING_DIR}}"
     cmds:
-      # A licence that fails to verify is not an error the service stops for:
-      # community is a legitimate configuration, so the service logs the problem
-      # and serves on. easyp_license_valid is what separates the two — 1 for
-      # enterprise, 0 for community — and both containers have to be asserted,
-      # since a community side that reads 1 means the licence leaked across.
-      - |
-        set -eu
-        read_valid() {
-          curl -sf "http://localhost:$1/metrics" \
-            | awk '/^easyp_license_valid /{print $2; found=1} END{if(!found) print "absent"}'
-        }
-        community=$(read_valid 8081)
-        enterprise=$(read_valid 9081)
-        echo "  community   easyp_license_valid = $community  (want 0)"
-        echo "  enterprise  easyp_license_valid = $enterprise  (want 1)"
-        if [ "$enterprise" != "1" ]; then
-          echo
-          echo "The enterprise container is not running as enterprise. Its licence either"
-          echo "never arrived or failed to verify — either way the service logged it and"
-          echo "carried on in community mode. Check LICENSE_KEY and LICENSE_PUBLIC_KEY in"
-          echo "deploy/.env.dev, then: task logs-dev"
-          exit 1
-        fi
-        if [ "$community" != "0" ]; then
-          echo
-          echo "The community container is also enterprise, so the stack cannot tell the"
-          echo "tiers apart. A licence is reaching it that should not — check that"
-          echo "LICENSE_* is set on service-enterprise only."
-          exit 1
-        fi
-        echo "OK: enterprise is licensed, community is not."
+      # The check itself lives in deploy/scripts/ because the deployment
+      # directory is copied to hosts that carry neither this file nor task.
+      - "./deploy/scripts/check-tiers.sh"
 
   build-plugins:
     desc: "Build all plugin binaries from registry/ Dockerfiles"
