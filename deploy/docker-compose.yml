@@ -187,6 +187,11 @@ services:
       interval: 2s
       timeout: 3s
       retries: 10
+      # An empty volume means initdb, and the entrypoint then restarts the server
+      # it used for that, so health flaps for longer than ten two-second tries.
+      # Without this the first `up` on a clean machine fails every dependent with
+      # "dependency failed to start".
+      start_period: 120s
     networks:
       - easyp_network
 

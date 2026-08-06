@@ -56,6 +56,13 @@ services:
       interval: 2s
       timeout: 3s
       retries: 10
+      # Ten tries at two seconds is twenty seconds, which is not a first boot.
+      # An empty volume means initdb, and the entrypoint then stops the server it
+      # used for that and starts the real one — so health legitimately flaps for
+      # a while, the retries run out, and every dependent gives up with
+      # "dependency failed to start". Measured at just over a minute on the two
+      # core dev host. start_period makes those failures not count.
+      start_period: 120s
     networks:
       - easyp_network
 
@@ -65,10 +72,23 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # `|| true; exit 0` here used to mean "tolerate an existing database". It
+    # also meant "tolerate a database that was never created": when this ran
+    # against a postgres still rejecting connections, CREATE DATABASE failed,
+    # the step reported success, and compose started the enterprise service
+    # against a database that did not exist. It then crash-looped on 3D000 while
+    # the stack looked like it had come up.
+    #
+    # So: wait for connections to actually be served, then create — and if that
+    # fails, prove the database is there before claiming success. Anything else
+    # is a real failure and should stop the dependents.
     entrypoint: >
       /bin/sh -c "
-      PGPASSWORD=easyp_pass psql -h postgres -U easyp_svc -d easyp_community_db -c 'CREATE DATABASE easyp_enterprise_db;' || true;
-      exit 0;
+      until PGPASSWORD=easyp_pass psql -h postgres -U easyp_svc -d easyp_community_db -c 'SELECT 1' >/dev/null 2>&1; do
+      echo waiting for postgres to accept connections; sleep 1;
+      done;
+      PGPASSWORD=easyp_pass createdb -h postgres -U easyp_svc easyp_enterprise_db ||
+      PGPASSWORD=easyp_pass psql -h postgres -U easyp_svc -d easyp_enterprise_db -c 'SELECT 1' >/dev/null
       "
     networks:
       - easyp_network

@@ -626,8 +626,8 @@ func initBinaryStorage(ctx context.Context, cfg config.Config) (core.BinaryStora
 		Bucket:          cfg.Registry.S3.Bucket,
 		Region:          cfg.Registry.S3.Region,
 		Prefix:          cfg.Registry.S3.Prefix,
-		AccessKeyID:     cfg.Registry.S3.AccessKeyID,
-		SecretAccessKey: cfg.Registry.S3.SecretAccessKey,
+		AccessKeyID:     resolveS3AccessKeyID(cfg.Registry.S3),
+		SecretAccessKey: resolveS3SecretAccessKey(cfg.Registry.S3),
 		ForcePathStyle:  cfg.Registry.S3.ForcePathStyle,
 	})
 	if err != nil {
