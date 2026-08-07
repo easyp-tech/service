@@ -1,35 +1,86 @@
 version: "3"
 
+vars:
+  # Everything deployment-shaped lives under deploy/. Compose resolves the
+  # relative paths inside these files against the directory holding them, so
+  # -f is all that is needed — the volume paths stay readable from deploy/.
+  COMPOSE: "docker compose -f deploy/docker-compose.yml"
+  COMPOSE_DEV: "docker compose -f deploy/docker-compose.dev.yml"
+  COMPOSE_DEV_PUBLIC: "docker compose -f deploy/docker-compose.dev.yml -f deploy/docker-compose.public.yml"
+
 tasks:
   certs:
-    desc: "Generate the development CA and the server/client/edge certificates in certs/"
+    desc: "Generate the development CA and the server/client/edge certificates in deploy/certs/"
     dir: "{{.USER_WORKING_DIR}}"
     cmds:
-      - "./scripts/gen-dev-certs.sh"
+      - "./deploy/scripts/gen-dev-certs.sh"
 
   up:
     desc: "Start all services. For Enterprise: LICENSE_PUBLIC_KEYS=<kid>:<hex> LICENSE_KEY=... task up"
     dir: "{{.USER_WORKING_DIR}}"
     preconditions:
-      - "test -f docker-compose.yml"
+      - "test -f deploy/docker-compose.yml"
     cmds:
       # The stack speaks mTLS; without certificates the service refuses to start.
       - task: certs
-      - "docker compose up --build --remove-orphans --detach"
+      - "{{.COMPOSE}} up --build --remove-orphans --detach"
 
   up-minimal:
     dir: "{{.USER_WORKING_DIR}}"
     preconditions:
-      - "test -f docker-compose.yml"
+      - "test -f deploy/docker-compose.yml"
     cmds:
-      - "sh -c 'EASYP_POSTGRES_PORT=${EASYP_POSTGRES_PORT:-5433} docker compose up -d postgres'"
+      - "sh -c 'EASYP_POSTGRES_PORT=${EASYP_POSTGRES_PORT:-5433} {{.COMPOSE}} up -d postgres'"
 
   down:
     dir: "{{.USER_WORKING_DIR}}"
     preconditions:
-      - "test -f docker-compose.yml"
+      - "test -f deploy/docker-compose.yml"
     cmds:
-      - "docker compose down --volumes"
+      - "{{.COMPOSE}} down --volumes"
+
+  up-dev:
+    desc: "Start community and enterprise side by side (8080-8083 / 9080-9083)"
+    dir: "{{.USER_WORKING_DIR}}"
+    preconditions:
+      - "test -f deploy/docker-compose.dev.yml"
+      # Without a licence the enterprise container starts, reports community and
+      # serves happily — which makes the stack look fine while testing nothing
+      # the stack exists to test. Refuse instead.
+      - sh: "test -f deploy/.env.dev"
+        msg: "deploy/.env.dev not found. Copy deploy/.env.dev.example to deploy/.env.dev — it carries the development licence."
+    cmds:
+      # Both tiers sit behind traefik, which speaks mTLS to them.
+      - task: certs
+      - "{{.COMPOSE_DEV}} --env-file deploy/.env.dev up --remove-orphans --detach"
+      - |
+        echo
+        echo "  community   localhost:8080-8083   community.easyp.localhost   easyp_community_db"
+        echo "  enterprise  localhost:9080-9083   enterprise.easyp.localhost  easyp_enterprise_db"
+        echo
+        echo "Confirm the tiers actually differ before trusting the stack:"
+        echo "  task tier-dev"
+
+  down-dev:
+    dir: "{{.USER_WORKING_DIR}}"
+    preconditions:
+      - "test -f deploy/docker-compose.dev.yml"
+    cmds:
+      - "{{.COMPOSE_DEV}} down --volumes"
+
+  logs-dev:
+    desc: "Follow both dev tiers"
+    dir: "{{.USER_WORKING_DIR}}"
+    cmds:
+      - "{{.COMPOSE_DEV}} logs --follow service-community service-enterprise"
+
+  tier-dev:
+    desc: "Check that the dev stack's two tiers are actually different tiers"
+    dir: "{{.USER_WORKING_DIR}}"
+    cmds:
+      # The check itself lives in deploy/scripts/ because the deployment
+      # directory is copied to hosts that carry neither this file nor task.
+      - "./deploy/scripts/check-tiers.sh"
 
   build-plugins:
     desc: "Build all plugin binaries from registry/ Dockerfiles"
@@ -92,7 +143,7 @@ tasks:
     desc: "Register all built plugins via gRPC CreatePlugin API"
     dir: "{{.USER_WORKING_DIR}}"
     preconditions:
-      - "test -f certs/ca.crt"
+      - "test -f deploy/certs/ca.crt"
     cmds:
       # The gRPC port is not published: the only way in is through traefik,
       # which terminates the edge certificate and re-establishes mTLS inward.
@@ -102,9 +153,9 @@ tasks:
       - >-
         go run ./cmd/easyp-svc/ plugins register
         --addr easyp.api.localhost:${EASYP_TRAEFIK_TLS_PORT:-4443}
-        --tls-ca certs/ca.crt
+        --tls-ca deploy/certs/ca.crt
         --token ${EASYP_TOKEN:-local-dev-token}
-        --cfg config.yml
+        --cfg deploy/config/config.yml
         --non-interactive
 
 
@@ -134,7 +185,7 @@ tasks:
     desc: "Start local service and automatically migrate plugins"
     dir: "{{.USER_WORKING_DIR}}"
     preconditions:
-      - "test -f config.local.yml"
+      - "test -f deploy/config/config.local.yml"
     cmds:
       - |
         (
@@ -145,16 +196,16 @@ tasks:
           echo "Service is ready! Running plugin migration..."
           # config.local.yml leaves server.tls empty, so this leg is plaintext,
           # and it ships the matching throwaway write token.
-          go run ./cmd/easyp-svc/ plugins register --addr localhost:8080 --cfg config.local.yml \
+          go run ./cmd/easyp-svc/ plugins register --addr localhost:8080 --cfg deploy/config/config.local.yml \
             --non-interactive --insecure --token local-dev-token
         ) &
-        go run ./cmd/easyp-svc/ service start --cfg config.local.yml --log_level debug
+        go run ./cmd/easyp-svc/ service start --cfg deploy/config/config.local.yml --log_level debug
 
   run-local-test:
     desc: "Start local service with mock plugins for testing migration CLI"
     dir: "{{.USER_WORKING_DIR}}"
     preconditions:
-      - "test -f config.local.yml"
+      - "test -f deploy/config/config.local.yml"
     cmds:
       - "mkdir -p plugins/grpc/go/v1.5.1 && touch plugins/grpc/go/v1.5.1/plugin"
       - "mkdir -p plugins/grpc-ecosystem/gateway/v2.27.3 && touch plugins/grpc-ecosystem/gateway/v2.27.3/plugin"

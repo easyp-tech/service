@@ -127,7 +127,7 @@ jobs:
       # ways that has bitten: a value rendered in a form the service cannot
       # parse, and a values.yaml key with no env var behind it.
       - name: Lint and render
-        run: charts/easyp-service/tests/render.sh
+        run: deploy/charts/easyp-service/tests/render.sh
 
   lint:
     name: Lint

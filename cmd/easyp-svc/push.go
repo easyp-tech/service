@@ -8,7 +8,6 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/term"
@@ -156,7 +155,11 @@ func runPluginsPush(ctx context.Context, opts pushOptions) error {
 // connection well below the link it arrives on: with a per-stream ceiling, the
 // only way to use the available bandwidth is more streams.
 func pushAll(ctx context.Context, store *storage.S3Storage, plugins []pluginInfo, opts pushOptions) error {
-	tracker := newPushTracker(len(plugins), !opts.nonInteractive && term.IsTerminal(int(os.Stdout.Fd())))
+	tracker := newBatchTracker(
+		len(plugins),
+		!opts.nonInteractive && term.IsTerminal(int(os.Stdout.Fd())),
+		batchLabels{inProgress: "pushing", skipReason: "already in storage", succeeded: "pushed"},
+	)
 
 	// A limit of zero would let errgroup start nothing at all, so anything
 	// below one is read as "one upload at a time".
@@ -205,100 +208,6 @@ func pushAll(ctx context.Context, store *storage.S3Storage, plugins []pluginInfo
 	}
 
 	return nil
-}
-
-// pushTracker keeps concurrency-safe counters of the uploads in flight.
-type pushTracker struct {
-	mu          sync.Mutex
-	total       int
-	completed   int
-	pushed      int
-	skipped     int
-	failed      int
-	interactive bool
-	spinIdx     int
-}
-
-func newPushTracker(total int, interactive bool) *pushTracker {
-	return &pushTracker{total: total, interactive: interactive}
-}
-
-// finish records one plugin's outcome and refreshes the progress line.
-func (t *pushTracker) finish(name string, wasSkipped bool, pushErr error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	t.completed++
-
-	switch {
-	case pushErr != nil:
-		t.failed++
-	case wasSkipped:
-		t.skipped++
-	default:
-		t.pushed++
-	}
-
-	if t.interactive {
-		t.renderLocked()
-
-		return
-	}
-
-	switch {
-	case pushErr != nil:
-		_, _ = fmt.Fprintf(os.Stderr, "Error pushing %s: %v\n", name, pushErr)
-	case wasSkipped:
-		_, _ = fmt.Fprintf(os.Stdout, "Skipped (already in storage): %s\n", name)
-	default:
-		_, _ = fmt.Fprintf(os.Stdout, "Successfully pushed %s\n", name)
-	}
-}
-
-// renderLocked redraws the single progress line. The caller holds the mutex.
-func (t *pushTracker) renderLocked() {
-	spinners := getSpinners()
-	spinner := spinners[t.spinIdx%len(spinners)]
-	t.spinIdx++
-
-	pct := int(float64(t.completed) / float64(t.total) * percentMultiplier)
-	_, _ = fmt.Fprintf(
-		os.Stdout,
-		"\r\033[K%s %s %d%% (%d/%d) | ✅ %d  ⏭ %d  ❌ %d",
-		spinner,
-		renderProgressBar(pct),
-		pct,
-		t.completed,
-		t.total,
-		t.pushed,
-		t.skipped,
-		t.failed,
-	)
-}
-
-// done closes the progress line before the summary is printed.
-func (t *pushTracker) done() {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	if !t.interactive {
-		return
-	}
-
-	_, _ = fmt.Fprintf(
-		os.Stdout,
-		"\r\033[K✓ %s Done! %d/%d\n",
-		renderProgressBar(percentMultiplier),
-		t.completed,
-		t.total,
-	)
-}
-
-func (t *pushTracker) snapshot() (int, int, int, int) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	return t.total, t.pushed, t.skipped, t.failed
 }
 
 // pushSinglePlugin packs one plugin version directory and uploads it.

@@ -27,6 +27,39 @@ const (
 	publicKeysSeparator = ":"
 )
 
+// Storage credentials, for the same reason as the licence above: the --cfg path
+// never reaches envconfig, so without these the only way to give the service an
+// S3 key pair is to write it into a YAML file — and the deployment YAML is
+// committed. A key pair did reach a public repository that way.
+//
+// Names match the envconfig tags on the same fields (REGISTRY_ prefix,
+// S3_ prefix, field name), so a value written for one path works on the other.
+const (
+	s3AccessKeyIDEnv     = "REGISTRY_S3_ACCESS_KEY_ID"
+	s3SecretAccessKeyEnv = "REGISTRY_S3_SECRET_ACCESS_KEY"
+)
+
+// resolveS3AccessKeyID and resolveS3SecretAccessKey prefer the config file and
+// fall back to the environment, matching resolveLicenseToken above. The config
+// wins so that an explicit value keeps working; the fallback exists so that the
+// secret does not have to be written down next to the settings that are not
+// secret.
+func resolveS3AccessKeyID(cfg config.S3Config) string {
+	if cfg.AccessKeyID != "" {
+		return strings.TrimSpace(cfg.AccessKeyID)
+	}
+
+	return strings.TrimSpace(os.Getenv(s3AccessKeyIDEnv))
+}
+
+func resolveS3SecretAccessKey(cfg config.S3Config) string {
+	if cfg.SecretAccessKey != "" {
+		return strings.TrimSpace(cfg.SecretAccessKey)
+	}
+
+	return strings.TrimSpace(os.Getenv(s3SecretAccessKeyEnv))
+}
+
 // writeTokenEnv carries the credential for the mutating RPCs, so it never has to
 // appear in a shell history or a Taskfile.
 const writeTokenEnv = "EASYP_TOKEN"

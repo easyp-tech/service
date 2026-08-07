@@ -153,8 +153,21 @@ func (c *PasetoLicenseClient) ValidateLicense(ctx context.Context) (core.License
 
 	token, err := parser.ParseV4Public(key, c.token, nil)
 	if err != nil {
+		// Which of the two it is decides where to go looking, and the two lead
+		// opposite ways: a rule failure means the token is not one of ours and
+		// the key is beside the point, while anything else means the token did
+		// not come from the key it was checked against.
+		if errors.Is(err, &paseto.RuleError{}) {
+			c.report(ctx, slog.LevelWarn,
+				"licence token is not one of ours: it must carry iss="+tokenIssuer+" and aud="+tokenAudience+"; "+
+					"running in community mode",
+				"error", err)
+
+			return core.CommunityLicenseClaims(), nil
+		}
+
 		c.report(ctx, slog.LevelWarn,
-			"licence token rejected: bad signature, wrong issuer or wrong audience; running in community mode",
+			"licence token failed verification against the configured key; running in community mode",
 			"error", err)
 
 		return core.CommunityLicenseClaims(), nil

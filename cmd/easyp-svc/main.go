@@ -262,8 +262,12 @@ func getPluginsPushCommand() *cli.Command {
 
 func getPluginsRegisterCommand() *cli.Command {
 	return &cli.Command{
-		Name:      "register",
-		Usage:     "Register built plugin binaries with a running service via CreatePlugin",
+		Name:  "register",
+		Usage: "Register built plugin binaries with a running service via CreatePlugin",
+		Description: "Sends metadata and a command path for every plugin version found under the path. " +
+			"With --packed the path is a tree written by `plugins pack`, which names the same versions " +
+			"without holding their binaries — enough to register a catalogue from a machine that never " +
+			"built it, as long as the archives are already in storage.",
 		ArgsUsage: argPath,
 		Flags:     registerFlags(),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -293,6 +297,8 @@ func getPluginsRegisterCommand() *cli.Command {
 					keyFile:  cmd.String(flagTLSKey),
 					insecure: cmd.Bool(flagInsecure),
 				},
+				packed:         cmd.Bool(flagPacked),
+				parallel:       cmd.Int(flagParallel),
 				nonInteractive: cmd.Bool(flagNonInteractive),
 				dryRun:         cmd.Bool(flagDryRun),
 				failOnError:    cmd.Bool("fail-on-error"),
@@ -421,6 +427,18 @@ func registerFlags() []cli.Flag {
 			Name:  flagFilter,
 			Usage: "glob filter pattern for plugins (e.g. 'connectrpc/*')",
 			Value: "",
+		},
+		&cli.BoolFlag{
+			Name:  flagPacked,
+			Usage: "the path is a tree of archives written by `plugins pack`, not built plugin directories",
+			Value: false,
+		},
+		&cli.IntFlag{
+			Name:    flagParallel,
+			Aliases: []string{"p"},
+			Usage: "plugins to register at once; the server reads each archive from storage to checksum it, " +
+				"so this is worth raising, up to the server's rate_limit.max_concurrent_per_ip",
+			Value: defaultRegisterParallel,
 		},
 		&cli.BoolFlag{
 			Name:  flagNonInteractive,

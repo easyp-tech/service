@@ -78,9 +78,9 @@ instead of a shared `plugins/` volume — `plugins_dir` becomes a local cache.
 ```bash
 # Build machine / CI — needs S3 WRITE access
 easyp-svc plugins build registry
-easyp-svc plugins push plugins --cfg config.yml   # packs and uploads plugin.tgz
-easyp-svc plugins register plugins --cfg config.yml \
-  --addr easyp.api.localhost:4443 --tls-ca certs/ca.crt
+easyp-svc plugins push plugins --cfg deploy/config/config.yml   # packs and uploads plugin.tgz
+easyp-svc plugins register plugins --cfg deploy/config/config.yml \
+  --addr easyp.api.localhost:4443 --tls-ca deploy/certs/ca.crt
 ```
 
 Registration is metadata-only. The service streams the pushed archive from storage,
@@ -100,13 +100,13 @@ Plugins must be registered in PostgreSQL before use:
 ```bash
 # Prefer the CLI (scans plugins/ for files named "plugin")
 easyp-svc plugins register plugins/ --plugins-prefix /plugins \
-  --addr easyp.api.localhost:4443 --tls-ca certs/ca.crt
+  --addr easyp.api.localhost:4443 --tls-ca deploy/certs/ca.crt
 
 # Or via gRPC CreatePlugin with config.command pointing at the entrypoint
 # The server does not serve reflection, so the schema comes from a descriptor
 # set built with `easyp-svc api descriptor -o api.protoset`. CreatePlugin is a
 # mutating method, so the call also needs a write token.
-grpcurl -protoset api.protoset -cacert certs/ca.crt \
+grpcurl -protoset api.protoset -cacert deploy/certs/ca.crt \
   -H "authorization: Bearer $EASYP_TOKEN" \
   -d '{"group":"grpc","name":"go","version":"v1.5.1","config":{"command":["/plugins/grpc/go/v1.5.1/plugin"]}}' \
   easyp.api.localhost:4443 api.generator.v1.ServiceAPI/CreatePlugin
@@ -114,7 +114,7 @@ grpcurl -protoset api.protoset -cacert certs/ca.crt \
 
 ## Docker Compose
 
-`docker-compose.yml` provides a full dev stack:
+`deploy/docker-compose.yml` provides a full dev stack:
 
 | Service | Port | Description |
 |---------|------|-------------|
@@ -137,6 +137,81 @@ For local development:
 task up-minimal  # postgres only (port 5433)
 ```
 
+### Both tiers at once
+
+`deploy/docker-compose.dev.yml` runs a licensed container next to an unlicensed
+one. It exists because almost everything licence-gated — audit, the worker
+ceiling, the plugin count — is only visible as a *difference*, and a single
+container cannot show you one.
+
+```bash
+cp deploy/.env.dev.example deploy/.env.dev   # carries the development licence
+task up-dev
+task tier-dev                                # assert the tiers really differ
+```
+
+|            | gRPC/metrics/health/mcp | Host                         | Database              |
+|------------|-------------------------|------------------------------|-----------------------|
+| community  | 8080–8083               | `community.easyp.localhost`  | `easyp_community_db`  |
+| enterprise | 9080–9083               | `enterprise.easyp.localhost` | `easyp_enterprise_db` |
+
+Both run the published image rather than a local build, and both sit behind the
+same traefik with the same mTLS transport, so the only difference between them
+is the licence. `LICENSE_*` is set on the enterprise container only; a licence
+reaching the community one would make the pair useless as a comparison.
+
+**A missing or unverifiable licence is not a startup failure.** Community is a
+legitimate configuration, so the service logs the problem and serves on — which
+means a broken `LICENSE_KEY` produces two identical community containers that
+look healthy. `task tier-dev` reads `easyp_license_valid` from both and asserts
+1 on enterprise and 0 on community. Run it before trusting anything the stack
+tells you about tiering.
+
+The development licence — `sub=test-dev-license`, `tier=enterprise`,
+`max_workers=16`, unlimited plugins, valid to 2036 — is committed in
+`deploy/.env.dev.example`. It cannot be reissued from this repository: the
+service only verifies PASETO tokens, and the signing key lives in the licence
+registry (`easyp-tech/licenses`).
+
+Storage credentials are *not* committed. `deploy/config/config.*.dev.yml` carry
+the endpoint, bucket and region, and take the key pair from
+`REGISTRY_S3_ACCESS_KEY_ID` / `REGISTRY_S3_SECRET_ACCESS_KEY` in
+`deploy/.env.dev`, which is gitignored.
+
+### On a remote host
+
+`deploy/` is the unit that gets copied. A host running the stack needs no source
+checkout, no Go toolchain and no task runner — only Docker and this directory:
+
+```bash
+rsync -a --delete deploy/ user@host:~/easyp/     # excluding .env and certs/
+ssh user@host 'cd ~/easyp && ./scripts/gen-dev-certs.sh'
+# put the licence and the storage key pair in ~/easyp/.env, mode 600
+ssh user@host 'cd ~/easyp && docker compose -f docker-compose.dev.yml up -d'
+ssh user@host 'cd ~/easyp && ./scripts/check-tiers.sh'
+```
+
+Paths inside the compose file resolve against the file itself, so the copy works
+unedited — which is the property the `deploy/` layout was arranged for.
+
+Two things do not travel. `docker-compose.yml`, the full observability stack,
+builds the image from source (`context: ..`) and cannot run where there is no
+source; the two-tier file pulls the published image instead and is the one to
+use remotely. And `easyp-svc` itself is gone from the host, so plugins are
+registered from a machine that has the CLI, pointed at the host through traefik.
+
+`check-tiers.sh` is deliberately a script rather than a Taskfile target, so the
+same implementation runs in both places. `HOST`, `COMMUNITY_METRICS_PORT` and
+`ENTERPRISE_METRICS_PORT` let it run over an SSH tunnel once the metrics ports
+are on loopback.
+
+**Publishing.** Only traefik binds to all interfaces. Everything else — both
+services and the database — binds to `127.0.0.1` unless `EASYP_BIND` says
+otherwise. The database password sits in the committed compose file, so on a
+host with a public address the default is the difference between a dev stack and
+an open database. The dev host ran with 5432 exposed; its traefik log shows the
+scanning that follows.
+
 ## GoReleaser
 
 `.goreleaser.yaml` configures release builds:
@@ -155,8 +230,8 @@ CLI flags > environment variables > YAML config file.
 
 | File | Purpose |
 |------|---------|
-| `config.yml` | Docker-compose service config (internal hostnames) |
-| `config.local.yml` | Local development config (localhost, port 5433) |
+| `deploy/config/config.yml` | Docker-compose service config (internal hostnames) |
+| `deploy/config/config.local.yml` | Local development config (localhost, port 5433) |
 
 ### YAML Config Structure
 
@@ -231,12 +306,12 @@ every start.
 
 Traefik holds `client.crt`/`client.key` and reaches the service over that mutual
 TLS leg via the `easyp-mtls@file` serversTransport declared in
-`configs/traefik/dynamic.yml`; the docker provider cannot declare one. Outside
+`deploy/observability/traefik/dynamic.yml`; the docker provider cannot declare one. Outside
 the stack traefik serves `edge.crt` on `easyp.api.localhost`.
 
-`scripts/gen-dev-certs.sh` (`task certs`) issues a throwaway CA and the three
+`deploy/scripts/gen-dev-certs.sh` (`task certs`) issues a throwaway CA and the three
 certificates for development. Production certificates come from your own CA and
-are mounted at the paths in `config.yml`.
+are mounted at the paths in `deploy/config/config.yml`.
 
 ## Backup and restore
 

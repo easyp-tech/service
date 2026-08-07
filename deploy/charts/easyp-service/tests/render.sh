@@ -8,11 +8,14 @@
 # with no corresponding env var, which showed up as a setting that silently did
 # nothing. Both are visible in `helm template` output, if anyone looks.
 #
-# Usage: charts/easyp-service/tests/render.sh
+# Usage: deploy/charts/easyp-service/tests/render.sh
 
 set -euo pipefail
 
 CHART="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Resolved from the chart rather than from the caller's directory, and named so
+# that moving the chart again is one edit here instead of a count of `..`.
+REPO="$(cd "$CHART/../../.." && pwd)"
 
 # Enough to get past the install-time guards, so each case below can change one
 # thing without also having to satisfy the database and TLS preflight.
@@ -405,7 +408,7 @@ fi
 # every one carries a runbook_url. The anchors are derived from alert names and
 # the headings are written by hand, which is exactly the pair that drifts apart
 # without something comparing them.
-runbooks="$CHART/../../.spec/RUNBOOKS.md"
+runbooks="$REPO/.spec/RUNBOOKS.md"
 missing=""
 
 while read -r alert; do

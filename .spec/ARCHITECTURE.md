@@ -107,12 +107,9 @@ service/
 ├── migrate/                           # SQL migrations (numbered)
 ├── registry/                          # Plugin Dockerfiles (used for building)
 ├── plugins/                           # Built plugin binaries (gitignored)
-├── configs/                           # Observability configs (alloy, grafana, loki, tempo, mimir, pyroscope, traefik)
 ├── cmd/easyp-svc/                     # Service + plugins CLI (service start, plugins build, plugins migrate)
 ├── Taskfile.yml                       # Task runner commands
-├── docker-compose.yml                 # Dev stack (postgres, grafana, observability, traefik)
-├── config.yml                         # Docker-compose service config
-├── config.local.yml                   # Local development config (minimal stack)
+├── deploy/                            # Compose stacks, service configs, observability configs, Helm chart, cert script
 ├── easyp.yaml                         # Protobuf lint + code generation config
 ├── easyp.local.yaml                   # Local easyp config for development
 └── .spec/                             # This documentation directory

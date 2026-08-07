@@ -29,7 +29,7 @@ Reference of commands and project tools.
 
 1. Start postgres: `task up-minimal` (port 5433)
 2. Build plugins: `task build-plugins`
-3. Run from source: `task run-local` (uses `config.local.yml`)
+3. Run from source: `task run-local` (uses `deploy/config/config.local.yml`)
 4. Register plugins: `./register-plugins.sh localhost:8080`
 5. Generate code: `easyp --cfg easyp.local.yaml generate`
 
@@ -82,7 +82,7 @@ task setup
 
 # Run from source against minimal stack (uses config.local.yml)
 task run-local
-# Equivalent to: go run ./cmd/main.go -cfg config.local.yml -log_level debug
+# Equivalent to: go run ./cmd/main.go -cfg deploy/config/config.local.yml -log_level debug
 ```
 
 ### Plugin Management
