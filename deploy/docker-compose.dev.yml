@@ -122,7 +122,14 @@ services:
     labels:
       service: easyp-api-community
       traefik.enable: "true"
-      traefik.http.routers.easyp-community.rule: "Host(`community.easyp.localhost`)"
+      # Two names for one tier: the .localhost one for a stack running on a
+      # laptop, the public one for wherever dev is deployed. The bare domain
+      # answers here too — an unqualified client is an anonymous one, and
+      # community is what anonymous callers are entitled to.
+      traefik.http.routers.easyp-community.rule: >-
+        Host(`community.easyp.localhost`)
+        || Host(`community.${EASYP_DEV_DOMAIN:-plugins.beta.easyp.tech}`)
+        || Host(`${EASYP_DEV_DOMAIN:-plugins.beta.easyp.tech}`)
       traefik.http.routers.easyp-community.entrypoints: "websecure"
       traefik.http.routers.easyp-community.tls: "true"
       traefik.http.routers.easyp-community.service: "easyp-community"
@@ -164,7 +171,9 @@ services:
     labels:
       service: easyp-api-enterprise
       traefik.enable: "true"
-      traefik.http.routers.easyp-enterprise.rule: "Host(`enterprise.easyp.localhost`)"
+      traefik.http.routers.easyp-enterprise.rule: >-
+        Host(`enterprise.easyp.localhost`)
+        || Host(`enterprise.${EASYP_DEV_DOMAIN:-plugins.beta.easyp.tech}`)
       traefik.http.routers.easyp-enterprise.entrypoints: "websecure"
       traefik.http.routers.easyp-enterprise.tls: "true"
       traefik.http.routers.easyp-enterprise.service: "easyp-enterprise"

@@ -6,6 +6,7 @@ vars:
   # -f is all that is needed — the volume paths stay readable from deploy/.
   COMPOSE: "docker compose -f deploy/docker-compose.yml"
   COMPOSE_DEV: "docker compose -f deploy/docker-compose.dev.yml"
+  COMPOSE_DEV_PUBLIC: "docker compose -f deploy/docker-compose.dev.yml -f deploy/docker-compose.public.yml"
 
 tasks:
   certs:
