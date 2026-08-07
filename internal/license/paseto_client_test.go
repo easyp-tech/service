@@ -522,6 +522,81 @@ func TestRejectionIsReportedOnlyOnce(t *testing.T) {
 		"the same rejection, five times over, is worth saying once")
 }
 
+// TestRejectionNamesTheRightCause covers what an operator is left with when a
+// token is refused. The two causes lead opposite ways — a missing iss means the
+// token is not ours and the key is irrelevant, a bad signature means the key is
+// exactly the problem — so one message covering both sends half of all
+// investigations to the wrong place. A dev licence that had lost its iss claim
+// cost an afternoon of comparing perfectly good keys.
+func TestRejectionNamesTheRightCause(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		// sign with a key other than the configured one, or mint a token whose
+		// claims disqualify it.
+		stranger bool
+		spec     func() tokenSpec
+		want     string
+		notWant  string
+	}{
+		"missing issuer is a claim problem": {
+			spec: func() tokenSpec {
+				spec := validSpec()
+				spec.issuer = unset
+
+				return spec
+			},
+			want:    "not one of ours",
+			notWant: "configured key",
+		},
+		"wrong audience is a claim problem": {
+			spec: func() tokenSpec {
+				spec := validSpec()
+				spec.audience = "someone-else"
+
+				return spec
+			},
+			want:    "not one of ours",
+			notWant: "configured key",
+		},
+		"foreign signature is a key problem": {
+			stranger: true,
+			spec:     validSpec,
+			want:     "configured key",
+			notWant:  "not one of ours",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			key := paseto.NewV4AsymmetricSecretKey()
+
+			signer := key
+			if tt.stranger {
+				signer = paseto.NewV4AsymmetricSecretKey()
+			}
+
+			var buf strings.Builder
+
+			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+			client, err := NewPasetoLicenseClient(
+				mint(t, signer, tt.spec()),
+				map[string]string{testKID: key.Public().ExportHex()},
+				"",
+				logger,
+			)
+			require.NoError(t, err)
+
+			require.Equal(t, core.LicenseTierCommunity, tierOf(t, client))
+			require.Contains(t, buf.String(), tt.want)
+			require.NotContains(t, buf.String(), tt.notWant)
+		})
+	}
+}
+
 // TestGraceIsAnnouncedOnTransition uses the client's clock, which is legitimate
 // here: the subject is the logging, and the token's own dates already decide the
 // tier. Nothing about expiry is being asserted.
