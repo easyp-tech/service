@@ -9,12 +9,15 @@ import (
 	"path/filepath"
 	"strings"
 
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/term"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"gopkg.in/yaml.v3"
 
 	"github.com/easyp-tech/service/internal/config"
+	"github.com/easyp-tech/service/internal/core"
+	"github.com/easyp-tech/service/internal/plugarchive"
 	"github.com/easyp-tech/service/sdk"
 )
 
@@ -28,6 +31,10 @@ const (
 	// pluginEntrypointName is the file a built plugin version directory is
 	// required to contain, and the one a scan of such a tree looks for.
 	pluginEntrypointName = "plugin"
+	// defaultRegisterParallel is how many plugins are registered at once. It
+	// sits at the lower of the two tiers' max_concurrent_per_ip so that the
+	// default does not spend its time being throttled and retried.
+	defaultRegisterParallel = 8
 )
 
 var (
@@ -43,6 +50,9 @@ var (
 	ErrEmptyPluginsDir = errors.New("registry.plugins_dir is empty in config")
 	// ErrRegisterFailed is returned when one or more plugins failed registration and fail-on-error is set.
 	ErrRegisterFailed = errors.New("plugin registration failed")
+	// ErrPluginLimitReached is returned when the server refuses a registration
+	// because the licence tier's plugin cap is full. Retrying cannot help.
+	ErrPluginLimitReached = errors.New("the server's licence tier allows no further plugins")
 )
 
 type pluginInfo struct {
@@ -95,19 +105,23 @@ func getSpinners() []string {
 
 // registerOptions holds the resolved inputs of the plugins register command.
 type registerOptions struct {
-	scanPath       string
-	addr           string
-	filter         string
-	pluginsPrefix  string
-	token          string
-	tls            clientTLSOptions
+	scanPath      string
+	addr          string
+	filter        string
+	pluginsPrefix string
+	token         string
+	tls           clientTLSOptions
+	// packed says scanPath holds archives written by `plugins pack` rather than
+	// built plugin directories.
+	packed         bool
+	parallel       int
 	nonInteractive bool
 	dryRun         bool
 	failOnError    bool
 }
 
 func runPluginsRegister(ctx context.Context, opts registerOptions) error {
-	plugins, err := scanPlugins(opts.scanPath, opts.filter)
+	plugins, err := scanRegisterSource(opts)
 	if err != nil {
 		return err
 	}
@@ -144,51 +158,66 @@ func runPluginsRegister(ctx context.Context, opts registerOptions) error {
 	}
 	defer func() { _ = client.Close() }()
 
-	return registerAll(ctx, client, plugins, opts.pluginsPrefix, opts.nonInteractive, opts.failOnError)
+	return registerAll(ctx, client, plugins, opts.pluginsPrefix, opts.parallel, opts.nonInteractive, opts.failOnError)
 }
 
 // registerAll registers every scanned plugin, reporting progress as it goes.
+//
+// Registrations run in parallel because each one costs far more on the server
+// than on the wire: CreatePlugin carries only metadata, but the service reads
+// the whole archive out of object storage to checksum it before it answers. One
+// at a time, a catalogue of any size is bounded by that round trip repeated.
+//
+// The useful ceiling is not here but in the server's rate_limit: concurrency
+// beyond max_concurrent_per_ip is refused with ResourceExhausted, which the SDK
+// retries — so overshooting does not fail, it quietly slows down.
 func registerAll(
 	ctx context.Context,
 	client *sdk.Client,
 	plugins []pluginInfo,
 	pluginsPrefix string,
+	parallel int,
 	nonInteractive bool,
 	failOnError bool,
 ) error {
-	total := len(plugins)
 	isInteractive := !nonInteractive && term.IsTerminal(int(os.Stdout.Fd()))
+	tracker := newBatchTracker(len(plugins), isInteractive, batchLabels{
+		inProgress: "registering",
+		skipReason: "already exists",
+		succeeded:  "registered",
+	})
 
-	var registered, skipped, failed int
-	spinners := getSpinners()
-	spinIdx := 0
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(max(parallel, 1))
 
-	for idx, plg := range plugins {
-		ctxErr := ctx.Err()
-		if ctxErr != nil {
-			return interruptRegister(isInteractive, total, registered, skipped, failed, ctxErr)
-		}
+	for _, plg := range plugins {
+		group.Go(func() error {
+			ctxErr := groupCtx.Err()
+			if ctxErr != nil {
+				return fmt.Errorf("groupCtx.Err: %w", ctxErr)
+			}
 
-		pName := pluginDisplayName(plg)
-		spinIdx = reportRegisterProgress(isInteractive, spinners, spinIdx, pName, idx, total)
+			isSkipped, errReg := registerSinglePlugin(groupCtx, client, plg, pluginsPrefix)
+			tracker.finish(pluginDisplayName(plg), isSkipped, errReg)
 
-		isSkipped, errReg := registerSinglePlugin(ctx, client, plg, pluginsPrefix)
-		if errReg != nil && isContextAbort(ctx, errReg) {
-			return interruptRegister(isInteractive, total, registered, skipped, failed, contextAbortErr(ctx, errReg))
-		}
-		processRegistrationResult(pName, errReg, isSkipped, isInteractive, &registered, &skipped, &failed)
+			// One plugin failing is counted and the run continues; an abort is
+			// the whole batch ending, so only that stops the group.
+			if errReg != nil && isContextAbort(groupCtx, errReg) {
+				return contextAbortErr(groupCtx, errReg)
+			}
+
+			return nil
+		})
 	}
 
-	if isInteractive {
-		progressBar := renderProgressBar(percentMultiplier)
-		_, _ = fmt.Fprintf(
-			os.Stdout,
-			"\r\033[K%s %s Done! 100%% (%d/%d)\n",
-			"✓",
-			progressBar,
-			total,
-			total,
-		)
+	waitErr := group.Wait()
+
+	tracker.done()
+
+	total, registered, skipped, failed := tracker.snapshot()
+
+	if waitErr != nil {
+		return interruptRegister(isInteractive, total, registered, skipped, failed, waitErr)
 	}
 
 	printRegisterSummary(total, registered, skipped, failed)
@@ -203,6 +232,21 @@ func registrationBatchError(failOnError bool, failed int) error {
 	}
 
 	return nil
+}
+
+// scanRegisterSource lists the plugins to register, from either a built tree or
+// one packed by `plugins pack`.
+//
+// Registration carries metadata and a command path, never the artifact itself:
+// the service streams the archive from storage to checksum it and unpacks it on
+// first use. A packed tree therefore names everything registration needs, which
+// is what lets a catalogue be registered from a machine that never built it.
+func scanRegisterSource(opts registerOptions) ([]pluginInfo, error) {
+	if opts.packed {
+		return scanPluginTree(opts.scanPath, opts.filter, plugarchive.ArchiveName)
+	}
+
+	return scanPlugins(opts.scanPath, opts.filter)
 }
 
 func runPluginsRegisterDryRun(plugins []pluginInfo, pluginsPrefix string) {
@@ -255,39 +299,6 @@ func printRegisterSummary(total, registered, skipped, failed int) {
 	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Skipped (already exists)", skipped)
 	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Failed", failed)
 	_, _ = fmt.Fprintln(os.Stdout, strings.Repeat("-", separatorLength))
-}
-
-func processRegistrationResult(
-	pName string,
-	errReg error,
-	isSkipped bool,
-	isInteractive bool,
-	registered *int,
-	skipped *int,
-	failed *int,
-) {
-	if errReg != nil {
-		*failed++
-		if !isInteractive {
-			_, _ = fmt.Fprintf(os.Stderr, "Error registering %s: %v\n", pName, errReg)
-		}
-
-		return
-	}
-
-	if isSkipped {
-		*skipped++
-		if !isInteractive {
-			_, _ = fmt.Fprintf(os.Stdout, "Skipped (already exists): %s\n", pName)
-		}
-
-		return
-	}
-
-	*registered++
-	if !isInteractive {
-		_, _ = fmt.Fprintf(os.Stdout, "Successfully registered %s\n", pName)
-	}
 }
 
 // scanPlugins finds plugin version directories holding an unpacked entrypoint.
@@ -348,23 +359,26 @@ func registerSinglePlugin(ctx context.Context, client *sdk.Client, plg pluginInf
 	}
 
 	_, registerErr := client.CreatePlugin(ctx, plg.group, plg.name, plg.version, configMap, nil)
-	if registerErr != nil {
-		if errors.Is(registerErr, context.Canceled) || errors.Is(registerErr, context.DeadlineExceeded) {
-			return false, fmt.Errorf("sdk.Client.CreatePlugin: %w", registerErr)
-		}
-
-		st, ok := status.FromError(registerErr)
-		if ok && st.Code() == codes.AlreadyExists {
-			return true, nil
-		}
-		if ok && (st.Code() == codes.Canceled || st.Code() == codes.DeadlineExceeded) {
-			return false, fmt.Errorf("sdk.Client.CreatePlugin: %w", registerErr)
-		}
-
-		return false, fmt.Errorf("sdk.Client.CreatePlugin: %w", registerErr)
+	if registerErr == nil {
+		return false, nil
 	}
 
-	return false, nil
+	st, ok := status.FromError(registerErr)
+	if ok && st.Code() == codes.AlreadyExists {
+		return true, nil
+	}
+
+	// ResourceExhausted covers three different things: a rate limit, a
+	// concurrency limit and a licence tier's plugin cap. Only the first two are
+	// worth waiting out — the cap will refuse every retry just as firmly — and
+	// the SDK retries all three alike, so an unqualified message here leaves a
+	// hard limit looking like a busy server that went quiet for a while.
+	if ok && st.Code() == codes.ResourceExhausted &&
+		strings.Contains(st.Message(), core.ErrMaxPluginsExceeded.Error()) {
+		return false, fmt.Errorf("%w: %s", ErrPluginLimitReached, st.Message())
+	}
+
+	return false, fmt.Errorf("sdk.Client.CreatePlugin: %w", registerErr)
 }
 
 // parsePluginPath splits {base}/{group}/{name}/{version}/{leafName} into its
@@ -409,27 +423,4 @@ func renderProgressBar(percent int) string {
 	empty := width - filled
 
 	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", empty) + "]"
-}
-
-// reportRegisterProgress renders the progress line and returns the next spinner index.
-func reportRegisterProgress(isInteractive bool, spinners []string, spinIdx int, pName string, idx, total int) int {
-	if !isInteractive {
-		_, _ = fmt.Fprintf(os.Stdout, "Registering %s...\n", pName)
-
-		return spinIdx
-	}
-
-	pct := int(float64(idx) / float64(total) * percentMultiplier)
-	_, _ = fmt.Fprintf(
-		os.Stdout,
-		"\r\033[K%s %s Registering %s... %d%% (%d/%d)",
-		spinners[spinIdx],
-		renderProgressBar(pct),
-		pName,
-		pct,
-		idx,
-		total,
-	)
-
-	return (spinIdx + 1) % len(spinners)
 }
