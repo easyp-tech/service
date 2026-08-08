@@ -334,6 +334,20 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	// Zero is not "no limit", it is a limit of nothing: every generation runs to
+	// completion and is then refused with "output limit exceeded (max 0 bytes)".
+	// The env tag's default does not save a YAML config — that path never
+	// reaches envconfig — so an omitted field lands here, and a stack that
+	// starts and answers every request with the same puzzle is worse than one
+	// that refuses to start.
+	if c.Registry.MaxOutputSize <= 0 {
+		return fmt.Errorf(
+			"registry.max_output_size must be positive, got %d: a plugin's output is measured against it, "+
+				"so zero refuses every generation",
+			c.Registry.MaxOutputSize,
+		)
+	}
+
 	// A send limit below what a plugin may produce is a request that does all
 	// its work and then cannot be answered. Better to refuse the combination at
 	// startup than to discover it on the first large generation.

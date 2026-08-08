@@ -25,6 +25,9 @@ func baseConfig() config.Config {
 	cfg.Audit.BufferSize = 1
 	cfg.Audit.BatchSize = 1
 	cfg.Audit.FlushInterval = 1
+	// Zero is rejected: it refuses every generation rather than lifting the cap.
+	cfg.Registry.MaxOutputSize = 1
+	cfg.Server.MaxSendMsgSize = 1
 
 	return cfg
 }

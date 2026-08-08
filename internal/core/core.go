@@ -156,8 +156,12 @@ func getNameAndVersion(pluginName string) (string, string, error) {
 }
 
 var (
-	nameRegexp    = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
-	versionRegexp = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
+	nameRegexp = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+	// The patch component is optional because upstream projects do not all
+	// publish one. Protobuf's own language runtimes are released as v33.1 and
+	// v35.0, and requiring three components refused every one of them — a third
+	// of the catalogue, including the plugins the product exists to serve.
+	versionRegexp = regexp.MustCompile(`^v\d+\.\d+(\.\d+)?$`)
 )
 
 const pluginNameParts = 2 // "{group}/{name}:{version}" splits into exactly 2 parts by "/" and ":"
