@@ -14,7 +14,9 @@
 # so the two live apart instead of in one file with a switch.
 #
 # Requires, on the host this runs on:
-#   - EASYP_DEV_DOMAIN and ACME_EMAIL set in deploy/.env.dev
+#   - EASYP_DEV_DOMAIN set in deploy/.env.dev
+#   - observability/traefik/traefik.public.yml, copied from the .example beside
+#     it and carrying the address Let's Encrypt should write to
 #   - A and AAAA records for community.$EASYP_DEV_DOMAIN,
 #     enterprise.$EASYP_DEV_DOMAIN and $EASYP_DEV_DOMAIN itself
 #   - port 80 reachable from the internet: the HTTP-01 challenge is answered
@@ -22,13 +24,14 @@
 
 services:
   traefik:
-    environment:
-      # The static configuration file carries no resolver, so an ACME account is
-      # never created by a local run. Traefik reads these on top of it.
-      TRAEFIK_CERTIFICATESRESOLVERS_LE_ACME_EMAIL: "${ACME_EMAIL:?ACME_EMAIL is required: Let's Encrypt sends expiry warnings there}"
-      TRAEFIK_CERTIFICATESRESOLVERS_LE_ACME_STORAGE: "/acme/acme.json"
-      TRAEFIK_CERTIFICATESRESOLVERS_LE_ACME_HTTPCHALLENGE_ENTRYPOINT: "web"
     volumes:
+      # Replaces the dev stack's static configuration at the same path, which is
+      # the only way to add the ACME resolver: traefik takes its static
+      # configuration from one source and prefers a file at this path whenever
+      # one exists, so flags and TRAEFIK_* variables are both discarded here.
+      # Copy traefik.public.example.yml to traefik.public.yml and put a real
+      # address in it; the real file is gitignored.
+      - "./observability/traefik/traefik.public.yml:/etc/traefik/traefik.yml:ro"
       # A named volume, not a bind: acme.json holds the account key and the
       # issued certificates, traefik refuses it unless it is mode 600, and a
       # bind mount hands it whatever the host directory has.
@@ -39,12 +42,20 @@ services:
       - "0.0.0.0:80:80"
       - "0.0.0.0:443:443"
 
+  # Both routers drop the .localhost names the dev stack also answers to.
+  # Traefik asks for one certificate covering every host in a rule, and Let's
+  # Encrypt rejects the whole order if any of them is not a public name — so
+  # leaving them in means no certificate at all, for the public names either.
   service-community:
     labels:
+      traefik.http.routers.easyp-community.rule: >-
+        Host(`community.${EASYP_DEV_DOMAIN:?EASYP_DEV_DOMAIN is required: it names the hosts to certify}`)
+        || Host(`${EASYP_DEV_DOMAIN}`)
       traefik.http.routers.easyp-community.tls.certresolver: "le"
 
   service-enterprise:
     labels:
+      traefik.http.routers.easyp-enterprise.rule: "Host(`enterprise.${EASYP_DEV_DOMAIN}`)"
       traefik.http.routers.easyp-enterprise.tls.certresolver: "le"
 
 volumes:

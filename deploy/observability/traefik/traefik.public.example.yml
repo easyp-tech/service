@@ -1,0 +1,75 @@
+# Static configuration for a stack that faces the internet, used by
+# docker-compose.public.yml in place of traefik.yml.
+#
+#   cp traefik.public.example.yml traefik.public.yml
+#   # then put a real address in certificatesResolvers.le.acme.email
+#
+# The real file is gitignored, for the same reason .env is: the address is a
+# deployment's own, and Let's Encrypt sends expiry warnings to it.
+#
+# It has to be a whole file rather than a fragment, and the email cannot come
+# from the environment. Traefik reads its static configuration from exactly one
+# source and picks the file whenever one exists at /etc/traefik/traefik.yml —
+# which the dev stack mounts — so flags and TRAEFIK_* variables are both
+# silently discarded there. A resolver added either of those ways leaves every
+# router failing with "nonexistent certificate resolver" while traefik itself
+# reports no problem at all.
+#
+# Everything above certificatesResolvers mirrors traefik.yml; keep them in step.
+
+entryPoints:
+  web:
+    address: ":80"
+  websecure:
+    address: ":443"
+  metrics:
+    address: ":8082"
+
+log:
+  level: INFO
+  format: json
+
+api:
+  # No dashboard. On a laptop an unauthenticated dashboard is a convenience; on
+  # a host with a public address it hands the routing table, the service names
+  # and the certificate state to whoever asks.
+  dashboard: false
+
+accessLog:
+  format: "json"
+
+metrics:
+  prometheus:
+    entryPoint: metrics
+    buckets:
+      - 0.1
+      - 0.3
+      - 1.2
+      - 5.0
+    addEntryPointsLabels: true
+    addRoutersLabels: true
+    addServicesLabels: true
+    headerLabels:
+      useragent: User-Agent
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: true
+
+certificatesResolvers:
+  le:
+    acme:
+      # REPLACE THIS. Let's Encrypt accepts any well-formed address and never
+      # checks that it receives mail, so a wrong one fails silently and is
+      # noticed when a certificate expires unannounced.
+      email: "you@example.com"
+      storage: /acme/acme.json
+      httpChallenge:
+        # Answered on :80, which is why that port has to be reachable from the
+        # internet: Let's Encrypt does not follow a redirect to a port it
+        # cannot see.
+        entryPoint: web

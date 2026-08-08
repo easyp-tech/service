@@ -63,4 +63,7 @@ deploy/plugins-enterprise/
 # deploy/.env.dev.example are the committed templates; the real ones are not.
 deploy/.env
 deploy/.env.dev
+# Carries the address Let's Encrypt writes to, which belongs to a deployment
+# rather than to the repository. Copied from the .example beside it.
+deploy/observability/traefik/traefik.public.yml
 
