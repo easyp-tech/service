@@ -36,9 +36,19 @@ registry:
     # deploy/.env.dev, which is not committed. This file is, and a previous
     # version of it put a live key pair in a public repository.
 
+# Both are empty unless the observability overlay is running: an endpoint
+# naming a container that does not exist makes every export attempt fail and
+# retry, which costs more than the telemetry is worth on a stack without it.
+# docker-compose.observability.yml is what makes these reachable.
+# Names the containers docker-compose.observability.yml brings up. This file is
+# read as YAML and never reaches envconfig, so the values cannot be supplied
+# from the environment — they are written out, and the stack either has those
+# containers or it does not. Without the overlay the exporters retry a name that
+# does not resolve: the service still serves, but its log fills with connection
+# errors, so blank these two out when running the dev stack on its own.
 telemetry:
-  otlp_endpoint: ""
-  pyroscope_endpoint: ""
+  otlp_endpoint: "easyp-alloy:4317"
+  pyroscope_endpoint: "http://easyp-pyroscope:4040"
 
 worker_pool:
   workers: 4

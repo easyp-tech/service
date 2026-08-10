@@ -23,12 +23,12 @@ schema_config:
 
 storage_config:
   aws:
-    endpoint: rustfs:9000
-    access_key_id: rustfsadmin
-    secret_access_key: rustfsadmin
+    endpoint: ${TELEMETRY_S3_ENDPOINT:-rustfs:9000}
+    access_key_id: ${TELEMETRY_S3_ACCESS_KEY_ID:-rustfsadmin}
+    secret_access_key: ${TELEMETRY_S3_SECRET_ACCESS_KEY:-rustfsadmin}
     s3forcepathstyle: true
-    insecure: true
-    bucketnames: loki-chunks
+    insecure: ${TELEMETRY_S3_INSECURE:-true}
+    bucketnames: ${TELEMETRY_BUCKET_PREFIX:-}loki-chunks
 
   tsdb_shipper:
     active_index_directory: /tmp/loki/tsdb-index
@@ -36,14 +36,24 @@ storage_config:
 
 limits_config:
   allow_structured_metadata: false
+  # Logs are worth keeping only as long as someone might look back at them, and
+  # the object store bills for the rest. Without this the store grows without
+  # bound: nothing else in the pipeline ever deletes a chunk.
+  retention_period: 168h
+
+compactor:
+  working_directory: /tmp/loki/compactor
+  # The limit above is inert on its own — the compactor is what enforces it.
+  retention_enabled: true
+  delete_request_store: s3
 
 ruler:
   storage:
     type: s3
     s3:
-      endpoint: rustfs:9000
-      access_key_id: rustfsadmin
-      secret_access_key: rustfsadmin
+      endpoint: ${TELEMETRY_S3_ENDPOINT:-rustfs:9000}
+      access_key_id: ${TELEMETRY_S3_ACCESS_KEY_ID:-rustfsadmin}
+      secret_access_key: ${TELEMETRY_S3_SECRET_ACCESS_KEY:-rustfsadmin}
       s3forcepathstyle: true
-      insecure: true
-      bucketnames: loki-ruler
+      insecure: ${TELEMETRY_S3_INSECURE:-true}
+      bucketnames: ${TELEMETRY_BUCKET_PREFIX:-}loki-ruler

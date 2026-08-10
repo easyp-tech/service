@@ -1,0 +1,198 @@
+# Overlay adding the observability stack to the two-tier dev stack.
+#
+#   docker compose -f deploy/docker-compose.dev.yml \
+#     -f deploy/docker-compose.observability.yml \
+#     -f deploy/docker-compose.public.yml --env-file deploy/.env.dev up -d
+#   task up-dev-observability
+#
+# The dev stack ships without it on purpose — two service tiers, a database and
+# a proxy are what the tier comparison needs, and six more containers are not.
+# This overlay is for a dev host that should also answer "what is it doing", as
+# opposed to a laptop bringing the tiers up for a minute.
+#
+# Storage: the backends write to the same object store that holds plugin
+# archives, rather than to a rustfs container of their own. A host with 14 GB of
+# disk cannot also be a metrics store, and four backends with retention rules
+# will fill whatever is left and take the database down with them.
+#
+# The buckets are named easyp-telemetry-* so nothing here can be mistaken for
+# easyp-plugins, which shares the credentials. That sharing is the one thing to
+# improve later: a compactor with the wrong bucket name in it would be pointed
+# at the archives, and telemetry has retention rules while archives must not.
+# A key scoped to the telemetry prefix would remove the possibility, and only
+# the storage administrator can issue one.
+#
+# These definitions mirror the ones in docker-compose.yml, which carries its own
+# copy for the single-tier stack. The configuration files under observability/
+# are shared, so the two can only drift in wiring, not in behaviour — but they
+# can drift, and unifying them is worth doing once the two stacks converge.
+
+services:
+  # No rustfs here: the backends use the shared object store, so the only setup
+  # left is making sure the buckets exist.
+  init-buckets:
+    image: minio/mc:latest
+    container_name: easyp-init-buckets
+    entrypoint: >
+      /bin/sh -c "
+      until /usr/bin/mc alias set store ${TELEMETRY_S3_URL:?TELEMETRY_S3_URL is required, e.g. https://storage.example.com} $$TELEMETRY_S3_ACCESS_KEY_ID $$TELEMETRY_S3_SECRET_ACCESS_KEY; do echo '...waiting for S3...'; sleep 1; done;
+      /usr/bin/mc mb --ignore-existing store/easyp-telemetry-tempo;
+      /usr/bin/mc mb --ignore-existing store/easyp-telemetry-mimir-blocks;
+      /usr/bin/mc mb --ignore-existing store/easyp-telemetry-mimir-ruler;
+      /usr/bin/mc mb --ignore-existing store/easyp-telemetry-mimir-alertmanager;
+      /usr/bin/mc mb --ignore-existing store/easyp-telemetry-loki-chunks;
+      /usr/bin/mc mb --ignore-existing store/easyp-telemetry-loki-ruler;
+      /usr/bin/mc mb --ignore-existing store/easyp-telemetry-pyroscope;
+      exit 0;
+      "
+    environment:
+      TELEMETRY_S3_ACCESS_KEY_ID: "${TELEMETRY_S3_ACCESS_KEY_ID:?TELEMETRY_S3_ACCESS_KEY_ID is required}"
+      TELEMETRY_S3_SECRET_ACCESS_KEY: "${TELEMETRY_S3_SECRET_ACCESS_KEY:?TELEMETRY_S3_SECRET_ACCESS_KEY is required}"
+    networks:
+      - easyp_network
+
+  mimir:
+    image: grafana/mimir:2.16.0
+    container_name: easyp-mimir
+    restart: unless-stopped
+    depends_on:
+      init-buckets:
+        condition: service_completed_successfully
+    volumes:
+      - "./observability/mimir/mimir.yaml:/etc/mimir/mimir.yaml:ro"
+    command: ["-config.file=/etc/mimir/mimir.yaml", "-config.expand-env=true"]
+    environment:
+      TELEMETRY_S3_ENDPOINT: "${TELEMETRY_S3_ENDPOINT:?TELEMETRY_S3_ENDPOINT is required, e.g. storage.example.com}"
+      TELEMETRY_S3_ACCESS_KEY_ID: "${TELEMETRY_S3_ACCESS_KEY_ID:?TELEMETRY_S3_ACCESS_KEY_ID is required}"
+      TELEMETRY_S3_SECRET_ACCESS_KEY: "${TELEMETRY_S3_SECRET_ACCESS_KEY:?TELEMETRY_S3_SECRET_ACCESS_KEY is required}"
+      TELEMETRY_S3_INSECURE: "${TELEMETRY_S3_INSECURE:-false}"
+      TELEMETRY_BUCKET_PREFIX: "${TELEMETRY_BUCKET_PREFIX:-easyp-telemetry-}"
+    networks:
+      - easyp_network
+
+  loki:
+    image: grafana/loki:3.5.0
+    container_name: easyp-loki
+    restart: unless-stopped
+    depends_on:
+      init-buckets:
+        condition: service_completed_successfully
+    volumes:
+      - "./observability/loki/loki.yml:/etc/loki/loki.yml:ro"
+    command: ["-config.file=/etc/loki/loki.yml", "-config.expand-env=true"]
+    environment:
+      TELEMETRY_S3_ENDPOINT: "${TELEMETRY_S3_ENDPOINT:?TELEMETRY_S3_ENDPOINT is required, e.g. storage.example.com}"
+      TELEMETRY_S3_ACCESS_KEY_ID: "${TELEMETRY_S3_ACCESS_KEY_ID:?TELEMETRY_S3_ACCESS_KEY_ID is required}"
+      TELEMETRY_S3_SECRET_ACCESS_KEY: "${TELEMETRY_S3_SECRET_ACCESS_KEY:?TELEMETRY_S3_SECRET_ACCESS_KEY is required}"
+      TELEMETRY_S3_INSECURE: "${TELEMETRY_S3_INSECURE:-false}"
+      TELEMETRY_BUCKET_PREFIX: "${TELEMETRY_BUCKET_PREFIX:-easyp-telemetry-}"
+    networks:
+      - easyp_network
+
+  tempo:
+    image: grafana/tempo:2.7.2
+    container_name: easyp-tempo
+    restart: unless-stopped
+    depends_on:
+      init-buckets:
+        condition: service_completed_successfully
+    volumes:
+      - "./observability/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro"
+    command: ["-config.file=/etc/tempo/tempo.yaml", "-config.expand-env=true"]
+    environment:
+      TELEMETRY_S3_ENDPOINT: "${TELEMETRY_S3_ENDPOINT:?TELEMETRY_S3_ENDPOINT is required, e.g. storage.example.com}"
+      TELEMETRY_S3_ACCESS_KEY_ID: "${TELEMETRY_S3_ACCESS_KEY_ID:?TELEMETRY_S3_ACCESS_KEY_ID is required}"
+      TELEMETRY_S3_SECRET_ACCESS_KEY: "${TELEMETRY_S3_SECRET_ACCESS_KEY:?TELEMETRY_S3_SECRET_ACCESS_KEY is required}"
+      TELEMETRY_S3_INSECURE: "${TELEMETRY_S3_INSECURE:-false}"
+      TELEMETRY_BUCKET_PREFIX: "${TELEMETRY_BUCKET_PREFIX:-easyp-telemetry-}"
+    networks:
+      - easyp_network
+
+  pyroscope:
+    image: grafana/pyroscope:1.13.5
+    container_name: easyp-pyroscope
+    restart: unless-stopped
+    depends_on:
+      init-buckets:
+        condition: service_completed_successfully
+    volumes:
+      - "./observability/pyroscope/pyroscope.yaml:/etc/pyroscope/pyroscope.yaml:ro"
+    command: ["-config.file=/etc/pyroscope/pyroscope.yaml", "-config.expand-env=true"]
+    environment:
+      TELEMETRY_S3_ENDPOINT: "${TELEMETRY_S3_ENDPOINT:?TELEMETRY_S3_ENDPOINT is required, e.g. storage.example.com}"
+      TELEMETRY_S3_ACCESS_KEY_ID: "${TELEMETRY_S3_ACCESS_KEY_ID:?TELEMETRY_S3_ACCESS_KEY_ID is required}"
+      TELEMETRY_S3_SECRET_ACCESS_KEY: "${TELEMETRY_S3_SECRET_ACCESS_KEY:?TELEMETRY_S3_SECRET_ACCESS_KEY is required}"
+      TELEMETRY_S3_INSECURE: "${TELEMETRY_S3_INSECURE:-false}"
+      TELEMETRY_BUCKET_PREFIX: "${TELEMETRY_BUCKET_PREFIX:-easyp-telemetry-}"
+    networks:
+      - easyp_network
+
+  alloy:
+    image: grafana/alloy:v1.9.1
+    container_name: easyp-alloy
+    restart: unless-stopped
+    depends_on:
+      - loki
+      - mimir
+      - tempo
+    volumes:
+      - "./observability/alloy/config.alloy:/etc/alloy/config.alloy:ro"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "/var/lib/docker/containers:/var/lib/docker/containers:ro"
+    command:
+      - "run"
+      - "/etc/alloy/config.alloy"
+      - "--storage.path=/var/lib/alloy/data"
+    networks:
+      - easyp_network
+
+  grafana:
+    image: grafana/grafana:12.3.0
+    container_name: easyp-grafana
+    restart: unless-stopped
+    depends_on:
+      - loki
+      - mimir
+      - tempo
+      - pyroscope
+    volumes:
+      - "./observability/grafana/config.ini:/etc/grafana/grafana.ini:ro"
+      - "./observability/grafana/provisioning:/etc/grafana/provisioning:ro"
+      - grafana-data:/var/lib/grafana
+    environment:
+      GF_PATHS_CONFIG: "/etc/grafana/grafana.ini"
+      GF_PATHS_PROVISIONING: "/etc/grafana/provisioning"
+      # Grafana's default is admin/admin, which is a convenience on a laptop and
+      # a takeover on a host with a public address. Startup fails without it
+      # rather than quietly serving the default.
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required: Grafana is reachable from the internet on this stack}"
+      # Sign-up would let a stranger create an account on a dashboard that shows
+      # the internals of the deployment.
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: "https://grafana.${EASYP_DEV_DOMAIN:-plugins.beta.easyp.tech}"
+    ports:
+      # Loopback only. This is the way in without a public name — an ssh -L
+      # tunnel — and it is what a laptop uses, since the router below is for a
+      # host that has a certificate.
+      - "${EASYP_BIND:-127.0.0.1}:${EASYP_GRAFANA_PORT:-3000}:3000"
+    labels:
+      service: easyp-grafana
+      traefik.enable: "true"
+      # One name, and a public one. Traefik asks for a single certificate
+      # covering every host in a rule, so adding a .localhost name here would
+      # make Let's Encrypt refuse the order and leave Grafana with no
+      # certificate at all — the same way it did for the two service routers.
+      traefik.http.routers.grafana.rule: "Host(`grafana.${EASYP_DEV_DOMAIN:-plugins.beta.easyp.tech}`)"
+      traefik.http.routers.grafana.entrypoints: "websecure"
+      traefik.http.routers.grafana.tls: "true"
+      # Names the resolver that docker-compose.public.yml defines. Without that
+      # overlay traefik logs "nonexistent certificate resolver" for this router
+      # and serves its default certificate; reach Grafana through the port above
+      # instead.
+      traefik.http.routers.grafana.tls.certresolver: "le"
+      traefik.http.services.grafana.loadbalancer.server.port: "3000"
+    networks:
+      - easyp_network
+
+volumes:
+  grafana-data:

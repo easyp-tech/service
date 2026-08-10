@@ -81,7 +81,10 @@ services:
         condition: service_completed_successfully
     volumes:
       - "./observability/mimir/mimir.yaml:/etc/mimir/mimir.yaml:ro"
-    command: ["-config.file=/etc/mimir/mimir.yaml"]
+    # expand-env lets the storage settings come from the environment, so one
+    # config file serves both this stack and a deployment pointing at a real
+    # object store. Without the flag the ${...} placeholders are read literally.
+    command: ["-config.file=/etc/mimir/mimir.yaml", "-config.expand-env=true"]
     networks:
       - easyp_network
 
@@ -94,7 +97,10 @@ services:
         condition: service_completed_successfully
     volumes:
       - "./observability/loki/loki.yml:/etc/loki/loki.yml:ro"
-    command: ["-config.file=/etc/loki/loki.yml"]
+    # expand-env lets the storage settings come from the environment, so one
+    # config file serves both this stack and a deployment pointing at a real
+    # object store. Without the flag the ${...} placeholders are read literally.
+    command: ["-config.file=/etc/loki/loki.yml", "-config.expand-env=true"]
     networks:
       - easyp_network
 
@@ -107,7 +113,10 @@ services:
         condition: service_completed_successfully
     volumes:
       - "./observability/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro"
-    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    # expand-env lets the storage settings come from the environment, so one
+    # config file serves both this stack and a deployment pointing at a real
+    # object store. Without the flag the ${...} placeholders are read literally.
+    command: ["-config.file=/etc/tempo/tempo.yaml", "-config.expand-env=true"]
     networks:
       - easyp_network
 
@@ -141,7 +150,10 @@ services:
         condition: service_completed_successfully
     volumes:
       - "./observability/pyroscope/pyroscope.yaml:/etc/pyroscope/pyroscope.yaml:ro"
-    command: ["-config.file=/etc/pyroscope/pyroscope.yaml"]
+    # expand-env lets the storage settings come from the environment, so one
+    # config file serves both this stack and a deployment pointing at a real
+    # object store. Without the flag the ${...} placeholders are read literally.
+    command: ["-config.file=/etc/pyroscope/pyroscope.yaml", "-config.expand-env=true"]
     networks:
       - easyp_network
 

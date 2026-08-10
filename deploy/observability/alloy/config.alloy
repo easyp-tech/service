@@ -151,8 +151,47 @@ prometheus.scrape "mimir" {
 }
 
 // 3. Backend Monitoring
+//
+// Discovered rather than named. The single-tier stack runs one container called
+// "service"; the two-tier dev stack runs "service-community" and
+// "service-enterprise" and no "service" at all. A hardcoded address collects
+// nothing on one of them while reporting no problem, so the containers are
+// found by the label every one of them already carries.
+discovery.relabel "easyp_service_metrics" {
+  targets = discovery.docker.linux.targets
+
+  // Only containers labelled as an easyp service.
+  rule {
+    source_labels = ["__meta_docker_container_label_service"]
+    regex         = "easyp-api-.*"
+    action        = "keep"
+  }
+
+  // Discovery yields the container's own address; the metrics port is 8081 on
+  // every tier, whatever the host publishes it as.
+  rule {
+    source_labels = ["__meta_docker_network_ip"]
+    target_label  = "__address__"
+    replacement   = "$1:8081"
+  }
+
+  // Which tier a series came from, so the two can be told apart in a query.
+  rule {
+    source_labels = ["__meta_docker_container_label_service"]
+    regex         = "easyp-api-(.*)"
+    target_label  = "tier"
+    replacement   = "$1"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container_name"
+  }
+}
+
 prometheus.scrape "service" {
-  targets    = [{"__address__" = "service:8081"}]
+  targets    = discovery.relabel.easyp_service_metrics.output
   forward_to = [prometheus.remote_write.mimir.receiver]
 }
 

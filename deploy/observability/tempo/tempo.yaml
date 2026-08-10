@@ -27,12 +27,18 @@ storage:
     wal:
       path: /var/tempo/wal
     s3:
-      endpoint: rustfs:9000
-      bucket: tempo
-      access_key: rustfsadmin
-      secret_key: rustfsadmin
-      insecure: true
+      endpoint: ${TELEMETRY_S3_ENDPOINT:-rustfs:9000}
+      bucket: ${TELEMETRY_BUCKET_PREFIX:-}tempo
+      access_key: ${TELEMETRY_S3_ACCESS_KEY_ID:-rustfsadmin}
+      secret_key: ${TELEMETRY_S3_SECRET_ACCESS_KEY:-rustfsadmin}
+      insecure: ${TELEMETRY_S3_INSECURE:-true}
       forcepathstyle: true
+
+compactor:
+  compaction:
+    # Traces age out faster than logs: they are large, and a week-old trace is
+    # of interest to nobody. Absent this, blocks accumulate forever.
+    block_retention: 72h
 
 overrides:
   defaults:

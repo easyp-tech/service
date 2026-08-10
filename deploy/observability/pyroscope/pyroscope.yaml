@@ -7,11 +7,11 @@ server:
 storage:
   backend: s3
   s3:
-    endpoint: rustfs:9000
-    access_key_id: rustfsadmin
-    secret_access_key: rustfsadmin
-    bucket_name: pyroscope
-    insecure: true
+    endpoint: ${TELEMETRY_S3_ENDPOINT:-rustfs:9000}
+    access_key_id: ${TELEMETRY_S3_ACCESS_KEY_ID:-rustfsadmin}
+    secret_access_key: ${TELEMETRY_S3_SECRET_ACCESS_KEY:-rustfsadmin}
+    bucket_name: ${TELEMETRY_BUCKET_PREFIX:-}pyroscope
+    insecure: ${TELEMETRY_S3_INSECURE:-true}
 
 ingester:
   lifecycler:
@@ -30,3 +30,9 @@ store_gateway:
     kvstore:
       store: inmemory
     replication_factor: 1
+
+limits:
+  # Profiles are the bulkiest of the four signals and the least useful once
+  # cold. Without a retention the bucket only ever grows. It lives under limits
+  # rather than compactor: the compactor acts on it, but does not define it.
+  compactor_blocks_retention_period: 72h
