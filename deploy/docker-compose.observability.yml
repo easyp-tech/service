@@ -15,7 +15,7 @@
 # disk cannot also be a metrics store, and four backends with retention rules
 # will fill whatever is left and take the database down with them.
 #
-# The buckets are named easyp-telemetry-* so nothing here can be mistaken for
+# The buckets are named easyp-${EASYP_ENV:-dev}-telemetry-* so nothing here can be mistaken for
 # easyp-plugins, which shares the credentials. That sharing is the one thing to
 # improve later: a compactor with the wrong bucket name in it would be pointed
 # at the archives, and telemetry has retention rules while archives must not.
@@ -36,13 +36,13 @@ services:
     entrypoint: >
       /bin/sh -c "
       until /usr/bin/mc alias set store ${TELEMETRY_S3_URL:?TELEMETRY_S3_URL is required, e.g. https://storage.example.com} $$TELEMETRY_S3_ACCESS_KEY_ID $$TELEMETRY_S3_SECRET_ACCESS_KEY; do echo '...waiting for S3...'; sleep 1; done;
-      /usr/bin/mc mb --ignore-existing store/easyp-telemetry-tempo;
-      /usr/bin/mc mb --ignore-existing store/easyp-telemetry-mimir-blocks;
-      /usr/bin/mc mb --ignore-existing store/easyp-telemetry-mimir-ruler;
-      /usr/bin/mc mb --ignore-existing store/easyp-telemetry-mimir-alertmanager;
-      /usr/bin/mc mb --ignore-existing store/easyp-telemetry-loki-chunks;
-      /usr/bin/mc mb --ignore-existing store/easyp-telemetry-loki-ruler;
-      /usr/bin/mc mb --ignore-existing store/easyp-telemetry-pyroscope;
+      /usr/bin/mc mb --ignore-existing store/easyp-${EASYP_ENV:-dev}-telemetry-tempo;
+      /usr/bin/mc mb --ignore-existing store/easyp-${EASYP_ENV:-dev}-telemetry-mimir-blocks;
+      /usr/bin/mc mb --ignore-existing store/easyp-${EASYP_ENV:-dev}-telemetry-mimir-ruler;
+      /usr/bin/mc mb --ignore-existing store/easyp-${EASYP_ENV:-dev}-telemetry-mimir-alertmanager;
+      /usr/bin/mc mb --ignore-existing store/easyp-${EASYP_ENV:-dev}-telemetry-loki-chunks;
+      /usr/bin/mc mb --ignore-existing store/easyp-${EASYP_ENV:-dev}-telemetry-loki-ruler;
+      /usr/bin/mc mb --ignore-existing store/easyp-${EASYP_ENV:-dev}-telemetry-pyroscope;
       exit 0;
       "
     environment:
@@ -66,7 +66,7 @@ services:
       TELEMETRY_S3_ACCESS_KEY_ID: "${TELEMETRY_S3_ACCESS_KEY_ID:?TELEMETRY_S3_ACCESS_KEY_ID is required}"
       TELEMETRY_S3_SECRET_ACCESS_KEY: "${TELEMETRY_S3_SECRET_ACCESS_KEY:?TELEMETRY_S3_SECRET_ACCESS_KEY is required}"
       TELEMETRY_S3_INSECURE: "${TELEMETRY_S3_INSECURE:-false}"
-      TELEMETRY_BUCKET_PREFIX: "${TELEMETRY_BUCKET_PREFIX:-easyp-telemetry-}"
+      TELEMETRY_BUCKET_PREFIX: "${TELEMETRY_BUCKET_PREFIX:-easyp-${EASYP_ENV:-dev}-telemetry-}"
     networks:
       - easyp_network
 
@@ -85,7 +85,7 @@ services:
       TELEMETRY_S3_ACCESS_KEY_ID: "${TELEMETRY_S3_ACCESS_KEY_ID:?TELEMETRY_S3_ACCESS_KEY_ID is required}"
       TELEMETRY_S3_SECRET_ACCESS_KEY: "${TELEMETRY_S3_SECRET_ACCESS_KEY:?TELEMETRY_S3_SECRET_ACCESS_KEY is required}"
       TELEMETRY_S3_INSECURE: "${TELEMETRY_S3_INSECURE:-false}"
-      TELEMETRY_BUCKET_PREFIX: "${TELEMETRY_BUCKET_PREFIX:-easyp-telemetry-}"
+      TELEMETRY_BUCKET_PREFIX: "${TELEMETRY_BUCKET_PREFIX:-easyp-${EASYP_ENV:-dev}-telemetry-}"
     networks:
       - easyp_network
 
@@ -104,7 +104,7 @@ services:
       TELEMETRY_S3_ACCESS_KEY_ID: "${TELEMETRY_S3_ACCESS_KEY_ID:?TELEMETRY_S3_ACCESS_KEY_ID is required}"
       TELEMETRY_S3_SECRET_ACCESS_KEY: "${TELEMETRY_S3_SECRET_ACCESS_KEY:?TELEMETRY_S3_SECRET_ACCESS_KEY is required}"
       TELEMETRY_S3_INSECURE: "${TELEMETRY_S3_INSECURE:-false}"
-      TELEMETRY_BUCKET_PREFIX: "${TELEMETRY_BUCKET_PREFIX:-easyp-telemetry-}"
+      TELEMETRY_BUCKET_PREFIX: "${TELEMETRY_BUCKET_PREFIX:-easyp-${EASYP_ENV:-dev}-telemetry-}"
     networks:
       - easyp_network
 
@@ -123,7 +123,7 @@ services:
       TELEMETRY_S3_ACCESS_KEY_ID: "${TELEMETRY_S3_ACCESS_KEY_ID:?TELEMETRY_S3_ACCESS_KEY_ID is required}"
       TELEMETRY_S3_SECRET_ACCESS_KEY: "${TELEMETRY_S3_SECRET_ACCESS_KEY:?TELEMETRY_S3_SECRET_ACCESS_KEY is required}"
       TELEMETRY_S3_INSECURE: "${TELEMETRY_S3_INSECURE:-false}"
-      TELEMETRY_BUCKET_PREFIX: "${TELEMETRY_BUCKET_PREFIX:-easyp-telemetry-}"
+      TELEMETRY_BUCKET_PREFIX: "${TELEMETRY_BUCKET_PREFIX:-easyp-${EASYP_ENV:-dev}-telemetry-}"
     networks:
       - easyp_network
 
