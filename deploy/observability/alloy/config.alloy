@@ -188,6 +188,18 @@ discovery.relabel "easyp_service_metrics" {
     regex         = "/(.*)"
     target_label  = "container_name"
   }
+
+  // instance defaults to the scrape address, which here is a container IP:
+  // it names no tier a reader would recognise, and Docker hands out a new one
+  // every time a container is recreated, so a panel grouped by instance shows
+  // meaningless numbers that change under it. Dashboards group by instance by
+  // convention — the stock ones here do so 65 times — so it is worth making
+  // the label mean something. The container name is stable and says which tier.
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "instance"
+  }
 }
 
 prometheus.scrape "service" {
