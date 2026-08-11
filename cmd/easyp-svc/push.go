@@ -74,11 +74,23 @@ func archiveObjectKey(plg pluginInfo) string {
 
 // resolveS3Options merges S3 settings from CLI flags and the service config.
 // Flags win; empty flags fall back to registry.s3 from --cfg.
-func resolveS3Options(cfgPath string, flagOpts storage.S3Options, pathStyleSet bool) (storage.S3Options, error) {
+//
+// --cfg expects a whole service configuration, not a fragment holding only
+// registry.s3: it goes through the same load and validation the server does, so
+// a file missing db.postgres or a port is refused here too. That is deliberate —
+// pointing push at a config the server would reject is how the two come to
+// disagree about which store they are talking to. To push without one, give the
+// storage settings as flags and leave --cfg off.
+func resolveS3Options(
+	ctx context.Context,
+	cfgPath string,
+	flagOpts storage.S3Options,
+	pathStyleSet bool,
+) (storage.S3Options, error) {
 	opts := flagOpts
 
 	if cfgPath != "" {
-		cfg, _, err := config.LoadAndValidate(cfgPath)
+		cfg, _, err := config.LoadAndValidate(ctx, cfgPath)
 		if err != nil {
 			return storage.S3Options{}, fmt.Errorf("config.LoadAndValidate: %w", err)
 		}

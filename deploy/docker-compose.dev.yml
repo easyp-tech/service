@@ -8,6 +8,13 @@ networks:
   easyp_network:
     name: easyp_network
     driver: bridge
+    # Pinned because server.trusted_proxies in both tier configs names this range.
+    # A subnet from Docker's pool would change when the network was recreated and
+    # the service would quietly stop believing traefik's forwarding headers,
+    # collapsing every caller into one rate-limit bucket.
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
 
 volumes:
   postgres-data:
@@ -109,11 +116,24 @@ services:
       - "./certs:/certs:ro"
       - "./plugins-community:/plugins"
     environment:
-      # Storage credentials only. No LICENSE_* here, deliberately: this container
-      # is the control in the experiment, and a licence reaching it would make
-      # the stack unable to tell the two tiers apart.
+      # No LICENSE_* here, deliberately: this container is the control in the
+      # experiment, and a licence reaching it would make the stack unable to tell
+      # the two tiers apart.
+      #
+      # Everything below overrides the matching field in the tier config. An
+      # unset variable arrives empty and is treated as absent, so the file keeps
+      # its value.
       REGISTRY_S3_ACCESS_KEY_ID: "${REGISTRY_S3_ACCESS_KEY_ID:-}"
       REGISTRY_S3_SECRET_ACCESS_KEY: "${REGISTRY_S3_SECRET_ACCESS_KEY:-}"
+      # The tier configs ship no write tokens: this stack is the one
+      # docker-compose.public.yml puts on the internet, so writes are denied
+      # until a credential arrives here. "ci=<64 hex>,me=<64 hex>".
+      AUTH_WRITE_TOKENS: "${AUTH_WRITE_TOKENS:-}"
+      DB_POSTGRES_DSN: "${DB_POSTGRES_DSN:-}"
+      # Empty in the tier configs, because this stack has no collector unless
+      # docker-compose.observability.yml is layered on top. Set both when it is.
+      TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT: "${TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+      TELEMETRY_PYROSCOPE_ENDPOINT: "${TELEMETRY_PYROSCOPE_ENDPOINT:-}"
     ports:
       - "${EASYP_BIND:-127.0.0.1}:8080:8080"
       - "${EASYP_BIND:-127.0.0.1}:8081:8081"
@@ -163,6 +183,12 @@ services:
       LICENSE_PUBLIC_KEYS: "${LICENSE_PUBLIC_KEYS:-}"
       REGISTRY_S3_ACCESS_KEY_ID: "${REGISTRY_S3_ACCESS_KEY_ID:-}"
       REGISTRY_S3_SECRET_ACCESS_KEY: "${REGISTRY_S3_SECRET_ACCESS_KEY:-}"
+      # Same as the community container above: the config ships no write tokens,
+      # so writes stay denied until a credential arrives here.
+      AUTH_WRITE_TOKENS: "${AUTH_WRITE_TOKENS:-}"
+      DB_POSTGRES_DSN: "${DB_POSTGRES_DSN:-}"
+      TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT: "${TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+      TELEMETRY_PYROSCOPE_ENDPOINT: "${TELEMETRY_PYROSCOPE_ENDPOINT:-}"
     ports:
       - "${EASYP_BIND:-127.0.0.1}:9080:8080"
       - "${EASYP_BIND:-127.0.0.1}:9081:8081"

@@ -53,6 +53,11 @@ func New(
 		keyExtractor = PeerIPExtractor
 	}
 
+	if replaced := cfg.setDefault(); len(replaced) > 0 {
+		logger.Warn("rate limiter settings were not usable and fell back to defaults",
+			"fields", replaced)
+	}
+
 	// Deliberately not labelled by client IP: on a public listener that is an
 	// unbounded label, and every address ever seen would become a permanent
 	// time series. The address stays in the log line instead.

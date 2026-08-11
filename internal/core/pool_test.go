@@ -210,3 +210,64 @@ func TestGenerationRejectsWhenQueueFull(t *testing.T) {
 
 	close(plugin.release)
 }
+
+// countingPlugin fails every generation with a transient error and records how
+// many times it was asked.
+type countingPlugin struct{ attempts atomic.Int64 }
+
+func (p *countingPlugin) Generate(
+	_ context.Context,
+	_ *pluginpb.CodeGeneratorRequest,
+) (*pluginpb.CodeGeneratorResponse, error) {
+	p.attempts.Add(1)
+
+	// Recognised as transient by isTransient, so the pool retries it.
+	return nil, fmt.Errorf("dial tcp: connection refused")
+}
+
+func (p *countingPlugin) Info(_ context.Context) *PluginInfo {
+	return &PluginInfo{Group: "test", Name: "plugin", Version: "v1.0.0"}
+}
+
+// TestMaxRetriesIsHonouredIncludingZero pins the arithmetic the pool runs on:
+// attempts are MaxRetries+1.
+//
+// Zero is the case worth having. The pool used to substitute two for it, so
+// asking for no retries silently got you three attempts — and the substitution
+// also let a negative value through, where the loop runs no attempts at all and
+// returns an empty response with no error. Config.Validate refuses negatives
+// now; this covers the boundary it leaves open.
+func TestMaxRetriesIsHonouredIncludingZero(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name         string
+		maxRetries   int
+		wantAttempts int64
+	}{
+		{name: "zero means one attempt", maxRetries: 0, wantAttempts: 1},
+		{name: "one retry means two attempts", maxRetries: 1, wantAttempts: 2},
+		{name: "two retries means three attempts", maxRetries: 2, wantAttempts: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			plugin := new(countingPlugin)
+			pool := newTestPool(t, plugin, WorkerPoolConfig{ //nolint:exhaustruct // defaults cover the rest
+				Workers:                  1,
+				QueueSize:                1,
+				MaxConcurrentGenerations: 1,
+				GenerationTimeout:        5 * time.Second,
+				MaxRetries:               tc.maxRetries,
+			})
+
+			p, err := pool.Get(t.Context(), "test", "plugin", "v1.0.0")
+			require.NoError(t, err)
+
+			_, err = p.Generate(t.Context(), &pluginpb.CodeGeneratorRequest{})
+			require.Error(t, err, "a failing generation must report the failure, not an empty success")
+
+			assert.Equal(t, tc.wantAttempts, plugin.attempts.Load())
+		})
+	}
+}

@@ -10,58 +10,20 @@ import (
 	"github.com/easyp-tech/service/internal/license"
 )
 
-// These variables are consulted directly because the --cfg path decodes YAML
-// and skips envconfig entirely, so licence settings handed to the container
-// through the environment would otherwise be dropped on the floor.
-const (
-	licenseTokenEnv      = "LICENSE_KEY"
-	licensePublicKeyEnv  = "LICENSE_PUBLIC_KEY"
-	licensePublicKeysEnv = "LICENSE_PUBLIC_KEYS"
-)
-
-// Encoding of LICENSE_PUBLIC_KEYS: "<kid>:<hex>,<kid>:<hex>". Chosen to match
-// what envconfig would parse into the same field on the path that does use it,
-// so a value written for one path works on the other.
-const (
-	publicKeysDelimiter = ","
-	publicKeysSeparator = ":"
-)
-
-// Storage credentials, for the same reason as the licence above: the --cfg path
-// never reaches envconfig, so without these the only way to give the service an
-// S3 key pair is to write it into a YAML file — and the deployment YAML is
-// committed. A key pair did reach a public repository that way.
-//
-// Names match the envconfig tags on the same fields (REGISTRY_ prefix,
-// S3_ prefix, field name), so a value written for one path works on the other.
-const (
-	s3AccessKeyIDEnv     = "REGISTRY_S3_ACCESS_KEY_ID"
-	s3SecretAccessKeyEnv = "REGISTRY_S3_SECRET_ACCESS_KEY"
-)
-
-// resolveS3AccessKeyID and resolveS3SecretAccessKey prefer the config file and
-// fall back to the environment, matching resolveLicenseToken above. The config
-// wins so that an explicit value keeps working; the fallback exists so that the
-// secret does not have to be written down next to the settings that are not
-// secret.
-func resolveS3AccessKeyID(cfg config.S3Config) string {
-	if cfg.AccessKeyID != "" {
-		return strings.TrimSpace(cfg.AccessKeyID)
-	}
-
-	return strings.TrimSpace(os.Getenv(s3AccessKeyIDEnv))
-}
-
-func resolveS3SecretAccessKey(cfg config.S3Config) string {
-	if cfg.SecretAccessKey != "" {
-		return strings.TrimSpace(cfg.SecretAccessKey)
-	}
-
-	return strings.TrimSpace(os.Getenv(s3SecretAccessKeyEnv))
-}
+// The licence and storage settings used to be read from the environment here by
+// hand, because the --cfg path decoded YAML and skipped envconfig entirely. It
+// no longer does: config.LoadAndValidate overlays the environment onto the file
+// on both paths, so LICENSE_KEY, LICENSE_PUBLIC_KEY, LICENSE_PUBLIC_KEYS and the
+// REGISTRY_S3_* pair arrive in the config like every other field. What is left
+// below is only what envconfig cannot do: reading a token out of a file, and the
+// client-side flag fallback.
 
 // writeTokenEnv carries the credential for the mutating RPCs, so it never has to
 // appear in a shell history or a Taskfile.
+//
+// Unlike the settings above this is not a config field: it belongs to the client
+// commands, which authenticate as a caller rather than being configured as a
+// server.
 const writeTokenEnv = "EASYP_TOKEN"
 
 // resolveWriteToken returns the token the client authenticates with: the flag
@@ -88,8 +50,9 @@ type licenseCredentials struct {
 	publicKey string
 }
 
-// resolveLicense collects the licence token and the verification keys from
-// configuration, falling back to the environment for each.
+// resolveLicense collects the licence token and the verification keys from the
+// configuration, which by this point already carries whatever the environment
+// supplied.
 func resolveLicense(cfg config.LicenseConfig) (licenseCredentials, error) {
 	token, err := resolveLicenseToken(cfg)
 	if err != nil {
@@ -98,8 +61,8 @@ func resolveLicense(cfg config.LicenseConfig) (licenseCredentials, error) {
 
 	return licenseCredentials{
 		token:      token,
-		publicKeys: resolveLicensePublicKeys(cfg),
-		publicKey:  resolveLicensePublicKey(cfg),
+		publicKeys: trimmedPublicKeys(cfg),
+		publicKey:  strings.TrimSpace(cfg.PublicKey),
 	}, nil
 }
 
@@ -125,8 +88,9 @@ func buildLicenseClient(cfg config.LicenseConfig, log *slog.Logger) (*license.Pa
 // resolveLicenseToken returns the licence token, or an empty string when none
 // is configured.
 //
-// Precedence: license.key, then the contents of license.file, then LICENSE_KEY
-// from the environment.
+// Precedence: license.key, then the contents of license.file. The key itself may
+// have come from LICENSE_KEY; the file is the part envconfig cannot express,
+// which is why this function still exists.
 func resolveLicenseToken(cfg config.LicenseConfig) (string, error) {
 	if cfg.Key != "" {
 		return strings.TrimSpace(cfg.Key), nil
@@ -141,50 +105,25 @@ func resolveLicenseToken(cfg config.LicenseConfig) (string, error) {
 		return strings.TrimSpace(string(data)), nil
 	}
 
-	return strings.TrimSpace(os.Getenv(licenseTokenEnv)), nil
+	return "", nil
 }
 
-// resolveLicensePublicKey returns the single Ed25519 verification key, or an
-// empty string when none is configured.
+// trimmedPublicKeys returns the key id to public key map with the surrounding
+// whitespace removed, or nil when none is configured.
 //
-// Precedence: license.public_key, then LICENSE_PUBLIC_KEY from the environment.
-func resolveLicensePublicKey(cfg config.LicenseConfig) string {
-	if cfg.PublicKey != "" {
-		return strings.TrimSpace(cfg.PublicKey)
-	}
-
-	return strings.TrimSpace(os.Getenv(licensePublicKeyEnv))
-}
-
-// resolveLicensePublicKeys returns the key id to public key map, or nil when
-// none is configured.
-//
-// Precedence: license.public_keys, then LICENSE_PUBLIC_KEYS from the
-// environment. Malformed entries are skipped here and the resulting map is
-// validated by the caller; an entry that survives is still only a candidate.
-func resolveLicensePublicKeys(cfg config.LicenseConfig) map[string]string {
-	if len(cfg.PublicKeys) > 0 {
-		keys := make(map[string]string, len(cfg.PublicKeys))
-		for kid, hexKey := range cfg.PublicKeys {
-			keys[strings.TrimSpace(kid)] = strings.TrimSpace(hexKey)
-		}
-
-		return keys
-	}
-
-	raw := strings.TrimSpace(os.Getenv(licensePublicKeysEnv))
-	if raw == "" {
+// The trimming is not decoration: these arrive either from YAML, where a value
+// may be wrapped across lines, or from LICENSE_PUBLIC_KEYS, where a space after
+// a comma is the natural way to write a list. A key with a stray space fails to
+// decode as hex, and the service falls back to community mode over a typo that
+// is invisible in the file.
+func trimmedPublicKeys(cfg config.LicenseConfig) map[string]string {
+	if len(cfg.PublicKeys) == 0 {
 		return nil
 	}
 
-	keys := make(map[string]string)
+	keys := make(map[string]string, len(cfg.PublicKeys))
 
-	for pair := range strings.SplitSeq(raw, publicKeysDelimiter) {
-		kid, hexKey, found := strings.Cut(strings.TrimSpace(pair), publicKeysSeparator)
-		if !found {
-			continue
-		}
-
+	for kid, hexKey := range cfg.PublicKeys {
 		kid, hexKey = strings.TrimSpace(kid), strings.TrimSpace(hexKey)
 		if kid == "" || hexKey == "" {
 			continue

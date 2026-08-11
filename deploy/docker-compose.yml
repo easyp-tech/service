@@ -7,6 +7,14 @@ networks:
   easyp_network:
     name: easyp_network
     driver: bridge
+    # Pinned for the same reason as the project name above: server.trusted_proxies
+    # in config/config.yml names this range, and a subnet Docker picks from its
+    # pool would change under the config the first time the network was recreated.
+    # The service would then stop believing traefik's forwarding headers and go
+    # back to rate-limiting every caller as one — silently.
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
 
 volumes:
   postgres-data:
@@ -236,14 +244,36 @@ services:
       - "./certs:/certs:ro"
       # rw: the service writes lazily downloaded plugin binaries here.
       - "../plugins:/plugins"
+    # Every variable here overrides the matching field in config/config.yml. An
+    # unset one arrives as an empty string and is treated as absent, so the file
+    # keeps its value — that is what makes the `:-` form below safe.
+    #
+    # The OTel SDK variables that used to sit here (OTEL_EXPORTER_OTLP_ENDPOINT,
+    # OTEL_SERVICE_NAME) were read by nothing: the endpoint belongs to the
+    # telemetry section and so needs its prefix, and the service name is fixed in
+    # the binary. Changing them looked like it did something and did not.
     environment:
-      OTEL_EXPORTER_OTLP_ENDPOINT: "http://alloy:4317"
-      OTEL_SERVICE_NAME: "easyp-api-service"
       # Issued by the licence registry (easyp-tech/licenses); passed in from the
       # shell. LICENSE_PUBLIC_KEYS is "<kid>:<hex>,<kid>:<hex>".
       LICENSE_KEY: "${LICENSE_KEY:-}"
       LICENSE_PUBLIC_KEY: "${LICENSE_PUBLIC_KEY:-}"
       LICENSE_PUBLIC_KEYS: "${LICENSE_PUBLIC_KEYS:-}"
+      # Digests of the credentials allowed to call the mutating RPCs, as
+      # "ci=<64 hex>,me=<64 hex>". config.yml ships a publicly known one so the
+      # stack works out of the box; set this to replace it without editing a
+      # committed file.
+      AUTH_WRITE_TOKENS: "${AUTH_WRITE_TOKENS:-}"
+      # config.yml points at the postgres container with a demo password. Set
+      # this to point the stack at a database whose credentials are not in git.
+      DB_POSTGRES_DSN: "${DB_POSTGRES_DSN:-}"
+      TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT: "${TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+      TELEMETRY_PYROSCOPE_ENDPOINT: "${TELEMETRY_PYROSCOPE_ENDPOINT:-}"
+      # The stack's own object store is named in config.yml; these override it
+      # for a deployment reading archives from somewhere else.
+      REGISTRY_S3_ENDPOINT: "${REGISTRY_S3_ENDPOINT:-}"
+      REGISTRY_S3_BUCKET: "${REGISTRY_S3_BUCKET:-}"
+      REGISTRY_S3_ACCESS_KEY_ID: "${REGISTRY_S3_ACCESS_KEY_ID:-}"
+      REGISTRY_S3_SECRET_ACCESS_KEY: "${REGISTRY_S3_SECRET_ACCESS_KEY:-}"
     # The gRPC port is deliberately not published: it is reachable only from
     # inside easyp_network, and from outside only through traefik, which is the
     # single party holding a client certificate. The remaining ports serve

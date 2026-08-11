@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -17,10 +18,8 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
-	"github.com/sethvargo/go-envconfig"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"gopkg.in/yaml.v3"
 
 	adapter_audit "github.com/easyp-tech/service/internal/adapters/audit"
 	adapter_metrics "github.com/easyp-tech/service/internal/adapters/metrics"
@@ -33,7 +32,6 @@ import (
 	"github.com/easyp-tech/service/internal/database"
 	"github.com/easyp-tech/service/internal/database/connectors"
 	"github.com/easyp-tech/service/internal/database/goosemigrate"
-	"github.com/easyp-tech/service/internal/flags"
 	"github.com/easyp-tech/service/internal/grpchelper"
 	"github.com/easyp-tech/service/internal/license"
 	"github.com/easyp-tech/service/internal/monitor"
@@ -47,7 +45,6 @@ const (
 	// serviceNamespace is the fixed namespace for Prometheus metrics.
 	serviceNamespace         = "easyp"
 	exitCode                 = 2
-	configFileSize           = 1024 * 1024
 	componentShutdownTimeout = 5 * time.Second
 	// healthReadHeaderTimeout bounds how long a probe may take to send its
 	// headers. Probes are local and instant; anything slower is not a probe.
@@ -85,31 +82,9 @@ func runServiceStart(ctx context.Context, cfgPath string, logLevelStr string) er
 		slog.String("app", serviceNamespace),
 	))
 
-	cfg := config.Config{}
-
-	if cfgPath != "" {
-		// Use flags.File logic manually
-		configFile := &flags.File{DefaultPath: "", MaxSize: configFileSize}
-
-		err := configFile.Set(cfgPath)
-		if err != nil {
-			return fmt.Errorf("read config file: %w", err)
-		}
-
-		err = yaml.NewDecoder(configFile).Decode(&cfg)
-		if err != nil {
-			return fmt.Errorf("yaml.NewDecoder.Decode: %w", err)
-		}
-	} else {
-		err := envconfig.Process(ctx, &cfg)
-		if err != nil {
-			return fmt.Errorf("envconfig.Process: %w", err)
-		}
-	}
-
-	err := cfg.Validate()
+	cfg, err := loadConfig(ctx, cfgPath, log)
 	if err != nil {
-		return fmt.Errorf("config validation: %w", err)
+		return err
 	}
 
 	// Armed here rather than in main: the budget has to come from the config,
@@ -128,6 +103,46 @@ func runServiceStart(ctx context.Context, cfgPath string, logLevelStr string) er
 	}
 
 	return nil
+}
+
+// loadConfig builds the configuration from wherever it comes from.
+//
+// Both branches end at the same place on purpose: settings resolve identically
+// whether the service was pointed at a file or handed an environment, and the
+// file path uses the very call "plugins push" uses, so the two cannot disagree
+// about which store or which database they are talking to.
+func loadConfig(ctx context.Context, cfgPath string, log *slog.Logger) (config.Config, error) {
+	cfg := config.Config{}
+
+	if cfgPath == "" {
+		err := config.ApplyEnv(ctx, &cfg)
+		if err != nil {
+			return cfg, err
+		}
+
+		err = cfg.Validate()
+		if err != nil {
+			return cfg, fmt.Errorf("config validation: %w", err)
+		}
+
+		return cfg, nil
+	}
+
+	loaded, warnings, err := config.LoadAndValidate(ctx, cfgPath)
+
+	// Reported before the error is returned: an unknown field is the likeliest
+	// explanation for a validation failure right after someone edited the file,
+	// and it is the one clue that would otherwise be thrown away.
+	for _, warning := range warnings {
+		log.Warn("config file contains fields this build does not recognise; they were ignored",
+			"detail", warning)
+	}
+
+	if err != nil {
+		return cfg, fmt.Errorf("config.LoadAndValidate: %w", err)
+	}
+
+	return *loaded, nil
 }
 
 func run(ctx context.Context, cfg config.Config, reg *prometheus.Registry) error {
@@ -626,8 +641,8 @@ func initBinaryStorage(ctx context.Context, cfg config.Config) (core.BinaryStora
 		Bucket:          cfg.Registry.S3.Bucket,
 		Region:          cfg.Registry.S3.Region,
 		Prefix:          cfg.Registry.S3.Prefix,
-		AccessKeyID:     resolveS3AccessKeyID(cfg.Registry.S3),
-		SecretAccessKey: resolveS3SecretAccessKey(cfg.Registry.S3),
+		AccessKeyID:     strings.TrimSpace(cfg.Registry.S3.AccessKeyID),
+		SecretAccessKey: strings.TrimSpace(cfg.Registry.S3.SecretAccessKey),
 		ForcePathStyle:  cfg.Registry.S3.ForcePathStyle,
 	})
 	if err != nil {
