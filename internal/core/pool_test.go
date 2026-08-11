@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -222,7 +223,7 @@ func (p *countingPlugin) Generate(
 	p.attempts.Add(1)
 
 	// Recognised as transient by isTransient, so the pool retries it.
-	return nil, fmt.Errorf("dial tcp: connection refused")
+	return nil, errors.New("dial tcp: connection refused")
 }
 
 func (p *countingPlugin) Info(_ context.Context) *PluginInfo {

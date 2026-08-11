@@ -117,7 +117,7 @@ func loadConfig(ctx context.Context, cfgPath string, log *slog.Logger) (config.C
 	if cfgPath == "" {
 		err := config.ApplyEnv(ctx, &cfg)
 		if err != nil {
-			return cfg, err
+			return cfg, fmt.Errorf("config.ApplyEnv: %w", err)
 		}
 
 		err = cfg.Validate()

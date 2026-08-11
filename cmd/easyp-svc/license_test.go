@@ -83,6 +83,9 @@ func TestTrimmedPublicKeys(t *testing.T) {
 		t.Parallel()
 
 		keys := trimmedPublicKeys(config.LicenseConfig{ //nolint:exhaustruct
+			// The whitespace is the point: a key id wrapped across lines in YAML,
+			// or a list written with a space after the comma, must still match.
+			//nolint:gocritic // suspicious whitespace in the key is what is under test
 			PublicKeys: map[string]string{" 2026-08 ": " " + keyA + "\n", "2026-09": keyB},
 		})
 		require.Equal(t, map[string]string{"2026-08": keyA, "2026-09": keyB}, keys)
