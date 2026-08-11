@@ -110,15 +110,22 @@ func NewWorkerPool(
 	if cfg.QueueSize < 0 {
 		cfg.QueueSize = 0
 	}
-	if cfg.GenerationTimeout == 0 {
+	// `<= 0`, not `== 0`: a negative duration is not a smaller timeout, it is an
+	// already-expired context, and checking only for zero let one through to
+	// fail every generation on the deadline before the plugin ran. The audit
+	// worker and the partition maintainer guard the same way.
+	if cfg.GenerationTimeout <= 0 {
 		cfg.GenerationTimeout = defaultGenerationTimeout
 	}
-	if cfg.MaxRetries == 0 {
-		cfg.MaxRetries = 2
-	}
-	if cfg.ShutdownTimeout == 0 {
+	if cfg.ShutdownTimeout <= 0 {
 		cfg.ShutdownTimeout = defaultShutdownTimeout
 	}
+	// MaxRetries deliberately has no fallback. Substituting a default for zero
+	// made "no retries" impossible to ask for — it silently became two — and the
+	// number now always arrives from the config, whose env tag carries the
+	// default on both startup paths. Negative is refused by Config.Validate:
+	// attempts are MaxRetries+1, so it would run none and return an empty
+	// success.
 	if cfg.MaxConcurrentGenerations < 1 {
 		cfg.MaxConcurrentGenerations = defaultMaxConcurrentGenerations
 	}
