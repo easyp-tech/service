@@ -9,6 +9,7 @@ import (
 	"github.com/grafana/pyroscope-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/metric"
@@ -33,22 +34,47 @@ func Init(ctx context.Context, cfg Config, baseHandler slog.Handler) (
 		semconv.ServiceVersion("dev"),
 	)
 
-	// --- Trace exporter ---------------------------------------------------
-	traceExp, traceErr := otlptracegrpc.New(ctx,
-		otlptracegrpc.WithEndpoint(cfg.OTLPEndpoint),
-		otlptracegrpc.WithInsecure(),
+	// --- OTLP exporters ----------------------------------------------------
+	//
+	// An empty endpoint means no collector, and no collector means no exporter.
+	// Building one anyway is not harmless: the gRPC connection is lazy, so
+	// creation succeeds against an address nothing answers on and the failure
+	// only appears later, as an export retried forever. A stack brought up
+	// without an observability overlay would run correctly while filling its log
+	// with connection errors — the state this check exists to avoid.
+	var (
+		traceExp  *otlptrace.Exporter
+		metricExp metric.Exporter
 	)
-	if traceErr != nil {
-		slog.New(baseHandler).Warn("failed to create OTLP trace exporter, continuing without trace export", "error", traceErr)
-	}
 
-	// --- Metric exporter --------------------------------------------------
-	metricExp, metricErr := otlpmetricgrpc.New(ctx,
-		otlpmetricgrpc.WithEndpoint(cfg.OTLPEndpoint),
-		otlpmetricgrpc.WithInsecure(),
-	)
-	if metricErr != nil {
-		slog.New(baseHandler).Warn("failed to create OTLP metric exporter, continuing without metric export", "error", metricErr)
+	if cfg.OTLPEndpoint == "" {
+		slog.New(baseHandler).Info("no OTLP endpoint configured, traces and metrics will not be exported")
+	} else {
+		var traceErr error
+
+		traceExp, traceErr = otlptracegrpc.New(ctx,
+			otlptracegrpc.WithEndpoint(cfg.OTLPEndpoint),
+			otlptracegrpc.WithInsecure(),
+		)
+		if traceErr != nil {
+			slog.New(baseHandler).Warn("failed to create OTLP trace exporter, continuing without trace export",
+				"error", traceErr)
+
+			traceExp = nil
+		}
+
+		var metricErr error
+
+		metricExp, metricErr = otlpmetricgrpc.New(ctx,
+			otlpmetricgrpc.WithEndpoint(cfg.OTLPEndpoint),
+			otlpmetricgrpc.WithInsecure(),
+		)
+		if metricErr != nil {
+			slog.New(baseHandler).Warn("failed to create OTLP metric exporter, continuing without metric export",
+				"error", metricErr)
+
+			metricExp = nil
+		}
 	}
 
 	// --- TracerProvider ---------------------------------------------------
@@ -80,20 +106,32 @@ func Init(ctx context.Context, cfg Config, baseHandler slog.Handler) (
 	logger = slog.New(NewTraceHandler(baseHandler))
 
 	// --- Pyroscope profiling -----------------------------------------------
-	profiler, pyroErr := pyroscope.Start(pyroscope.Config{
-		ApplicationName: cfg.ServiceName,
-		ServerAddress:   cfg.PyroscopeEndpoint,
-		ProfileTypes: []pyroscope.ProfileType{
-			pyroscope.ProfileCPU,
-			pyroscope.ProfileAllocObjects,
-			pyroscope.ProfileAllocSpace,
-			pyroscope.ProfileInuseObjects,
-			pyroscope.ProfileInuseSpace,
-			pyroscope.ProfileGoroutines,
-		},
-	})
-	if pyroErr != nil {
-		slog.New(baseHandler).Warn("failed to start Pyroscope profiler, continuing without profiling", "error", pyroErr)
+	// Same reasoning as the exporters above: with nowhere to send profiles, the
+	// profiler only produces upload failures on a timer.
+	var profiler *pyroscope.Profiler
+
+	if cfg.PyroscopeEndpoint == "" {
+		slog.New(baseHandler).Info("no Pyroscope endpoint configured, profiles will not be uploaded")
+	} else {
+		var pyroErr error
+
+		profiler, pyroErr = pyroscope.Start(pyroscope.Config{ //nolint:exhaustruct // the rest are library defaults
+			ApplicationName: cfg.ServiceName,
+			ServerAddress:   cfg.PyroscopeEndpoint,
+			ProfileTypes: []pyroscope.ProfileType{
+				pyroscope.ProfileCPU,
+				pyroscope.ProfileAllocObjects,
+				pyroscope.ProfileAllocSpace,
+				pyroscope.ProfileInuseObjects,
+				pyroscope.ProfileInuseSpace,
+				pyroscope.ProfileGoroutines,
+			},
+		})
+		if pyroErr != nil {
+			slog.New(baseHandler).Warn("failed to start Pyroscope profiler, continuing without profiling", "error", pyroErr)
+
+			profiler = nil
+		}
 	}
 
 	// --- Composite shutdown -----------------------------------------------
