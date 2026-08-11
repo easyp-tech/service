@@ -14,20 +14,32 @@ import (
 func baseConfig() config.Config {
 	cfg := config.Config{} //nolint:exhaustruct // only the validated fields matter
 	cfg.Server.Port.GRPC = "8080"
+	cfg.Server.Port.Metric = "8081"
+	cfg.Server.Port.Health = "8082"
+	cfg.Server.Port.MCP = "8083"
 	cfg.DB.Driver = "postgres"
+	// An empty DSN is rejected: lib/pq would fall back to the libpq environment
+	// and connect somewhere plausible rather than refusing.
+	cfg.DB.Postgres = "postgres://user:pass@localhost:5432/db?sslmode=disable"
 	cfg.WorkerPool.Workers = 1
 	cfg.WorkerPool.QueueSize = 1
 	cfg.WorkerPool.MaxConcurrentGenerations = 1
 	cfg.WorkerPool.GenerationTimeout = time.Minute
+	cfg.WorkerPool.ShutdownTimeout = time.Second
 	cfg.Server.ForceShutdownAfter = 2 * time.Minute
 	cfg.RateLimit.RequestsPerSecond = 1
 	cfg.RateLimit.Burst = 1
+	// Zero would reach time.NewTicker and panic from a background goroutine.
+	cfg.RateLimit.CleanupInterval = time.Minute
 	cfg.Audit.BufferSize = 1
 	cfg.Audit.BatchSize = 1
 	cfg.Audit.FlushInterval = 1
 	// Zero is rejected: it refuses every generation rather than lifting the cap.
 	cfg.Registry.MaxOutputSize = 1
 	cfg.Server.MaxSendMsgSize = 1
+	// Only checked once S3 is enabled, but set here so a case that turns S3 on
+	// reaches the rule it is actually about.
+	cfg.Registry.PluginsDir = "/plugins"
 
 	return cfg
 }

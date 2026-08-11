@@ -232,6 +232,7 @@ func getPluginsPushCommand() *cli.Command {
 			}
 
 			s3Opts, err := resolveS3Options(
+				ctx,
 				cmd.String(flagCfg),
 				storage.S3Options{
 					Endpoint:       cmd.String("endpoint"),

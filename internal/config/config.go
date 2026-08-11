@@ -4,6 +4,7 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"fmt"
 	"net/netip"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sethvargo/go-envconfig"
 	"gopkg.in/yaml.v3"
 )
 
@@ -166,9 +168,22 @@ func (c S3Config) Enabled() bool {
 }
 
 // TelemetryConfig configures observability endpoints.
+//
+// Neither carries a default, and that is the setting: empty means no collector,
+// and Init then builds no exporter at all. A default would make "off"
+// inexpressible — an empty value in a config file is the zero value, so a
+// default would immediately fill it back in — and the fallback it filled in
+// would name a collector that is not there on any deployment that did not ask
+// for one. The exporters connect lazily, so that costs an endless retry rather
+// than an error, which is the quietest possible way to waste a deployment's
+// time.
+//
+// Note the full variable names: the section prefix is part of them, so these are
+// TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT and TELEMETRY_PYROSCOPE_ENDPOINT. The
+// bare OTel SDK name is read by nothing here.
 type TelemetryConfig struct {
-	OTLPEndpoint      string `env:"OTEL_EXPORTER_OTLP_ENDPOINT, default=localhost:4317" yaml:"otlp_endpoint"`
-	PyroscopeEndpoint string `env:"PYROSCOPE_ENDPOINT, default=http://localhost:4040"   yaml:"pyroscope_endpoint"`
+	OTLPEndpoint      string `env:"OTEL_EXPORTER_OTLP_ENDPOINT" yaml:"otlp_endpoint"`
+	PyroscopeEndpoint string `env:"PYROSCOPE_ENDPOINT"          yaml:"pyroscope_endpoint"`
 }
 
 // WorkerPoolConfig configures bounded concurrency for plugin execution.
@@ -310,10 +325,23 @@ func (c AuditConfig) RetentionEnabled() bool {
 }
 
 // Validate performs structural validation of the configuration.
-// Called by the server at startup and by "epctl config validate".
+// Called by the server at startup and by LoadAndValidate.
 func (c *Config) Validate() error {
 	if c.Server.Port.GRPC == "" {
 		return fmt.Errorf("server.port.grpc is required")
+	}
+
+	// The remaining ports are parsed long after startup begins — metric and mcp
+	// only once the listeners are built — so an empty one would fail after the
+	// migrations had run rather than before anything happened.
+	for name, port := range map[string]string{
+		"server.port.metric": c.Server.Port.Metric,
+		"server.port.health": c.Server.Port.Health,
+		"server.port.mcp":    c.Server.Port.MCP,
+	} {
+		if port == "" {
+			return fmt.Errorf("%s is required", name)
+		}
 	}
 
 	// A certificate without its key (or the reverse) is a half-applied change
@@ -336,10 +364,10 @@ func (c *Config) Validate() error {
 
 	// Zero is not "no limit", it is a limit of nothing: every generation runs to
 	// completion and is then refused with "output limit exceeded (max 0 bytes)".
-	// The env tag's default does not save a YAML config — that path never
-	// reaches envconfig — so an omitted field lands here, and a stack that
-	// starts and answers every request with the same puzzle is worse than one
-	// that refuses to start.
+	// The env tag's default covers an omitted field on both paths now, so this
+	// catches a value written down explicitly — and a stack that starts and
+	// answers every request with the same puzzle is worse than one that refuses
+	// to start.
 	if c.Registry.MaxOutputSize <= 0 {
 		return fmt.Errorf(
 			"registry.max_output_size must be positive, got %d: a plugin's output is measured against it, "+
@@ -363,6 +391,14 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("db.driver is required")
 	}
 
+	// Checked because an empty DSN is not refused by the driver: lib/pq falls
+	// back to the libpq defaults, so on a host with PGHOST and PGDATABASE set the
+	// service connects somewhere plausible and runs its migrations there. The
+	// driver above has a default and is nearly always right; this has neither.
+	if c.DB.Postgres == "" {
+		return fmt.Errorf("db.postgres is required: an empty DSN silently falls back to the libpq environment")
+	}
+
 	if c.WorkerPool.Workers <= 0 {
 		return fmt.Errorf("worker_pool.workers must be positive, got %d", c.WorkerPool.Workers)
 	}
@@ -375,6 +411,30 @@ func (c *Config) Validate() error {
 		return fmt.Errorf(
 			"worker_pool.max_concurrent_generations must be positive, got %d",
 			c.WorkerPool.MaxConcurrentGenerations,
+		)
+	}
+
+	// Checked before the comparison below, which would otherwise read a negative
+	// timeout as "comfortably shorter than the shutdown budget" and pass. A
+	// negative duration makes context.WithTimeout return an already-expired
+	// context, so every generation fails on the deadline before the plugin runs.
+	if c.WorkerPool.GenerationTimeout <= 0 {
+		return fmt.Errorf("worker_pool.generation_timeout must be positive, got %s", c.WorkerPool.GenerationTimeout)
+	}
+
+	if c.WorkerPool.ShutdownTimeout <= 0 {
+		return fmt.Errorf("worker_pool.shutdown_timeout must be positive, got %s", c.WorkerPool.ShutdownTimeout)
+	}
+
+	// Negative is not "no retries", it is no attempts at all: the pool runs
+	// MaxRetries+1 of them, so -1 skips the loop and returns an empty response
+	// with no error — a generation that looks like it succeeded and produced
+	// nothing.
+	if c.WorkerPool.MaxRetries < 0 {
+		return fmt.Errorf(
+			"worker_pool.max_retries must not be negative, got %d: the pool runs max_retries+1 attempts, "+
+				"so a negative value runs none and returns an empty success",
+			c.WorkerPool.MaxRetries,
 		)
 	}
 
@@ -395,6 +455,14 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("rate_limit.burst must be positive, got %d", c.RateLimit.Burst)
 	}
 
+	// The cleanup loop feeds this straight to time.NewTicker, which panics on a
+	// non-positive interval — from a background goroutine, so it takes the
+	// process down after startup has already reported success rather than
+	// failing the configuration.
+	if c.RateLimit.CleanupInterval <= 0 {
+		return fmt.Errorf("rate_limit.cleanup_interval must be positive, got %s", c.RateLimit.CleanupInterval)
+	}
+
 	if c.Audit.BufferSize <= 0 {
 		return fmt.Errorf("audit.buffer_size must be positive, got %d", c.Audit.BufferSize)
 	}
@@ -413,6 +481,21 @@ func (c *Config) Validate() error {
 
 	if c.Audit.RetentionMonths < 0 {
 		return fmt.Errorf("audit.retention_months must not be negative, got %d", c.Audit.RetentionMonths)
+	}
+
+	if c.Audit.PreCreateMonths < 0 {
+		return fmt.Errorf("audit.pre_create_months must not be negative, got %d", c.Audit.PreCreateMonths)
+	}
+
+	// Creating partitions further ahead than they are kept means the maintainer
+	// makes a partition on one pass and drops it on the next. Retention of zero
+	// keeps everything, so nothing is ahead of it.
+	if c.Audit.RetentionEnabled() && c.Audit.PreCreateMonths > c.Audit.RetentionMonths {
+		return fmt.Errorf(
+			"audit.pre_create_months (%d) must not exceed audit.retention_months (%d), "+
+				"otherwise partitions are created and then dropped by the same maintainer",
+			c.Audit.PreCreateMonths, c.Audit.RetentionMonths,
+		)
 	}
 
 	if err := c.Auth.Validate(); err != nil {
@@ -437,12 +520,160 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// LoadAndValidate reads a YAML file, parses it with strict field checking,
-// and returns the config, a list of warnings (for unknown fields), and any error.
-func LoadAndValidate(path string) (*Config, []string, error) {
+// maxConfigFileSize bounds the config file. A YAML larger than this is not a
+// config; reading it in full and refusing is better than truncating it, which
+// would surface as a parse error somewhere in the middle of the file.
+const maxConfigFileSize = 1 << 20
+
+// LoadAndValidate builds the configuration from a YAML file, the environment and
+// the defaults in the `env` struct tags, and validates the result. It returns the
+// config, warnings about unknown YAML fields, and any error.
+//
+// Precedence, highest first:
+//
+//	environment  >  file  >  tag default
+//
+// So a variable that is set beats what the file says, which is what lets a
+// secret stay out of a committed YAML, and a default only fills what neither
+// supplied. A variable that is set but empty counts as unset — see
+// environmentLookuper.
+//
+// This is the only way the service and the CLI build a Config from a file: both
+// must see the same settings, or "plugins push" would talk to one store while
+// the server read from another.
+//
+// Two mechanisms carry that order, and neither is sufficient alone.
+// DefaultOverwrite is what lets the environment win: without it envconfig skips
+// any field the file already filled and never even looks the variable up. It is
+// not enough on its own, because envconfig sees a field the file set to zero as
+// indistinguishable from one the file never mentioned, and fills both from the
+// tag — so restoreExplicitZeros reads the document to tell them apart.
+func LoadAndValidate(ctx context.Context, path string) (*Config, []string, error) {
+	return loadAndValidate(ctx, path, environmentLookuper())
+}
+
+// zeroIsASetting lists the fields whose zero value is a documented setting
+// rather than an absence, and which also carry a default in their `env` tag.
+//
+// envconfig cannot tell those two apart. A field omitted from the YAML and a
+// field the YAML set to 0 are both the Go zero value by the time it runs, so it
+// fills each with the tag default — and "cache_max_bytes: 0", written down to
+// disable eviction, comes back as 20 GiB. Reading the document settles it: the
+// key is either there or it is not.
+//
+// Dropping the defaults instead would be simpler and worse. They are what keeps
+// the environment-only path safe, and three of these turn a protection off:
+// without a default, a deployment that set none of them would silently run with
+// no cache eviction, no per-caller concurrency limit and no audit retention.
+//
+// Every other field with a default either rejects zero in Validate or treats it
+// as the same thing the default means, so this list is the whole of it.
+var zeroIsASetting = []explicitZero{
+	{
+		yamlPath: []string{"registry", "cache_max_bytes"},
+		envKey:   "REGISTRY_CACHE_MAX_BYTES",
+		restore:  func(dst *Config, src Config) { dst.Registry.CacheMaxBytes = src.Registry.CacheMaxBytes },
+	},
+	{
+		yamlPath: []string{"worker_pool", "max_retries"},
+		envKey:   "WORKER_POOL_MAX_RETRIES",
+		restore:  func(dst *Config, src Config) { dst.WorkerPool.MaxRetries = src.WorkerPool.MaxRetries },
+	},
+	{
+		yamlPath: []string{"rate_limit", "max_concurrent_per_ip"},
+		envKey:   "RATE_LIMIT_MAX_CONCURRENT_PER_IP",
+		restore:  func(dst *Config, src Config) { dst.RateLimit.MaxConcurrentPerIP = src.RateLimit.MaxConcurrentPerIP },
+	},
+	{
+		yamlPath: []string{"audit", "max_save_retries"},
+		envKey:   "AUDIT_MAX_SAVE_RETRIES",
+		restore:  func(dst *Config, src Config) { dst.Audit.MaxSaveRetries = src.Audit.MaxSaveRetries },
+	},
+	{
+		yamlPath: []string{"audit", "retention_months"},
+		envKey:   "AUDIT_RETENTION_MONTHS",
+		restore:  func(dst *Config, src Config) { dst.Audit.RetentionMonths = src.Audit.RetentionMonths },
+	},
+}
+
+// explicitZero ties a field's place in the YAML document to its environment
+// variable and to the assignment that puts the file's value back.
+type explicitZero struct {
+	yamlPath []string
+	envKey   string
+	restore  func(dst *Config, src Config)
+}
+
+// restoreExplicitZeros puts back the values the file stated outright and the
+// environment did not override, for the fields in zeroIsASetting.
+//
+// The order it enforces is the one the rest of the loader promises: the
+// environment beats the file, and the file beats the tag default — including
+// when what the file says is zero.
+func restoreExplicitZeros(cfg *Config, fromFile Config, data []byte, lookuper envconfig.Lookuper) error {
+	var doc map[string]any
+
+	// A document that is not a mapping (an empty file, say) states nothing, so
+	// there is nothing to put back.
+	if err := yaml.Unmarshal(data, &doc); err != nil || doc == nil {
+		//nolint:nilerr // the decode above already parsed this; a shape we cannot walk means no explicit keys
+		return nil
+	}
+
+	for _, field := range zeroIsASetting {
+		if !documentHasKey(doc, field.yamlPath) {
+			continue
+		}
+
+		// The environment still wins: it is the layer above the file.
+		if _, found := lookuper.Lookup(field.envKey); found {
+			continue
+		}
+
+		field.restore(cfg, fromFile)
+	}
+
+	return nil
+}
+
+// documentHasKey reports whether path names a key that is present in doc,
+// whatever its value.
+func documentHasKey(doc map[string]any, path []string) bool {
+	current := doc
+
+	for depth, key := range path {
+		value, ok := current[key]
+		if !ok {
+			return false
+		}
+
+		if depth == len(path)-1 {
+			return true
+		}
+
+		nested, ok := value.(map[string]any)
+		if !ok {
+			return false
+		}
+
+		current = nested
+	}
+
+	return false
+}
+
+// loadAndValidate is LoadAndValidate with the environment injected, so that a
+// test can pin what the file resolves to instead of inheriting whatever the
+// shell that started it happened to export.
+func loadAndValidate(ctx context.Context, path string, lookuper envconfig.Lookuper) (*Config, []string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading config file %s: %w", path, err)
+	}
+
+	if int64(len(data)) > maxConfigFileSize {
+		return nil, nil, fmt.Errorf("config file %s is %d bytes, over the %d byte limit",
+			path, len(data), maxConfigFileSize)
 	}
 
 	// First pass: strict parsing to detect unknown fields.
@@ -466,9 +697,76 @@ func LoadAndValidate(path string) (*Config, []string, error) {
 		return nil, warnings, fmt.Errorf("parsing config YAML: %w", err)
 	}
 
+	// Kept before the overlay so an explicit zero in the file can be put back
+	// afterwards; see restoreExplicitZeros.
+	fromFile := cfg
+
+	if err = applyEnv(ctx, &cfg, lookuper); err != nil {
+		return nil, warnings, err
+	}
+
+	if err = restoreExplicitZeros(&cfg, fromFile, data, lookuper); err != nil {
+		return nil, warnings, err
+	}
+
 	if err = cfg.Validate(); err != nil {
 		return &cfg, warnings, fmt.Errorf("config validation: %w", err)
 	}
 
 	return &cfg, warnings, nil
+}
+
+// ApplyEnv overlays the environment and the struct tag defaults onto cfg,
+// leaving values it already holds in place unless a variable is actually set.
+//
+// Exported so that the file path and the environment-only path resolve settings
+// through the same call: a field that reads from the environment in one has to
+// read from it in the other, and a manually maintained list of the ones that do
+// drifts from the struct the moment a field is added.
+func ApplyEnv(ctx context.Context, cfg *Config) error {
+	return applyEnv(ctx, cfg, environmentLookuper())
+}
+
+// environmentLookuper reads the process environment, treating a variable that is
+// set but empty as absent.
+//
+// This is what makes the layering safe next to docker-compose, where the idiom
+// throughout deploy/ is `LICENSE_KEY: "${LICENSE_KEY:-}"` — a variable that is
+// always defined and usually empty. os.LookupEnv reports those as found, so
+// without this an unset shell variable would overwrite a value written in the
+// config file with nothing, and a licence or a DSN in the YAML would vanish the
+// moment the stack came up without one exported.
+//
+// The cost is that a setting cannot be blanked from the environment, only
+// changed. Nothing here needs that: emptiness is how a feature is turned off in
+// the file, and the file is where that decision belongs.
+func environmentLookuper() envconfig.Lookuper {
+	return emptyIsUnset{inner: envconfig.OsLookuper()}
+}
+
+type emptyIsUnset struct{ inner envconfig.Lookuper }
+
+func (l emptyIsUnset) Lookup(key string) (string, bool) {
+	val, found := l.inner.Lookup(key)
+	if !found || val == "" {
+		return "", false
+	}
+
+	return val, true
+}
+
+func applyEnv(ctx context.Context, cfg *Config, lookuper envconfig.Lookuper) error {
+	err := envconfig.ProcessWith(ctx, &envconfig.Config{ //nolint:exhaustruct // the rest of the defaults are right
+		Target:   cfg,
+		Lookuper: lookuper,
+		// Without this envconfig leaves any field the file already filled and
+		// skips the lookup entirely, so the environment could not override a
+		// setting written into the YAML.
+		DefaultOverwrite: true,
+	})
+	if err != nil {
+		return fmt.Errorf("envconfig.ProcessWith: %w", err)
+	}
+
+	return nil
 }
