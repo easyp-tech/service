@@ -304,6 +304,23 @@ Plugins are identified in the format: `{group}/{name}:{version}`
 
 ### Environment Variables
 
+Settings resolve in one order, whether the service was started with `--cfg` or
+without it:
+
+1. the YAML file, if one was given;
+2. the environment, which **overrides** the file;
+3. the `default=` on the field, which fills only what neither supplied.
+
+A variable that is set but empty counts as not set, so the `"${VAR:-}"` form used
+throughout `deploy/` leaves the file's value alone when the variable is not
+exported. This is what lets a secret — `DB_POSTGRES_DSN`, `AUTH_WRITE_TOKENS`,
+`LICENSE_KEY`, `REGISTRY_S3_SECRET_ACCESS_KEY` — stay out of a committed config.
+
+Two names do not follow the field they set: the section prefix is part of the
+variable, so `db.postgres` is `DB_POSTGRES_DSN` and `telemetry.otlp_endpoint` is
+`TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT` — the bare OTel SDK name is read by
+nothing.
+
 ```yaml
 # Server
 SERVER_HOST=0.0.0.0
@@ -314,7 +331,6 @@ SERVER_PORT_MCP=8083
 
 # Database
 DB_POSTGRES_DSN="postgres://user:pass@localhost/db"
-DB_MIGRATE_DIR="migrate"
 
 # Registry
 REGISTRY_PLUGINS_DIR="./plugins"
@@ -335,6 +351,12 @@ REGISTRY_S3_FORCE_PATH_STYLE=true
 |------|---------|
 | `deploy/config/config.yml` | Docker-compose service config (internal hostnames) |
 | `deploy/config/config.local.yml` | Local development config (localhost, port 5433) |
+| `deploy/config/config.community.dev.yml` | Two-tier dev stack, unlicensed container |
+| `deploy/config/config.enterprise.dev.yml` | Two-tier dev stack, licensed container |
+
+The two tier configs ship no write tokens and no telemetry endpoints on purpose:
+that stack is what `deploy/docker-compose.public.yml` puts on the internet, and a
+committed credential is a published one. Supply them through `deploy/.env.dev`.
 
 ```yaml
 server:
@@ -345,7 +367,6 @@ server:
     health: 8082
     mcp: 8083
 db:
-  migrate_dir: "migrate"
   driver: "postgres"
   postgres: "postgres://easyp_svc:easyp_pass@localhost:5433/easyp_db?sslmode=disable"
 registry:
