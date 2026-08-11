@@ -196,7 +196,11 @@ config:
       forcePathStyle: false
 
   telemetry:
-    # Empty means the service default (localhost), i.e. no external collector.
+    # Empty means no collector, and the service then builds no exporter at all.
+    # These carry no fallback on purpose: the OTLP connection is lazy, so an
+    # endpoint nobody is listening on does not fail — it retries forever, and a
+    # pod with no observability stack would fill its log with connection errors
+    # while otherwise working.
     otlpEndpoint: ""
     pyroscopeEndpoint: ""
 

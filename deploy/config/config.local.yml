@@ -28,9 +28,17 @@ registry:
   #   access_key_id: "rustfsadmin"
   #   secret_access_key: "rustfsadmin"
   #   force_path_style: true
+# Empty because `task up-minimal` starts postgres and nothing else: there is no
+# collector on the host to receive any of this. An endpoint nobody answers on
+# does not fail loudly — the exporters connect lazily and then retry forever,
+# filling the log of a local run with connection errors.
+#
+# Bring up the observability stack and set these in the shell instead:
+#   TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317 \
+#   TELEMETRY_PYROSCOPE_ENDPOINT=http://localhost:4040 task run-local
 telemetry:
-  otlp_endpoint: "localhost:4317"
-  pyroscope_endpoint: "http://localhost:4040"
+  otlp_endpoint: ""
+  pyroscope_endpoint: ""
 worker_pool:
   workers: 4                        # concurrent plugin lookups (DB, and downloads on a miss)
   queue_size: 16                    # waiting slots, for lookups and for generations alike

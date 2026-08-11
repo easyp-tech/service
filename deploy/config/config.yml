@@ -9,12 +9,16 @@ server:
   # worker_pool.generation_timeout, otherwise a rolling deploy severs work the
   # service already accepted; startup refuses a shorter value.
   force_shutdown_after: 150s
-  # CIDRs whose X-Forwarded-For and X-Real-IP headers may be believed. Empty
-  # means the connecting address is the caller, which is right for a listener
-  # clients reach directly and wrong behind a proxy: there every request arrives
-  # from the proxy, so the rate limit and the per-caller concurrency limit apply
-  # to everyone combined and the audit log names the proxy rather than who acted.
-  trusted_proxies: []
+  # CIDRs whose X-Forwarded-For and X-Real-IP headers may be believed. This is
+  # the easyp_network subnet, pinned in docker-compose.yml — the gRPC port is not
+  # published, so traefik is the only thing that reaches the listener and its
+  # address is the one every request arrives from.
+  #
+  # Empty would be wrong here, not merely unset: with no trusted range the
+  # library short-circuits to the connecting address and never reads a header at
+  # all, so the rate limit and the per-caller concurrency limit apply to everyone
+  # combined and the audit log names traefik rather than who acted.
+  trusted_proxies: ["172.28.0.0/16"]
   # Largest single gRPC message in each direction. gRPC's own defaults are 4 MiB
   # inbound — smaller than a request carrying a large proto tree — and
   # effectively unlimited outbound. max_send_msg_size must cover
@@ -89,8 +93,10 @@ rate_limit:
   # with long requests. 0 disables the check.
   max_concurrent_per_ip: 2
 # Audit is an Enterprise feature: without a license nothing is written,
-# whatever these settings say. Defaults from env tags do NOT apply on the YAML
-# path, so every field has to be spelled out here.
+# whatever these settings say. The fields below are spelled out to keep the
+# settings auditable in one place, not because they have to be: an omitted field
+# now takes the default from its env tag on this path too, and AUDIT_* overrides
+# whatever is written here.
 audit:
   buffer_size: 1000             # queue between the request path and the writer
   batch_size: 100               # rows per INSERT

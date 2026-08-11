@@ -6,7 +6,11 @@ server:
     health: 8082
     mcp: 8083
   force_shutdown_after: 150s
-  trusted_proxies: []
+  # The easyp_network subnet, pinned in docker-compose.dev.yml. Callers arriving
+  # through traefik all share its address, so without this the rate limit and the
+  # per-caller concurrency limit apply to everyone combined and the audit log
+  # names the proxy. Leave it empty only for a listener clients reach directly.
+  trusted_proxies: ["172.28.0.0/16"]
   max_recv_msg_size: 67108864
   max_send_msg_size: 67108864
   max_concurrent_streams: 256
@@ -21,9 +25,9 @@ db:
 
 registry:
   plugins_dir: "/plugins"
-  # Largest response a plugin may produce. Spelled out because the YAML path
-  # never reaches envconfig, so the default on the field does not apply here
-  # and an omitted value means zero — which refuses every generation.
+  # Largest response a plugin may produce. Spelled out to keep the tier's limits
+  # visible in one place; REGISTRY_MAX_OUTPUT_SIZE overrides it, and an omitted
+  # value now takes the default from the field rather than arriving as zero.
   max_output_size: 67108864
   cache_max_bytes: 21474836480   # 20 GiB
   s3:
@@ -36,19 +40,20 @@ registry:
     # deploy/.env.dev, which is not committed. This file is, and a previous
     # version of it put a live key pair in a public repository.
 
-# Both are empty unless the observability overlay is running: an endpoint
-# naming a container that does not exist makes every export attempt fail and
-# retry, which costs more than the telemetry is worth on a stack without it.
-# docker-compose.observability.yml is what makes these reachable.
-# Names the containers docker-compose.observability.yml brings up. This file is
-# read as YAML and never reaches envconfig, so the values cannot be supplied
-# from the environment — they are written out, and the stack either has those
-# containers or it does not. Without the overlay the exporters retry a name that
-# does not resolve: the service still serves, but its log fills with connection
-# errors, so blank these two out when running the dev stack on its own.
+# Empty because docker-compose.dev.yml does not bring up a collector: alloy and
+# pyroscope exist only in docker-compose.observability.yml. An endpoint naming a
+# container that is not there does not fail loudly — the exporters are built
+# lazily and then retry an unresolvable name forever, filling the log with
+# connection errors while the service otherwise works.
+#
+# With the overlay running, set them in deploy/.env.dev rather than here:
+#   TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT=easyp-alloy:4317
+#   TELEMETRY_PYROSCOPE_ENDPOINT=http://easyp-pyroscope:4040
+# The environment overrides this file on every startup path, so one stack can
+# have telemetry and another none without either editing a committed config.
 telemetry:
-  otlp_endpoint: "easyp-alloy:4317"
-  pyroscope_endpoint: "http://easyp-pyroscope:4040"
+  otlp_endpoint: ""
+  pyroscope_endpoint: ""
 
 worker_pool:
   workers: 4
@@ -81,7 +86,18 @@ audit:
   partition_check_interval: 6h
   partition_op_timeout: 30s
 
+# Credentials for the mutating methods (CreatePlugin/UpdatePlugin/DeletePlugin).
+# Reads stay anonymous.
+#
+# Deliberately empty. This is the stack docker-compose.public.yml puts on the
+# internet with a real certificate, and what used to sit here was the digest of
+# the literal "local-dev-token" — published in this repository, so anyone who
+# read it could create, replace and delete plugins here. An empty list denies
+# every write, which is the right default for a host a stranger can reach.
+#
+# Supply real ones through AUTH_WRITE_TOKENS in deploy/.env.dev, which is not
+# committed: "ci=<64 hex>,me=<64 hex>". Generate a pair with
+#   easyp-svc auth new-token --name ci
+# Only digests travel; the token itself belongs in your secret manager.
 auth:
-  write_tokens:
-    - name: "local-dev"
-      sha256: "0cd48eed49739dfdd99efaef37d251aae5a80866e5954763c6597943fff5ce9b"
+  write_tokens: []
