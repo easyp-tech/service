@@ -125,9 +125,13 @@ type Ports struct {
 }
 
 // DBConfig holds database connection settings.
+//
+// The DSN carries the database password, so it is marked secret: `config print`
+// redacts it, and anything else that reports the configuration back to a human
+// has one place to ask rather than a list to remember.
 type DBConfig struct {
 	Driver   string `env:"DRIVER, default=postgres" yaml:"driver"`
-	Postgres string `env:"POSTGRES_DSN"             yaml:"postgres"`
+	Postgres string `env:"POSTGRES_DSN"             secret:"true" yaml:"postgres"`
 }
 
 // RegistryConfig configures plugin execution.
@@ -152,13 +156,17 @@ type RegistryConfig struct {
 // Credentials may also be supplied via REGISTRY_S3_ACCESS_KEY_ID and
 // REGISTRY_S3_SECRET_ACCESS_KEY environment variables instead of YAML; when
 // both are absent, the default AWS credential chain is used.
+//
+// Only the secret half of the credential is marked as such. The key id names
+// the caller and is worth seeing in a printed configuration — redacting it would
+// hide which key a deployment is using while protecting nothing.
 type S3Config struct {
 	Endpoint        string `env:"ENDPOINT"         yaml:"endpoint"`
 	Bucket          string `env:"BUCKET"           yaml:"bucket"`
 	Region          string `env:"REGION,default=us-east-1" yaml:"region"`
 	Prefix          string `env:"PREFIX"           yaml:"prefix"`
 	AccessKeyID     string `env:"ACCESS_KEY_ID"    yaml:"access_key_id"`
-	SecretAccessKey string `env:"SECRET_ACCESS_KEY" yaml:"secret_access_key"`
+	SecretAccessKey string `env:"SECRET_ACCESS_KEY" secret:"true" yaml:"secret_access_key"`
 	ForcePathStyle  bool   `env:"FORCE_PATH_STYLE" yaml:"force_path_style"`
 }
 
@@ -215,8 +223,10 @@ type WorkerPoolConfig struct {
 // The env names below are relative to the section prefix, so they resolve to
 // LICENSE_KEY, LICENSE_FILE, LICENSE_PUBLIC_KEY and LICENSE_CACHE_TTL.
 type LicenseConfig struct {
-	// Key is an inline PASETO token. Takes priority over File.
-	Key string `env:"KEY"  yaml:"key"`
+	// Key is an inline PASETO token. Takes priority over File. It is a
+	// credential — anyone holding it can run an enterprise tier — so it is
+	// marked secret and never printed.
+	Key string `env:"KEY" secret:"true" yaml:"key"`
 	// File is a path to a file holding the token.
 	File string `env:"FILE" yaml:"file"`
 
@@ -236,7 +246,12 @@ type LicenseConfig struct {
 	// Through the environment: LICENSE_PUBLIC_KEYS="<kid>:<hex>,<kid>:<hex>".
 	PublicKeys map[string]string `env:"PUBLIC_KEYS" yaml:"public_keys"`
 
-	CacheTTL time.Duration `env:"CACHE_TTL" yaml:"cache_ttl"`
+	// CacheTTL is how often the token is re-validated. The default is stated
+	// here rather than only in license.NewManager, which substitutes the same
+	// five minutes for a non-positive value: a fallback that lives past the
+	// config package is one `config print` cannot see, so the configuration
+	// would report zero while the service ran on five minutes.
+	CacheTTL time.Duration `env:"CACHE_TTL,default=5m" yaml:"cache_ttl"`
 }
 
 // hexEd25519KeyLength is the length of a hex-encoded Ed25519 public key.
@@ -542,98 +557,134 @@ const maxConfigFileSize = 1 << 20
 // must see the same settings, or "plugins push" would talk to one store while
 // the server read from another.
 //
-// Two mechanisms carry that order, and neither is sufficient alone.
-// DefaultOverwrite is what lets the environment win: without it envconfig skips
-// any field the file already filled and never even looks the variable up. It is
-// not enough on its own, because envconfig sees a field the file set to zero as
-// indistinguishable from one the file never mentioned, and fills both from the
-// tag — so restoreExplicitZeros reads the document to tell them apart.
+// The order is carried by an explicit merge rather than by layering the
+// environment on top of the decoded file, because that layering cannot express
+// it. envconfig sees a field the file set to zero and a field the file never
+// mentioned as the same thing — both are the Go zero value by the time it runs —
+// and fills each from the tag, so "cache_max_bytes: 0", written down to disable
+// eviction, came back as 20 GiB. The document still knows the difference, so the
+// decision is made there: see mergeFileValues.
 func LoadAndValidate(ctx context.Context, path string) (*Config, []string, error) {
+	cfg, warnings, _, err := loadAndValidate(ctx, path, environmentLookuper())
+
+	return cfg, warnings, err
+}
+
+// LoadAndValidateWithOrigins is LoadAndValidate, and also reports where each
+// setting's value came from. `config print --origin` is the reason it exists:
+// with three layers and a validation failure to explain, "which of them supplied
+// this" is the question, and recomputing the answer outside the loader would
+// mean two implementations of it that could disagree.
+func LoadAndValidateWithOrigins(ctx context.Context, path string) (*Config, []string, Origins, error) {
 	return loadAndValidate(ctx, path, environmentLookuper())
 }
 
-// zeroIsASetting lists the fields whose zero value is a documented setting
-// rather than an absence, and which also carry a default in their `env` tag.
-//
-// envconfig cannot tell those two apart. A field omitted from the YAML and a
-// field the YAML set to 0 are both the Go zero value by the time it runs, so it
-// fills each with the tag default — and "cache_max_bytes: 0", written down to
-// disable eviction, comes back as 20 GiB. Reading the document settles it: the
-// key is either there or it is not.
-//
-// Dropping the defaults instead would be simpler and worse. They are what keeps
-// the environment-only path safe, and three of these turn a protection off:
-// without a default, a deployment that set none of them would silently run with
-// no cache eviction, no per-caller concurrency limit and no audit retention.
-//
-// Every other field with a default either rejects zero in Validate or treats it
-// as the same thing the default means, so this list is the whole of it.
-var zeroIsASetting = []explicitZero{
-	{
-		yamlPath: []string{"registry", "cache_max_bytes"},
-		envKey:   "REGISTRY_CACHE_MAX_BYTES",
-		restore:  func(dst *Config, src Config) { dst.Registry.CacheMaxBytes = src.Registry.CacheMaxBytes },
-	},
-	{
-		yamlPath: []string{"worker_pool", "max_retries"},
-		envKey:   "WORKER_POOL_MAX_RETRIES",
-		restore:  func(dst *Config, src Config) { dst.WorkerPool.MaxRetries = src.WorkerPool.MaxRetries },
-	},
-	{
-		yamlPath: []string{"rate_limit", "max_concurrent_per_ip"},
-		envKey:   "RATE_LIMIT_MAX_CONCURRENT_PER_IP",
-		restore:  func(dst *Config, src Config) { dst.RateLimit.MaxConcurrentPerIP = src.RateLimit.MaxConcurrentPerIP },
-	},
-	{
-		yamlPath: []string{"audit", "max_save_retries"},
-		envKey:   "AUDIT_MAX_SAVE_RETRIES",
-		restore:  func(dst *Config, src Config) { dst.Audit.MaxSaveRetries = src.Audit.MaxSaveRetries },
-	},
-	{
-		yamlPath: []string{"audit", "retention_months"},
-		envKey:   "AUDIT_RETENTION_MONTHS",
-		restore:  func(dst *Config, src Config) { dst.Audit.RetentionMonths = src.Audit.RetentionMonths },
-	},
+// Origin says which layer supplied a setting's value.
+type Origin int
+
+const (
+	// OriginDefault is the `default=` in the field's env tag, or the zero value
+	// where the field has no default.
+	OriginDefault Origin = iota
+	// OriginFile is a key written in the config file.
+	OriginFile
+	// OriginEnv is an environment variable that was set to something non-empty.
+	OriginEnv
+)
+
+// String names the layer as `config print --origin` reports it.
+func (o Origin) String() string {
+	switch o {
+	case OriginEnv:
+		return "env"
+	case OriginFile:
+		return "file"
+	case OriginDefault:
+		return "default"
+	default:
+		return "unknown"
+	}
 }
 
-// explicitZero ties a field's place in the YAML document to its environment
-// variable and to the assignment that puts the file's value back.
-type explicitZero struct {
-	yamlPath []string
-	envKey   string
-	restore  func(dst *Config, src Config)
+// Origins maps a setting's dotted YAML name to the layer that supplied it.
+type Origins map[string]Origin
+
+// EnvironmentOrigins reports where each setting comes from when the service is
+// started without a config file, which is the shape every Helm deployment has.
+// There is no file layer there, so every setting is either an environment
+// variable or a default.
+func EnvironmentOrigins() (Origins, error) {
+	return environmentOrigins(environmentLookuper())
 }
 
-// restoreExplicitZeros puts back the values the file stated outright and the
-// environment did not override, for the fields in zeroIsASetting.
-//
-// The order it enforces is the one the rest of the loader promises: the
-// environment beats the file, and the file beats the tag default — including
-// when what the file says is zero.
-func restoreExplicitZeros(cfg *Config, fromFile Config, data []byte, lookuper envconfig.Lookuper) error {
-	var doc map[string]any
-
-	// A document that is not a mapping (an empty file, say) states nothing, so
-	// there is nothing to put back.
-	if err := yaml.Unmarshal(data, &doc); err != nil || doc == nil {
-		//nolint:nilerr // the decode above already parsed this; a shape we cannot walk means no explicit keys
-		return nil
+func environmentOrigins(lookuper envconfig.Lookuper) (Origins, error) {
+	leaves, err := Leaves()
+	if err != nil {
+		return nil, err
 	}
 
-	for _, field := range zeroIsASetting {
-		if !documentHasKey(doc, field.yamlPath) {
+	origins := make(Origins, len(leaves))
+
+	for _, leaf := range leaves {
+		origins[leaf.Name()] = OriginDefault
+
+		if _, found := lookuper.Lookup(leaf.EnvKey); found {
+			origins[leaf.Name()] = OriginEnv
+		}
+	}
+
+	return origins, nil
+}
+
+// mergeFileValues resolves the three layers into resolved, which arrives holding
+// the environment and the tag defaults, and reports where each value came from.
+//
+// The rule is the documented precedence, applied setting by setting: a variable
+// that is set wins; failing that, a key the file names wins, whatever its value;
+// failing both, what is already there stands — the tag default, or the zero
+// value where the field has none.
+//
+// The middle clause is the whole point. "Whatever its value" includes zero, and
+// zero is a documented setting for several fields: no retries, no cache
+// eviction, no per-caller limit, keep audit forever. Decided from the struct
+// alone, those are indistinguishable from a field the file never mentioned, and
+// each would be silently replaced by its default. Decided from the document, the
+// key is either written down or it is not.
+//
+// This used to be a hand-maintained list of the five fields where it mattered.
+// The list was correct, and that was the problem: nothing checked it, so it held
+// only as long as everyone adding a field with a default knew to look.
+func mergeFileValues(
+	resolved *Config,
+	fromFile Config,
+	doc map[string]any,
+	lookuper envconfig.Lookuper,
+) (Origins, error) {
+	leaves, err := Leaves()
+	if err != nil {
+		return nil, err
+	}
+
+	origins := make(Origins, len(leaves))
+
+	for _, leaf := range leaves {
+		if _, found := lookuper.Lookup(leaf.EnvKey); found {
+			origins[leaf.Name()] = OriginEnv
+
 			continue
 		}
 
-		// The environment still wins: it is the layer above the file.
-		if _, found := lookuper.Lookup(field.envKey); found {
+		if documentHasKey(doc, leaf.YAMLPath) {
+			leaf.Value(resolved).Set(leaf.Value(&fromFile))
+			origins[leaf.Name()] = OriginFile
+
 			continue
 		}
 
-		field.restore(cfg, fromFile)
+		origins[leaf.Name()] = OriginDefault
 	}
 
-	return nil
+	return origins, nil
 }
 
 // documentHasKey reports whether path names a key that is present in doc,
@@ -665,14 +716,18 @@ func documentHasKey(doc map[string]any, path []string) bool {
 // loadAndValidate is LoadAndValidate with the environment injected, so that a
 // test can pin what the file resolves to instead of inheriting whatever the
 // shell that started it happened to export.
-func loadAndValidate(ctx context.Context, path string, lookuper envconfig.Lookuper) (*Config, []string, error) {
+func loadAndValidate(
+	ctx context.Context,
+	path string,
+	lookuper envconfig.Lookuper,
+) (*Config, []string, Origins, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("reading config file %s: %w", path, err)
+		return nil, nil, nil, fmt.Errorf("reading config file %s: %w", path, err)
 	}
 
 	if int64(len(data)) > maxConfigFileSize {
-		return nil, nil, fmt.Errorf("config file %s is %d bytes, over the %d byte limit",
+		return nil, nil, nil, fmt.Errorf("config file %s is %d bytes, over the %d byte limit",
 			path, len(data), maxConfigFileSize)
 	}
 
@@ -692,28 +747,59 @@ func loadAndValidate(ctx context.Context, path string, lookuper envconfig.Lookup
 	// Second pass: lenient parsing to get the actual config.
 	lenientDec := yaml.NewDecoder(bytes.NewReader(data))
 
-	var cfg Config
-	if err = lenientDec.Decode(&cfg); err != nil {
-		return nil, warnings, fmt.Errorf("parsing config YAML: %w", err)
+	var fromFile Config
+	if err = lenientDec.Decode(&fromFile); err != nil {
+		return nil, warnings, nil, fmt.Errorf("parsing config YAML: %w", err)
 	}
 
-	// Kept before the overlay so an explicit zero in the file can be put back
-	// afterwards; see restoreExplicitZeros.
-	fromFile := cfg
+	// Third pass, over the document rather than the struct: which keys the file
+	// actually names. The struct cannot answer that — see mergeFileValues.
+	//
+	// A document that is not a mapping (an empty file, say) names nothing, which
+	// leaves every setting to the environment and the defaults.
+	var doc map[string]any
+
+	if err = yaml.Unmarshal(data, &doc); err != nil {
+		return nil, warnings, nil, fmt.Errorf("parsing config YAML: %w", err)
+	}
+
+	// Started from zero rather than from the file: envconfig applies a tag
+	// default only to a field that is still zero, so filling it first would let
+	// the file suppress the very defaults the merge needs to fall back on.
+	cfg := Config{} //nolint:exhaustruct // filled from the environment and the tag defaults
 
 	if err = applyEnv(ctx, &cfg, lookuper); err != nil {
-		return nil, warnings, err
+		return nil, warnings, nil, err
 	}
 
-	if err = restoreExplicitZeros(&cfg, fromFile, data, lookuper); err != nil {
-		return nil, warnings, err
+	origins, err := mergeFileValues(&cfg, fromFile, doc, lookuper)
+	if err != nil {
+		return nil, warnings, nil, err
 	}
 
 	if err = cfg.Validate(); err != nil {
-		return &cfg, warnings, fmt.Errorf("config validation: %w", err)
+		return &cfg, warnings, origins, fmt.Errorf("config validation: %w", err)
 	}
 
-	return &cfg, warnings, nil
+	return &cfg, warnings, origins, nil
+}
+
+// Defaults returns a Config holding nothing but the defaults in the `env`
+// struct tags — no file, no environment.
+//
+// It is what "this setting was not configured" means, and `config print
+// --changed` compares against it to answer the question the deployment configs
+// made hard: which of these hundred lines actually says something. A field with
+// no default comes back as its zero value, which is the same answer.
+func Defaults(ctx context.Context) (*Config, error) {
+	cfg := Config{} //nolint:exhaustruct // filled from the tag defaults below
+
+	err := applyEnv(ctx, &cfg, envconfig.MapLookuper(map[string]string{}))
+	if err != nil {
+		return nil, err
+	}
+
+	return &cfg, nil
 }
 
 // ApplyEnv overlays the environment and the struct tag defaults onto cfg,

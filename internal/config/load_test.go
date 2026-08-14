@@ -429,6 +429,87 @@ func TestExplicitZerosSurvive(t *testing.T) {
 	})
 }
 
+// TestExplicitZerosSurviveForEveryField is the half TestExplicitZerosSurvive
+// could not cover. That test names the five fields a hand-maintained list used
+// to enumerate; this one takes a field that was never on it.
+//
+// audit.pre_create_months carries a default of 3 and was absent from the list,
+// correctly — the partition maintainer substitutes its own default for zero
+// (internal/adapters/audit/partitions.go), so the service behaved the same
+// either way and nobody was hurt. The loader still lied about it: a file saying
+// 0 loaded as 3, so anything reporting the configuration back would report a
+// value the file did not contain. Presence is now read from the document for
+// every setting, so what the file says is what the config holds.
+func TestExplicitZerosSurviveForEveryField(t *testing.T) {
+	t.Parallel()
+
+	cfg, _, err := config.LoadAndValidateWith(
+		t.Context(),
+		zeroFixture(t, "", "", "", "\n  pre_create_months: 0"),
+		noEnv(),
+	)
+	require.NoError(t, err)
+	require.Zero(t, cfg.Audit.PreCreateMonths,
+		"a key the file states outright is kept, whether or not anyone listed it")
+
+	// And omitting it still takes the default, which is the other half of the
+	// distinction being drawn.
+	omitted, _, err := config.LoadAndValidateWith(t.Context(), zeroFixture(t, "", "", "", ""), noEnv())
+	require.NoError(t, err)
+	require.Equal(t, 3, omitted.Audit.PreCreateMonths)
+}
+
+// TestOriginsReportEachLayer covers what `config print --origin` shows. Getting
+// this wrong is not visible in the resolved config — the value would be right
+// and its provenance wrong — so it is worth pinning directly.
+func TestOriginsReportEachLayer(t *testing.T) {
+	t.Parallel()
+
+	env := config.EmptyIsUnset(envconfig.MapLookuper(map[string]string{
+		"REGISTRY_S3_ACCESS_KEY_ID":     "key",
+		"REGISTRY_S3_SECRET_ACCESS_KEY": "secret",
+		// Set but empty is not set, so this must not read as coming from the
+		// environment — the file's value stands and the origin has to say so.
+		"REGISTRY_S3_BUCKET": "",
+	}))
+
+	cfg, origins, err := config.LoadWithOrigins(t.Context(), shippedPath("config.enterprise.dev.yml"), env)
+	require.NoError(t, err)
+
+	require.Equal(t, config.OriginEnv, origins["registry.s3.access_key_id"])
+	require.Equal(t, config.OriginFile, origins["registry.s3.bucket"],
+		"an empty variable did not supply this; the file did")
+	require.Equal(t, "easyp-plugins", cfg.Registry.S3.Bucket)
+	// One of the few settings the shipped configs do not restate. That it is
+	// this hard to find one is what Этап 4 is about.
+	require.Equal(t, config.OriginDefault, origins["audit.enqueue_timeout"],
+		"a setting the file does not name comes from the tag")
+
+	// Every setting is accounted for, so nothing can be missing from the report.
+	leaves, err := config.Leaves()
+	require.NoError(t, err)
+	require.Len(t, origins, len(leaves))
+}
+
+// TestEnvironmentOriginsHaveNoFileLayer covers the path every Helm deployment
+// takes today: no config file at all, so a value is either a variable or a
+// default and there is no third possibility to report.
+func TestEnvironmentOriginsHaveNoFileLayer(t *testing.T) {
+	t.Parallel()
+
+	origins, err := config.EnvironmentOriginsWith(config.EmptyIsUnset(envconfig.MapLookuper(map[string]string{
+		"DB_POSTGRES_DSN": "postgres://u:p@h:5432/d",
+	})))
+	require.NoError(t, err)
+
+	require.Equal(t, config.OriginEnv, origins["db.postgres"])
+	require.Equal(t, config.OriginDefault, origins["worker_pool.workers"])
+
+	for name, origin := range origins {
+		require.NotEqual(t, config.OriginFile, origin, "%s: there is no file on this path", name)
+	}
+}
+
 // TestValidateRejects covers the rules that had no test at all. Each case starts
 // from a config that passes and breaks exactly one thing, so a rule that stops
 // working fails here rather than in production.

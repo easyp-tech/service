@@ -16,7 +16,27 @@ func LoadAndValidateWith(
 	path string,
 	lookuper envconfig.Lookuper,
 ) (*Config, []string, error) {
-	return loadAndValidate(ctx, path, lookuper)
+	cfg, warnings, _, err := loadAndValidate(ctx, path, lookuper)
+
+	return cfg, warnings, err
+}
+
+// LoadWithOrigins is LoadAndValidateWith, and also reports which layer supplied
+// each setting.
+func LoadWithOrigins(
+	ctx context.Context,
+	path string,
+	lookuper envconfig.Lookuper,
+) (*Config, Origins, error) {
+	cfg, _, origins, err := loadAndValidate(ctx, path, lookuper)
+
+	return cfg, origins, err
+}
+
+// EnvironmentOriginsWith is EnvironmentOrigins with the environment supplied by
+// the caller.
+func EnvironmentOriginsWith(lookuper envconfig.Lookuper) (Origins, error) {
+	return environmentOrigins(lookuper)
 }
 
 // ApplyEnvWith is ApplyEnv with the environment supplied by the caller.
