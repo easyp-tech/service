@@ -63,6 +63,70 @@ func getCommands() []*cli.Command {
 		getPluginsCommand(),
 		getAuthCommand(),
 		getAPICommand(),
+		getConfigCommand(),
+	}
+}
+
+func getConfigCommand() *cli.Command {
+	return &cli.Command{
+		Name:  "config",
+		Usage: "Inspect and check the service configuration",
+		Description: "Settings come from three layers — the environment, the config file, and the " +
+			"defaults in the binary — and until now the only way to see what they resolved to was to " +
+			"start the service. Both subcommands resolve exactly as `service start` does; with no " +
+			"--cfg they read the environment alone, which is how a Helm deployment is configured.",
+		Commands: []*cli.Command{
+			{
+				Name:  "validate",
+				Usage: "Check a configuration without starting the service",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:  flagCfg,
+						Usage: "path to config file; omit to check the environment alone",
+						Value: "",
+					},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					return runConfigValidate(ctx, cmd.String(flagCfg))
+				},
+			},
+			{
+				Name:  "print",
+				Usage: "Print the configuration the service would run with",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:  flagCfg,
+						Usage: "path to config file; omit to resolve from the environment alone",
+						Value: "",
+					},
+					&cli.BoolFlag{
+						Name:  "origin",
+						Usage: "annotate each setting with the layer it came from",
+						Value: false,
+					},
+					&cli.BoolFlag{
+						Name: "changed",
+						Usage: "print only the settings that differ from the built-in defaults, " +
+							"which is what a config file needs to state and no more",
+						Value: false,
+					},
+					&cli.BoolFlag{
+						Name: "show-secrets",
+						Usage: "print credentials instead of a placeholder; the output then belongs " +
+							"nowhere but a terminal",
+						Value: false,
+					},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					return runConfigPrint(ctx, printOptions{
+						cfgPath:     cmd.String(flagCfg),
+						origin:      cmd.Bool("origin"),
+						changed:     cmd.Bool("changed"),
+						showSecrets: cmd.Bool("show-secrets"),
+					})
+				},
+			},
+		},
 	}
 }
 
