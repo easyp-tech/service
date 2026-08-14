@@ -443,7 +443,10 @@ promtool_check() {
   return 2
 }
 
-rules_yaml="$(mktemp -t easyp-rules)"
+# The X's are required: BSD mktemp accepts a template without them and GNU
+# mktemp refuses, so this ran on a laptop and failed the Chart job on every CI
+# run until someone read past the checks that had already passed.
+rules_yaml="$(mktemp -t easyp-rules.XXXXXX)"
 trap 'rm -f "$rules_yaml"' EXIT
 
 if out="$(render --set prometheusRule.enabled=true --show-only templates/prometheusrule.yaml 2>&1)"; then

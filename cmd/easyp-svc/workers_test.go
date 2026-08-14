@@ -1,7 +1,6 @@
 package main
 
 import (
-	"io"
 	"log/slog"
 	"testing"
 
@@ -17,7 +16,7 @@ import (
 func TestCappedWorkers(t *testing.T) {
 	t.Parallel()
 
-	discard := slog.New(slog.NewTextHandler(io.Discard, nil))
+	discard := slog.New(slog.DiscardHandler)
 
 	cases := []struct {
 		name       string
