@@ -454,6 +454,12 @@ if out="$(render --set prometheusRule.enabled=true --show-only templates/prometh
   # top level, so drop everything above it and remove one level of indent.
   awk '/^spec:/{f=1;next} f{sub(/^  /,"");print}' <<<"$out" > "$rules_yaml"
 
+  # mktemp creates the file 0600, and the promtool fallback bind-mounts it into
+  # a container that runs as nobody. Docker Desktop masks ownership on the way
+  # into its VM, so this only ever failed on Linux — with "permission denied" on
+  # a file the runner had just written itself.
+  chmod 0644 "$rules_yaml"
+
   if check="$(promtool_check "$rules_yaml" 2>&1)"; then
     pass "promtool accepts the rules ($(grep -c 'alert:' "$rules_yaml") alerts)"
   elif [[ $? -eq 2 ]]; then
