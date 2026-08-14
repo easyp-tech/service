@@ -405,6 +405,27 @@ func initAudit(
 	return worker, partitions, cleanup
 }
 
+// cappedWorkers applies the licence's worker ceiling to the configured number.
+//
+// A ceiling, not a substitution. This used to assign the licence limit outright,
+// which made it a floor as well: a community deployment asking for two workers
+// got four, because the tier permitted four. Nothing said so — the configuration
+// on disk read `workers: 2` and the pool ran four — and the only way to find out
+// was to count goroutines.
+//
+// A licence that imposes no limit of its own reports core.LicenseUnlimited (-1),
+// so anything non-positive leaves the configured value alone.
+func cappedWorkers(configured, licenseLimit int, log *slog.Logger) int {
+	if licenseLimit <= 0 || licenseLimit >= configured {
+		return configured
+	}
+
+	log.Info("worker_pool.workers lowered to the licence tier's limit",
+		"configured", configured, "licence_limit", licenseLimit)
+
+	return licenseLimit
+}
+
 func initApp(
 	ctx context.Context,
 	cfg config.Config,
@@ -431,10 +452,7 @@ func initApp(
 
 	tracedRegistry := telemetry.NewTracingRegistry(repo)
 
-	wpWorkers := cfg.WorkerPool.Workers
-	if licenseWorkers := gate.MaxWorkers(); licenseWorkers > 0 {
-		wpWorkers = licenseWorkers
-	}
+	wpWorkers := cappedWorkers(cfg.WorkerPool.Workers, gate.MaxWorkers(), log)
 
 	metricsAdapter := adapter_metrics.New(reg, namespace)
 	pool := core.NewWorkerPool(tracedRegistry, core.WorkerPoolConfig{
