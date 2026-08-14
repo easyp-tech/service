@@ -88,7 +88,16 @@ service:
 terminationGracePeriodSeconds: 180
 
 # ---------------------------------------------------------------------------
-# Configuration that is not secret. Rendered into the container's `env`.
+# Configuration that is not secret. Rendered into a ConfigMap and mounted at
+# /etc/easyp/config.yml — the same config file every other deployment of this
+# service reads. Secrets are not here; they arrive as environment variables from
+# the secret above and override the file.
+#
+# The numbers below repeat the defaults compiled into the service, on purpose:
+# this is the chart's documented interface and `helm show values` is where an
+# operator looks them up. tests/render.sh checks that they still agree with the
+# binary, so a default changed on one side and not the other fails there rather
+# than in a cluster.
 # ---------------------------------------------------------------------------
 config:
   logLevel: info

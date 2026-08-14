@@ -37,10 +37,16 @@ spec:
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- with .Values.podAnnotations }}
       annotations:
+        # The configuration is read once at startup, so a changed ConfigMap does
+        # nothing until the pods are replaced. Kubernetes does not roll a
+        # Deployment when a mounted ConfigMap changes; hashing it into the pod
+        # template is what turns `helm upgrade --set config.…` into a rollout
+        # rather than a silent no-op.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -64,6 +70,10 @@ spec:
           args:
             - service
             - start
+            # The same file every other deployment of this service uses. What
+            # used to be here instead was forty environment variables written out
+            # by hand in this template — see configmap.yaml.
+            - --cfg=/etc/easyp/config.yml
             - --log_level={{ .Values.config.logLevel }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -83,125 +93,6 @@ spec:
             - name: mcp
               containerPort: {{ .Values.ports.mcp }}
           env:
-            - name: SERVER_HOST
-              value: "0.0.0.0"
-            - name: SERVER_PORT_GRPC
-              value: "{{ .Values.ports.grpc | int }}"
-            - name: SERVER_PORT_METRIC
-              value: "{{ .Values.ports.metrics | int }}"
-            - name: SERVER_PORT_HEALTH
-              value: "{{ .Values.ports.health | int }}"
-            - name: SERVER_PORT_MCP
-              value: "{{ .Values.ports.mcp | int }}"
-            - name: SERVER_FORCE_SHUTDOWN_AFTER
-              value: "{{ .Values.config.forceShutdownAfterSeconds }}s"
-            {{- with .Values.config.server.trustedProxies }}
-            - name: SERVER_TRUSTED_PROXIES
-              value: {{ join "," . | quote }}
-            {{- end }}
-            # int64 on purpose: Helm parses YAML numbers as float64, so a large
-            # byte count rendered through quote alone comes out in scientific
-            # notation and the service refuses to start on it.
-            - name: SERVER_MAX_RECV_MSG_SIZE
-              value: "{{ .Values.config.server.maxRecvMsgSize | int64 }}"
-            - name: SERVER_MAX_SEND_MSG_SIZE
-              value: "{{ .Values.config.server.maxSendMsgSize | int64 }}"
-            - name: SERVER_MAX_CONCURRENT_STREAMS
-              value: "{{ .Values.config.server.maxConcurrentStreams | int }}"
-            {{- if .Values.tls.enabled }}
-            - name: SERVER_TLS_CERT_FILE
-              value: "{{ .Values.tls.mountPath }}/server/tls.crt"
-            - name: SERVER_TLS_KEY_FILE
-              value: "{{ .Values.tls.mountPath }}/server/tls.key"
-            {{- if eq (include "easyp-service.mutualTLS" .) "true" }}
-            - name: SERVER_TLS_CLIENT_CA_FILE
-              value: "{{ .Values.tls.mountPath }}/ca/ca.crt"
-            {{- end }}
-            {{- end }}
-            - name: REGISTRY_PLUGINS_DIR
-              value: {{ .Values.config.registry.pluginsDir | quote }}
-            - name: REGISTRY_MAX_OUTPUT_SIZE
-              value: "{{ .Values.config.registry.maxOutputSize | int64 }}"
-            - name: REGISTRY_CACHE_MAX_BYTES
-              value: "{{ .Values.config.registry.cacheMaxBytes | int64 }}"
-            {{- with .Values.config.registry.s3 }}
-            {{- if .bucket }}
-            - name: REGISTRY_S3_BUCKET
-              value: {{ .bucket | quote }}
-            - name: REGISTRY_S3_REGION
-              value: {{ .region | quote }}
-            {{- if .endpoint }}
-            - name: REGISTRY_S3_ENDPOINT
-              value: {{ .endpoint | quote }}
-            {{- end }}
-            {{- if .prefix }}
-            - name: REGISTRY_S3_PREFIX
-              value: {{ .prefix | quote }}
-            {{- end }}
-            - name: REGISTRY_S3_FORCE_PATH_STYLE
-              value: {{ .forcePathStyle | quote }}
-            {{- end }}
-            {{- end }}
-            - name: WORKER_POOL_WORKERS
-              value: "{{ .Values.config.workerPool.workers | int }}"
-            - name: WORKER_POOL_QUEUE_SIZE
-              value: "{{ .Values.config.workerPool.queueSize | int }}"
-            - name: WORKER_POOL_MAX_CONCURRENT_GENERATIONS
-              value: "{{ .Values.config.workerPool.maxConcurrentGenerations | int }}"
-            - name: WORKER_POOL_GENERATION_TIMEOUT
-              value: "{{ .Values.config.workerPool.generationTimeoutSeconds }}s"
-            - name: WORKER_POOL_MAX_RETRIES
-              value: "{{ .Values.config.workerPool.maxRetries | int }}"
-            - name: WORKER_POOL_SHUTDOWN_TIMEOUT
-              value: {{ .Values.config.workerPool.shutdownTimeout | quote }}
-            - name: RATE_LIMIT_REQUESTS_PER_SECOND
-              value: {{ .Values.config.rateLimit.requestsPerSecond | quote }}
-            - name: RATE_LIMIT_BURST
-              value: "{{ .Values.config.rateLimit.burst | int }}"
-            - name: RATE_LIMIT_CLEANUP_INTERVAL
-              value: {{ .Values.config.rateLimit.cleanupInterval | quote }}
-            - name: RATE_LIMIT_MAX_CONCURRENT_PER_IP
-              value: "{{ .Values.config.rateLimit.maxConcurrentPerIP | int }}"
-            {{- with .Values.config.audit }}
-            - name: AUDIT_BUFFER_SIZE
-              value: "{{ .bufferSize | int }}"
-            - name: AUDIT_BATCH_SIZE
-              value: "{{ .batchSize | int }}"
-            - name: AUDIT_FLUSH_INTERVAL
-              value: {{ .flushInterval | quote }}
-            - name: AUDIT_MAX_SAVE_RETRIES
-              value: "{{ .maxSaveRetries | int }}"
-            - name: AUDIT_ENQUEUE_TIMEOUT
-              value: {{ .enqueueTimeout | quote }}
-            - name: AUDIT_FLUSH_TIMEOUT
-              value: {{ .flushTimeout | quote }}
-            - name: AUDIT_RETENTION_MONTHS
-              value: "{{ .retentionMonths | int }}"
-            - name: AUDIT_PRE_CREATE_MONTHS
-              value: "{{ .preCreateMonths | int }}"
-            - name: AUDIT_PARTITION_CHECK_INTERVAL
-              value: {{ .partitionCheckInterval | quote }}
-            - name: AUDIT_PARTITION_OP_TIMEOUT
-              value: {{ .partitionOpTimeout | quote }}
-            {{- end }}
-            {{- if .Values.config.telemetry.otlpEndpoint }}
-            # Note the double prefix: the field is OTEL_EXPORTER_OTLP_ENDPOINT
-            # inside a section prefixed TELEMETRY_, so the plain OTel variable
-            # name is NOT what the service reads.
-            - name: TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT
-              value: {{ .Values.config.telemetry.otlpEndpoint | quote }}
-            {{- end }}
-            {{- if .Values.config.telemetry.pyroscopeEndpoint }}
-            - name: TELEMETRY_PYROSCOPE_ENDPOINT
-              value: {{ .Values.config.telemetry.pyroscopeEndpoint | quote }}
-            {{- end }}
-            {{- if .Values.config.license.publicKeys }}
-            # The keys licence tokens are verified against. Public halves only —
-            # this is what the token is checked with, not what signs it. The
-            # token itself is a secret and arrives through envFrom.
-            - name: LICENSE_PUBLIC_KEYS
-              value: {{ include "easyp-service.licensePublicKeys" . | quote }}
-            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -234,6 +125,9 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
+            - name: config
+              mountPath: /etc/easyp
+              readOnly: true
             - name: plugins
               mountPath: {{ .Values.config.registry.pluginsDir }}
             {{- if .Values.tls.enabled }}
@@ -247,6 +141,9 @@ spec:
             {{- end }}
             {{- end }}
       volumes:
+        - name: config
+          configMap:
+            name: {{ include "easyp-service.fullname" . }}-config
         - name: plugins
           {{- if .Values.persistence.enabled }}
           persistentVolumeClaim:

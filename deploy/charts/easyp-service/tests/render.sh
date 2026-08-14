@@ -50,6 +50,17 @@ expect_render() {
   return 0
 }
 
+# config_yml prints the service configuration out of a rendered ConfigMap.
+#
+# The chart used to configure the service through forty environment variables
+# written out by hand in deployment.yaml; it now renders the same config file
+# every other deployment uses, so the checks below look inside that file.
+config_yml() {
+  awk '/^  config\.yml: \|$/ {found = 1; next}
+       found && /^(---|[^ ])/ {exit}
+       found {sub(/^    /, ""); print}' <<<"$1"
+}
+
 expect_failure() {
   local what="$1" wanted="$2"; shift 2
 
@@ -81,28 +92,28 @@ echo "== licence public keys =="
 
 # The setting must reach the container. Declaring it in values.yaml and
 # rendering nothing is how it shipped the first time.
-if expect_render "two keys render as LICENSE_PUBLIC_KEYS" \
+if expect_render "two keys reach the config file" \
   --set "config.license.publicKeys.2026-08=$KEY_A" \
   --set "config.license.publicKeys.2026-09=$KEY_B"; then
 
-  wanted="2026-08:$KEY_A,2026-09:$KEY_B"
+  cfg="$(config_yml "$out")"
 
-  if grep -qF "LICENSE_PUBLIC_KEYS" <<<"$out" && grep -qF "$wanted" <<<"$out"; then
-    pass "two keys render as LICENSE_PUBLIC_KEYS"
+  if grep -qF "\"2026-08\": \"$KEY_A\"" <<<"$cfg" && grep -qF "\"2026-09\": \"$KEY_B\"" <<<"$cfg"; then
+    pass "two keys reach the config file"
   else
-    fail "two keys render as LICENSE_PUBLIC_KEYS: expected '$wanted' in the rendered env"
+    fail "two keys reach the config file: both key ids expected under license.public_keys"$'\n'"$cfg"
   fi
 fi
 
 # Clearing the map must actually clear it — that is how an installation opts out
 # of trusting easyp.tech and verifies against its own key only.
-if expect_render "clearing the keys removes the variable" \
+if expect_render "clearing the keys removes the section" \
   --set "config.license.publicKeys=null"; then
 
-  if grep -q "LICENSE_PUBLIC_KEYS" <<<"$out"; then
-    fail "clearing the keys removes the variable: LICENSE_PUBLIC_KEYS rendered anyway"
+  if grep -q "public_keys" <<<"$(config_yml "$out")"; then
+    fail "clearing the keys removes the section: license.public_keys rendered anyway"
   else
-    pass "clearing the keys removes the variable"
+    pass "clearing the keys removes the section"
   fi
 fi
 
@@ -116,10 +127,10 @@ EXPECTED_DEFAULT_KID="2026-08"
 EXPECTED_DEFAULT_KEY="81322461987167d5cfd529e9cb8b96f4797f12fce6be4399a0866e250c9b6bb5"
 
 if expect_render "the defaults ship the published public key"; then
-  if grep -qF "$EXPECTED_DEFAULT_KID:$EXPECTED_DEFAULT_KEY" <<<"$out"; then
+  if grep -qF "\"$EXPECTED_DEFAULT_KID\": \"$EXPECTED_DEFAULT_KEY\"" <<<"$(config_yml "$out")"; then
     pass "the defaults ship the published public key"
   else
-    fail "the defaults ship the published public key: expected '$EXPECTED_DEFAULT_KID:$EXPECTED_DEFAULT_KEY' in the rendered env"
+    fail "the defaults ship the published public key: expected '$EXPECTED_DEFAULT_KID' under license.public_keys"
   fi
 fi
 
@@ -220,21 +231,24 @@ expect_failure "an ingress without trusted proxies is rejected" "trustedProxies"
 if expect_render "trusted proxies reach the container" \
      --set 'config.server.trustedProxies[0]=10.42.0.0/16' \
      --set 'config.server.trustedProxies[1]=10.43.0.0/16'; then
-  if grep -q 'value: "10.42.0.0/16,10.43.0.0/16"' <<<"$out"; then
+  cfg="$(config_yml "$out")"
+  # -e, because the pattern starts with a dash and would otherwise be read as an
+  # option by some greps.
+  if grep -qF -e '- "10.42.0.0/16"' <<<"$cfg" && grep -qF -e '- "10.43.0.0/16"' <<<"$cfg"; then
     pass "trusted proxies reach the container"
   else
-    fail "trusted proxies reach the container: SERVER_TRUSTED_PROXIES not rendered as expected"$'\n'"$(grep -A1 TRUSTED_PROXIES <<<"$out")"
+    fail "trusted proxies reach the container: server.trusted_proxies not rendered as expected"$'\n'"$cfg"
   fi
 fi
 
 # The default is empty, and that has to stay a real absence rather than an empty
-# string: an empty CIDR list means "the peer is the client", which is correct for
+# list: an empty CIDR list means "the peer is the client", which is correct for
 # a listener reached directly.
-if expect_render "no trusted proxies renders no variable"; then
-  if grep -q "SERVER_TRUSTED_PROXIES" <<<"$out"; then
-    fail "no trusted proxies renders no variable: the variable appeared anyway"
+if expect_render "no trusted proxies renders no key"; then
+  if grep -q "trusted_proxies" <<<"$(config_yml "$out")"; then
+    fail "no trusted proxies renders no key: the key appeared anyway"
   else
-    pass "no trusted proxies renders no variable"
+    pass "no trusted proxies renders no key"
   fi
 fi
 
@@ -244,26 +258,79 @@ echo "== message size limits =="
 # 67108864 through `quote` alone renders as 6.7108864e+07 and the service
 # refuses to start. That defect has shipped once already, on a different value.
 if expect_render "message size limits render as integers"; then
-  bad="$(grep -E 'value: "[0-9.]+e\+[0-9]+"' <<<"$out" || true)"
+  cfg="$(config_yml "$out")"
+  bad="$(grep -E '^\s*max_(recv|send)_msg_size: [0-9.]+e\+[0-9]+' <<<"$cfg" || true)"
   if [[ -n "$bad" ]]; then
     fail "message size limits render as integers: scientific notation"$'\n'"$bad"
-  elif grep -q 'value: "67108864"' <<<"$out"; then
+  elif grep -qE '^\s*max_send_msg_size: 67108864$' <<<"$cfg"; then
     pass "message size limits render as integers"
   else
-    fail "message size limits render as integers: 67108864 not found"
+    fail "message size limits render as integers: 67108864 not found"$'\n'"$cfg"
   fi
 fi
 
 # The service rejects a send limit below the plugin output cap, so a chart that
 # renders that combination would produce a pod that never starts.
 if expect_render "send limit covers the plugin output cap"; then
-  send="$(grep -A1 'SERVER_MAX_SEND_MSG_SIZE' <<<"$out" | grep -oE '[0-9]+' | tail -1)"
-  outmax="$(grep -A1 'REGISTRY_MAX_OUTPUT_SIZE' <<<"$out" | grep -oE '[0-9]+' | tail -1)"
+  cfg="$(config_yml "$out")"
+  send="$(grep -E '^\s*max_send_msg_size:' <<<"$cfg" | grep -oE '[0-9]+' | tail -1)"
+  outmax="$(grep -E '^\s*max_output_size:' <<<"$cfg" | grep -oE '[0-9]+' | tail -1)"
   if [[ -n "$send" && -n "$outmax" && "$send" -ge "$outmax" ]]; then
     pass "send limit covers the plugin output cap"
   else
     fail "send limit covers the plugin output cap: send=$send output=$outmax"
   fi
+fi
+
+echo
+echo "== the rendered configuration =="
+
+# The chart renders a config file now, so the service itself can be asked
+# whether it is one it would start on. This is the check the forty
+# hand-maintained environment variables could not have: the names had to be
+# right, and nothing but a deploy would say whether they were.
+#
+# Skipped rather than failed without a Go toolchain, so the chart stays testable
+# on a machine that only has helm.
+if ! command -v go >/dev/null 2>&1; then
+  printf '  skip  the service accepts the rendered config (no go toolchain)\n'
+elif expect_render "the service accepts the rendered config"; then
+  rendered="$(mktemp)"
+  config_yml "$out" >"$rendered"
+
+  # The DSN is deliberately absent from the ConfigMap — it is a credential and
+  # arrives from the secret — so it is supplied here the way the pod gets it.
+  if verdict="$(cd "$REPO" && DB_POSTGRES_DSN='postgres://u:p@h:5432/easyp?sslmode=require' \
+       go run ./cmd/easyp-svc config validate --cfg "$rendered" 2>&1)"; then
+    pass "the service accepts the rendered config"
+  else
+    fail "the service accepts the rendered config"$'\n'"$verdict"
+  fi
+
+  # Which of the chart's numbers actually differ from the ones compiled into the
+  # binary. Anything beyond the list below is drift between values.yaml and
+  # internal/config — which is exactly how worker_pool.max_retries came to say 2
+  # here and 3 in the compose configs, unnoticed, for months.
+  #
+  # Expected, and each for a reason:
+  #   server.port.*        the chart uses 8080-8083, the binary defaults to 23410+
+  #   db.postgres          from the secret, above
+  #   license.public_keys  easyp.tech's published verification key
+  # `|| true`, because the good outcome here is grep matching nothing, and under
+  # `set -e` an empty match in a command substitution ends the script — silently,
+  # as a clean exit partway through the suite.
+  changed="$(cd "$REPO" && DB_POSTGRES_DSN='postgres://u:p@h:5432/easyp?sslmode=require' \
+       go run ./cmd/easyp-svc config print --cfg "$rendered" --changed 2>/dev/null \
+       | grep -E '^[a-z_]+:|^    [a-z_]+:|^  [a-z_]+:' \
+       | grep -vE '^(server|db|license):$|^  port:$|^    (grpc|metric|health|mcp):|^  postgres:|^  public_keys:' || true)"
+
+  if [[ -z "$changed" ]]; then
+    pass "values.yaml has not drifted from the binary's defaults"
+  else
+    fail "values.yaml has not drifted from the binary's defaults: unexpected overrides"$'\n'"$changed"$'\n'"Either the chart or internal/config changed without the other; reconcile them, or extend the expected list above with the reason."
+  fi
+
+  rm -f "$rendered"
 fi
 
 echo

@@ -259,16 +259,38 @@ have to follow.
 
 ## Configuration reference
 
-Non-secret settings map onto environment variables through `config.*` in
-`values.yaml`. Two names are easy to get wrong when setting them by hand:
+Non-secret settings come from `config.*` in `values.yaml`, which the chart
+renders into a ConfigMap mounted at `/etc/easyp/config.yml` — the same config
+file `docker compose` and a local run use. Secrets do *not* go there: they
+arrive as environment variables from the secret, and the environment beats the
+file on every startup path.
+
+Since chart 0.2.0. Before that the settings were forty environment variables
+written out by hand in `deployment.yaml`, a second partial copy of the config
+structure that had drifted: `db.driver`, `license.cache_ttl` and `license.file`
+could not be set through the chart at all, and `worker_pool.max_retries`
+disagreed with the compose configs for months without anyone choosing it.
+
+To see what an install resolves to, defaults and origins included:
+
+```sh
+helm template my-release . --set … \
+  | awk '/^  config\.yml: \|$/{f=1;next} f&&/^(---|[^ ])/{exit} f{sub(/^    /,"");print}' \
+  > /tmp/config.yml
+DB_POSTGRES_DSN=… easyp-svc config print --cfg /tmp/config.yml --origin
+```
+
+Two things are easy to get wrong when setting them by hand:
 
 - Ports default to **23410–23413** in the service, not 8080–8083. The chart
   always sets them explicitly.
-- The OTLP endpoint variable is `TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT`. The
-  standard `OTEL_EXPORTER_OTLP_ENDPOINT` is *not* read: the field sits inside a
-  section prefixed `TELEMETRY_`.
+- The OTLP endpoint key is `telemetry.otlp_endpoint`, and its variable is
+  `TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT`. The standard
+  `OTEL_EXPORTER_OTLP_ENDPOINT` is *not* read: the field sits inside a section
+  prefixed `TELEMETRY_`.
 
-Anything the chart does not model can be added through `extraEnv`.
+Anything the chart does not model can still be set through `extraEnv`, which
+overrides the file.
 
 ## Values
 

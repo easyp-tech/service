@@ -1,0 +1,145 @@
+{{- include "easyp-service.validate" . }}
+{{/*
+The service configuration as a file, which is how every other deployment of this
+service is configured.
+
+It used to be forty-odd environment variables written out by hand in
+deployment.yaml — a second, partial copy of the config structure that had to be
+edited every time a field was added, and that had already fallen behind: db.driver,
+license.cache_ttl and license.file could not be set through the chart at all, and
+worker_pool.max_retries disagreed with the compose configs for months.
+
+Secrets are deliberately not here. A ConfigMap is world-readable to anything with
+get on the namespace, and the environment beats this file on every startup path,
+so DB_POSTGRES_DSN, REGISTRY_S3_*, LICENSE_KEY and AUTH_WRITE_TOKENS arrive from
+the secret instead — see the `secrets` section of values.yaml.
+
+Anything omitted below takes the default compiled into the binary. To see what
+this resolves to, defaults included:
+
+  helm template … | yq '…' > config.yml && easyp-svc config print --cfg config.yml --origin
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "easyp-service.fullname" . }}-config
+  labels:
+    {{- include "easyp-service.labels" . | nindent 4 }}
+data:
+  config.yml: |
+    # Rendered by the easyp-service chart. Edit values.yaml and upgrade — a
+    # change made here is overwritten by the next `helm upgrade`.
+    server:
+      # The pod's own interface; the Service decides who reaches it.
+      host: "0.0.0.0"
+      port:
+        grpc: "{{ .Values.ports.grpc | int }}"
+        metric: "{{ .Values.ports.metrics | int }}"
+        health: "{{ .Values.ports.health | int }}"
+        mcp: "{{ .Values.ports.mcp | int }}"
+      force_shutdown_after: {{ printf "%ds" (int .Values.config.forceShutdownAfterSeconds) }}
+      {{- with .Values.config.server.trustedProxies }}
+      trusted_proxies:
+        {{- range . }}
+        - {{ . | quote }}
+        {{- end }}
+      {{- end }}
+      {{/*
+      int64 on purpose, here and on every byte count below. Helm parses YAML
+      numbers as float64, so a large one rendered without it comes out in
+      scientific notation and the service refuses to start on it — a defect that
+      has shipped once already. Kept as a template comment rather than a YAML
+      one so the note does not travel into every cluster's ConfigMap, and so the
+      check in tests/render.sh does not find its own example.
+      */}}
+      max_recv_msg_size: {{ .Values.config.server.maxRecvMsgSize | int64 }}
+      max_send_msg_size: {{ .Values.config.server.maxSendMsgSize | int64 }}
+      max_concurrent_streams: {{ .Values.config.server.maxConcurrentStreams | int }}
+      {{- if .Values.tls.enabled }}
+      tls:
+        cert_file: "{{ .Values.tls.mountPath }}/server/tls.crt"
+        key_file: "{{ .Values.tls.mountPath }}/server/tls.key"
+        {{- if eq (include "easyp-service.mutualTLS" .) "true" }}
+        client_ca_file: "{{ .Values.tls.mountPath }}/ca/ca.crt"
+        {{- end }}
+      {{- end }}
+
+    registry:
+      plugins_dir: {{ .Values.config.registry.pluginsDir | quote }}
+      max_output_size: {{ .Values.config.registry.maxOutputSize | int64 }}
+      cache_max_bytes: {{ .Values.config.registry.cacheMaxBytes | int64 }}
+      {{- with .Values.config.registry.s3 }}
+      {{- if .bucket }}
+      s3:
+        bucket: {{ .bucket | quote }}
+        region: {{ .region | quote }}
+        {{- if .endpoint }}
+        endpoint: {{ .endpoint | quote }}
+        {{- end }}
+        {{- if .prefix }}
+        prefix: {{ .prefix | quote }}
+        {{- end }}
+        force_path_style: {{ .forcePathStyle }}
+        # access_key_id and secret_access_key arrive from the secret.
+      {{- end }}
+      {{- end }}
+
+    worker_pool:
+      workers: {{ .Values.config.workerPool.workers | int }}
+      queue_size: {{ .Values.config.workerPool.queueSize | int }}
+      max_concurrent_generations: {{ .Values.config.workerPool.maxConcurrentGenerations | int }}
+      generation_timeout: {{ printf "%ds" (int .Values.config.workerPool.generationTimeoutSeconds) }}
+      max_retries: {{ .Values.config.workerPool.maxRetries | int }}
+      shutdown_timeout: {{ .Values.config.workerPool.shutdownTimeout | quote }}
+
+    rate_limit:
+      requests_per_second: {{ .Values.config.rateLimit.requestsPerSecond }}
+      burst: {{ .Values.config.rateLimit.burst | int }}
+      cleanup_interval: {{ .Values.config.rateLimit.cleanupInterval | quote }}
+      max_concurrent_per_ip: {{ .Values.config.rateLimit.maxConcurrentPerIP | int }}
+
+    {{- with .Values.config.audit }}
+    audit:
+      buffer_size: {{ .bufferSize | int }}
+      batch_size: {{ .batchSize | int }}
+      flush_interval: {{ .flushInterval | quote }}
+      max_save_retries: {{ .maxSaveRetries | int }}
+      enqueue_timeout: {{ .enqueueTimeout | quote }}
+      flush_timeout: {{ .flushTimeout | quote }}
+      retention_months: {{ .retentionMonths | int }}
+      pre_create_months: {{ .preCreateMonths | int }}
+      partition_check_interval: {{ .partitionCheckInterval | quote }}
+      partition_op_timeout: {{ .partitionOpTimeout | quote }}
+    {{- end }}
+
+    {{- if or .Values.config.telemetry.otlpEndpoint .Values.config.telemetry.pyroscopeEndpoint }}
+    # Omitted entirely when unset: these have no defaults precisely so that "no
+    # collector" can be expressed, and an endpoint nobody answers on is retried
+    # forever rather than reported.
+    telemetry:
+      {{- with .Values.config.telemetry.otlpEndpoint }}
+      # Note the double prefix: the field is OTEL_EXPORTER_OTLP_ENDPOINT inside a
+      # section prefixed TELEMETRY_, so the plain OTel variable name is not what
+      # the service reads.
+      otlp_endpoint: {{ . | quote }}
+      {{- end }}
+      {{- with .Values.config.telemetry.pyroscopeEndpoint }}
+      pyroscope_endpoint: {{ . | quote }}
+      {{- end }}
+    {{- end }}
+
+    {{- if .Values.config.license.publicKeys }}
+    license:
+      # The keys licence tokens are verified against. Public halves only — this is
+      # what a token is checked with, not what signs it. The token itself is a
+      # secret and arrives as LICENSE_KEY from the environment.
+      public_keys:
+        {{- range $kid, $hex := .Values.config.license.publicKeys }}
+        {{ $kid | quote }}: {{ trim $hex | quote }}
+        {{- end }}
+    {{- end }}
+
+    # auth.write_tokens is absent, which denies every write. Digests arrive as
+    # AUTH_WRITE_TOKENS from the secret: "ci=<64 hex>,me=<64 hex>". A registry
+    # that accepts writes from nobody is the right state for one that was
+    # installed without anyone deciding who may push to it.

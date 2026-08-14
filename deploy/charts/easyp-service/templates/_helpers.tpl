@@ -149,6 +149,17 @@ inside the cluster.
 */}}
 {{- define "easyp-service.validate" -}}
 
+{{/*
+Licence key ids and hex are checked here rather than only where they render.
+They used to be validated as a side effect of building the LICENSE_PUBLIC_KEYS
+variable in deployment.yaml; the ConfigMap renders the map directly, so without
+this a malformed key would reach the pod and downgrade it to community mode with
+nothing but a log line to say so.
+*/}}
+{{- if .Values.config.license.publicKeys }}
+{{- $_ := include "easyp-service.licensePublicKeys" . }}
+{{- end }}
+
 {{- if and (not .Values.secrets.existingSecret) (not .Values.secrets.create) }}
 {{- fail "easyp-service: set secrets.existingSecret to a secret holding DB_POSTGRES_DSN, or secrets.create=true with secrets.data. The service cannot start without a database DSN." }}
 {{- end }}
