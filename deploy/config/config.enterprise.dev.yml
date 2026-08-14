@@ -1,103 +1,62 @@
+# Enterprise tier of the two-tier dev stack (deploy/docker-compose.dev.yml).
+#
+# This file states what differs from the defaults compiled into the binary, and
+# nothing else — see the header of config.community.dev.yml for why.
+#
+# To see the whole resolved configuration, defaults included:
+#   easyp-svc config print --cfg deploy/config/config.enterprise.dev.yml --origin
+#
+# What makes this container the enterprise one is not in this file: it is
+# LICENSE_KEY, passed in from deploy/.env.dev. An unverifiable licence is not a
+# startup failure — the container runs as community and logs it — so `task
+# tier-dev` exists to assert the difference rather than assume it.
+
 server:
-  host: "0.0.0.0"
   port:
     grpc: 8080
     metric: 8081
     health: 8082
     mcp: 8083
-  force_shutdown_after: 150s
   # The easyp_network subnet, pinned in docker-compose.dev.yml. Callers arriving
   # through traefik all share its address, so without this the rate limit and the
   # per-caller concurrency limit apply to everyone combined and the audit log
   # names the proxy. Leave it empty only for a listener clients reach directly.
   trusted_proxies: ["172.28.0.0/16"]
-  max_recv_msg_size: 67108864
-  max_send_msg_size: 67108864
-  max_concurrent_streams: 256
   tls:
     cert_file: "/certs/server.crt"
     key_file: "/certs/server.key"
     client_ca_file: "/certs/ca.crt"
 
 db:
-  driver: "postgres"
   postgres: "postgres://easyp_svc:easyp_pass@postgres:5432/easyp_enterprise_db?sslmode=disable"
 
 registry:
-  plugins_dir: "/plugins"
-  # Largest response a plugin may produce. Spelled out to keep the tier's limits
-  # visible in one place; REGISTRY_MAX_OUTPUT_SIZE overrides it, and an omitted
-  # value now takes the default from the field rather than arriving as zero.
-  max_output_size: 67108864
-  cache_max_bytes: 21474836480   # 20 GiB
   s3:
     endpoint: "https://storage.h3llo.cloud"
     bucket: "easyp-plugins"
-    region: "us-east-1"
     force_path_style: true
     # access_key_id and secret_access_key are deliberately absent. They arrive as
     # REGISTRY_S3_ACCESS_KEY_ID and REGISTRY_S3_SECRET_ACCESS_KEY from
     # deploy/.env.dev, which is not committed. This file is, and a previous
     # version of it put a live key pair in a public repository.
 
-# Empty because docker-compose.dev.yml does not bring up a collector: alloy and
-# pyroscope exist only in docker-compose.observability.yml. An endpoint naming a
-# container that is not there does not fail loudly — the exporters are built
-# lazily and then retry an unresolvable name forever, filling the log with
-# connection errors while the service otherwise works.
-#
-# With the overlay running, set them in deploy/.env.dev rather than here:
-#   TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT=easyp-alloy:4317
-#   TELEMETRY_PYROSCOPE_ENDPOINT=http://easyp-pyroscope:4040
-# The environment overrides this file on every startup path, so one stack can
-# have telemetry and another none without either editing a committed config.
-telemetry:
-  otlp_endpoint: ""
-  pyroscope_endpoint: ""
-
+# Four times the community capacity. The licence does not grant this — it lifts
+# the ceiling (core.EnterpriseLicenseClaims reports no worker limit) and the
+# numbers below are what the deployment then chooses to use.
 worker_pool:
   workers: 16
   queue_size: 64
   max_concurrent_generations: 64
-  generation_timeout: 120s
-  max_retries: 3
-  shutdown_timeout: 30s
-
-license:
-  key: ""
-  file: ""
-  public_keys: {}
-  public_key: ""
-  cache_ttl: 5m
 
 rate_limit:
   requests_per_second: 50.0
   burst: 100
-  cleanup_interval: 10m
+  # Also the ceiling for `plugins register --parallel`: past this the server
+  # refuses with ResourceExhausted, which the SDK retries rather than reports,
+  # so overshooting shows up as slowness and not as an error.
   max_concurrent_per_ip: 10
 
-audit:
-  buffer_size: 1000
-  batch_size: 100
-  flush_interval: 1s
-  max_save_retries: 3
-  retention_months: 12
-  pre_create_months: 3
-  partition_check_interval: 6h
-  partition_op_timeout: 30s
-
-# Credentials for the mutating methods (CreatePlugin/UpdatePlugin/DeletePlugin).
-# Reads stay anonymous.
-#
-# Deliberately empty. This is the stack docker-compose.public.yml puts on the
-# internet with a real certificate, and what used to sit here was the digest of
-# the literal "local-dev-token" — published in this repository, so anyone who
-# read it could create, replace and delete plugins here. An empty list denies
-# every write, which is the right default for a host a stranger can reach.
-#
-# Supply real ones through AUTH_WRITE_TOKENS in deploy/.env.dev, which is not
-# committed: "ci=<64 hex>,me=<64 hex>". Generate a pair with
-#   easyp-svc auth new-token --name ci
-# Only digests travel; the token itself belongs in your secret manager.
+# See config.community.dev.yml for why this is written down empty rather than
+# left out. Real digests arrive through AUTH_WRITE_TOKENS in deploy/.env.dev.
 auth:
   write_tokens: []

@@ -1,14 +1,26 @@
+# Configuration for the main compose stack (deploy/docker-compose.yml).
+#
+# This file states what differs from the defaults compiled into the binary, and
+# nothing else. It used to restate almost all of them, which is how
+# worker_pool.max_retries came to say 3 here and 2 in the Helm chart without
+# anyone deciding it: a line that repeats a default is indistinguishable from a
+# line that overrides one, so nobody could see which of these mattered.
+#
+# The defaults are documented where they are defined, in internal/config, and
+# the resolved configuration — defaults, this file and the environment together,
+# with the origin of every value — is one command away:
+#
+#   easyp-svc config print --cfg deploy/config/config.yml --origin
+#
+# Every setting here can be overridden by its environment variable; see
+# deploy/.env.example for the names.
+
 server:
-  host: "0.0.0.0"
   port:
     grpc: 8080
     metric: 8081
     health: 8082
     mcp: 8083
-  # Hard exit this long after a termination signal. Must outlast
-  # worker_pool.generation_timeout, otherwise a rolling deploy severs work the
-  # service already accepted; startup refuses a shorter value.
-  force_shutdown_after: 150s
   # CIDRs whose X-Forwarded-For and X-Real-IP headers may be believed. This is
   # the easyp_network subnet, pinned in docker-compose.yml — the gRPC port is not
   # published, so traefik is the only thing that reaches the listener and its
@@ -19,93 +31,44 @@ server:
   # all, so the rate limit and the per-caller concurrency limit apply to everyone
   # combined and the audit log names traefik rather than who acted.
   trusted_proxies: ["172.28.0.0/16"]
-  # Largest single gRPC message in each direction. gRPC's own defaults are 4 MiB
-  # inbound — smaller than a request carrying a large proto tree — and
-  # effectively unlimited outbound. max_send_msg_size must cover
-  # registry.max_output_size, or a plugin's permitted output cannot be
-  # delivered; startup refuses the combination.
-  max_recv_msg_size: 67108864
-  max_send_msg_size: 67108864
-  # Concurrent streams one connection may hold. gRPC defaults to unlimited, so a
-  # single caller could allocate goroutines and buffers until the process ran out
-  # of memory, before any limiter in the chain saw the requests.
-  max_concurrent_streams: 256
-  # Transport security for the gRPC listener. Leaving cert_file empty serves
-  # plaintext, which the service logs a warning about on every start.
   # client_ca_file turns the listener into mutual TLS: only certificates signed
-  # by that CA are accepted, which is how traefik is authenticated here.
+  # by that CA are accepted, which is how traefik is authenticated here. Without
+  # a cert_file the service serves plaintext and warns on every start.
   tls:
     cert_file: "/certs/server.crt"
     key_file: "/certs/server.key"
     client_ca_file: "/certs/ca.crt"
+
 db:
-  driver: "postgres"
   postgres: "postgres://easyp_svc:easyp_pass@easyp-postgres:5432/easyp_db?sslmode=disable"
+
 registry:
-  plugins_dir: "/plugins"
-  max_output_size: 67108864
-  # Bound on the unpacked plugins in plugins_dir. Archives are downloaded on
-  # demand and nothing removes them on its own, so without a limit the
-  # directory grows towards the size of every plugin ever requested. Least
-  # recently used ones are dropped; the archive in S3 is left alone, so an
-  # evicted plugin simply comes down again. 0 disables eviction.
-  cache_max_bytes: 21474836480   # 20 GiB
   s3:
+    # The rustfs container of this stack. Credentials are its built-in demo pair
+    # and are committed on purpose: they unlock nothing outside the compose
+    # network. Anything reachable from elsewhere takes its keys from
+    # REGISTRY_S3_ACCESS_KEY_ID and REGISTRY_S3_SECRET_ACCESS_KEY instead.
     endpoint: "http://rustfs:9000"
     bucket: "easyp-plugins"
-    region: "us-east-1"
     access_key_id: "rustfsadmin"
     secret_access_key: "rustfsadmin"
     force_path_style: true
+
+# Named here because this stack does bring up a collector, unlike the dev one.
+# These have no defaults, so leaving them out is how a deployment says it has
+# none — a fallback would name a container that is not there and the exporters
+# would retry it forever.
 telemetry:
   otlp_endpoint: "easyp-alloy:4317"
   pyroscope_endpoint: "http://easyp-pyroscope:4040"
-worker_pool:
-  workers: 4                        # concurrent plugin lookups (DB, and downloads on a miss)
-  queue_size: 16                    # waiting slots, for lookups and for generations alike
-  max_concurrent_generations: 16    # concurrent plugin processes; beyond queue_size the answer is a refusal
-  generation_timeout: 120s
-  max_retries: 3
-  shutdown_timeout: 30s
-# Enterprise needs both a token and a public key to verify it against. Without
-# them the service runs in community mode: no audit, at most 4 workers and 10
-# registered plugins. Empty fields fall back to the LICENSE_KEY,
-# LICENSE_PUBLIC_KEYS and LICENSE_PUBLIC_KEY environment variables, which is how
-# docker-compose passes them. Note that keeping the public key here makes the
-# trust anchor editable: whoever can change this file decides which authority may
-# issue licences.
-license:
-  key: ""          # inline PASETO token (takes priority over file)
-  file: ""         # path to a file holding the token
-  # Key id -> hex-encoded Ed25519 verification key. The key id in the token
-  # footer picks one. Two entries at once is how a signing key gets rotated
-  # without every deployment having to change key on the same day.
-  public_keys: {}
-  # Single verification key, used for tokens whose key id matches nothing above.
-  public_key: ""
-  cache_ttl: 5m    # how often the token is re-validated
-rate_limit:
-  requests_per_second: 10.0  # token refill rate (tokens/sec)
-  burst: 20                   # max tokens (burst size)
-  cleanup_interval: 10m       # stale client cleanup interval
-  # Requests one client may have in flight at once. Rate alone does not bound
-  # this: a caller staying under 10 rps can still hold every generation slot
-  # with long requests. 0 disables the check.
-  max_concurrent_per_ip: 2
-# Audit is an Enterprise feature: without a license nothing is written,
-# whatever these settings say. The fields below are spelled out to keep the
-# settings auditable in one place, not because they have to be: an omitted field
-# now takes the default from its env tag on this path too, and AUDIT_* overrides
-# whatever is written here.
-audit:
-  buffer_size: 1000             # queue between the request path and the writer
-  batch_size: 100               # rows per INSERT
-  flush_interval: 1s            # forces a write of a partially filled batch
-  max_save_retries: 3           # extra attempts before a batch is given up on
-  retention_months: 12          # months of history to keep; 0 keeps everything
-  pre_create_months: 3          # months of partitions created ahead of time
-  partition_check_interval: 6h  # period between partition maintenance passes
-  partition_op_timeout: 30s     # bounds a single maintenance pass
+
+# license is absent, so the service runs in community mode: no audit, at most 4
+# workers and 10 registered plugins. Enterprise needs both a token and a key to
+# verify it against, and both arrive from the environment — LICENSE_KEY and
+# LICENSE_PUBLIC_KEYS — because the token is a credential. Writing the public key
+# into a config file also makes the trust anchor editable: whoever can change the
+# file decides which authority may issue licences.
+
 # Credentials for the mutating methods (CreatePlugin/UpdatePlugin/DeletePlugin).
 # Reads stay anonymous. Only sha256 digests live here, never the tokens, so this
 # section is safe to commit; the token itself belongs in your secret manager.
@@ -116,7 +79,8 @@ audit:
 # The entry below is the digest of the literal string "local-dev-token" so the
 # compose stack works out of the box. It is published in this repository and
 # therefore worthless as a secret: REPLACE IT before this config goes anywhere
-# a stranger can reach.
+# a stranger can reach. The dev stack's configs ship no token at all for exactly
+# that reason — see config.community.dev.yml.
 auth:
   write_tokens:
     - name: "local-dev"

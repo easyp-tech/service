@@ -1,71 +1,56 @@
+# Configuration for `task run-local`: the service on the host, postgres in a
+# container, nothing else.
+#
+# This file states what differs from the defaults compiled into the binary, and
+# nothing else — see the header of config.yml for why. To see everything it
+# resolves to, defaults included:
+#
+#   easyp-svc config print --cfg deploy/config/config.local.yml --origin
+
 server:
-  host: "0.0.0.0"
   port:
     grpc: 8080
     metric: 8081
     health: 8082
     mcp: 8083
-  force_shutdown_after: 150s   # must exceed worker_pool.generation_timeout
-  # Local mode runs without TLS on purpose: clients connect with --insecure.
-  # To exercise mTLS locally, run `task certs` and fill these in.
-  tls:
-    cert_file: ""
-    key_file: ""
-    client_ca_file: ""
+
+# tls is absent, so local mode serves plaintext and clients connect with
+# --insecure. To exercise mTLS locally, run `task certs` and set
+# server.tls.cert_file, key_file and client_ca_file to the files it writes.
+
+# trusted_proxies is absent, and correctly so: there is no proxy here, so the
+# connecting address is the client's. It is set in every other config in this
+# directory, where traefik is in front.
+
 db:
-  driver: "postgres"
+  # Port 5433, not 5432: `task up-minimal` maps it there so a local postgres
+  # already running on the default port is left alone.
   postgres: "postgres://easyp_svc:easyp_pass@localhost:5433/easyp_db?sslmode=disable"
+
 registry:
+  # Relative to the working directory, because this run has no container
+  # filesystem to put /plugins on.
   plugins_dir: "./plugins"
-  max_output_size: 67108864
-  cache_max_bytes: 21474836480   # 20 GiB of unpacked plugins; 0 disables eviction
-  # S3 binary storage is disabled by default in local mode (up-minimal starts
-  # postgres only). To enable, start rustfs and uncomment:
+  # S3 binary storage is disabled by default in local mode: `task up-minimal`
+  # starts postgres only, so there is nothing to talk to. Plugins are then read
+  # from plugins_dir alone and nothing is ever evicted from it. To enable, start
+  # rustfs and uncomment:
   # s3:
   #   endpoint: "http://localhost:9000"
   #   bucket: "easyp-plugins"
-  #   region: "us-east-1"
   #   access_key_id: "rustfsadmin"
   #   secret_access_key: "rustfsadmin"
   #   force_path_style: true
-# Empty because `task up-minimal` starts postgres and nothing else: there is no
-# collector on the host to receive any of this. An endpoint nobody answers on
-# does not fail loudly — the exporters connect lazily and then retry forever,
-# filling the log of a local run with connection errors.
+
+# telemetry is absent because there is no collector on the host to receive it.
+# The endpoints have no defaults precisely so that "none" can be said by saying
+# nothing; an endpoint nobody answers on does not fail loudly, it retries
+# forever and fills the log of a local run with connection errors.
 #
-# Bring up the observability stack and set these in the shell instead:
+# Bring up the observability stack and set them in the shell instead:
 #   TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317 \
 #   TELEMETRY_PYROSCOPE_ENDPOINT=http://localhost:4040 task run-local
-telemetry:
-  otlp_endpoint: ""
-  pyroscope_endpoint: ""
-worker_pool:
-  workers: 4                        # concurrent plugin lookups (DB, and downloads on a miss)
-  queue_size: 16                    # waiting slots, for lookups and for generations alike
-  max_concurrent_generations: 16    # concurrent plugin processes; beyond queue_size the answer is a refusal
-  generation_timeout: 120s
-  max_retries: 3
-  shutdown_timeout: 30s
-license:
-  key: ""
-  file: ""
-  public_keys: {}
-  public_key: ""
-  cache_ttl: 5m
-rate_limit:
-  requests_per_second: 10.0
-  burst: 20
-  cleanup_interval: 10m
-  max_concurrent_per_ip: 2    # in-flight requests per client; 0 disables
-audit:
-  buffer_size: 1000
-  batch_size: 100
-  flush_interval: 1s
-  max_save_retries: 3
-  retention_months: 12
-  pre_create_months: 3
-  partition_check_interval: 6h
-  partition_op_timeout: 30s
+
 # Local mode ships a fixed, publicly known token so `task run-local` works out of
 # the box. It is the digest of the literal string "local-dev-token" — never use
 # this anywhere reachable from a network.

@@ -429,6 +429,67 @@ func TestExplicitZerosSurvive(t *testing.T) {
 	})
 }
 
+// restatedDefaultsAllowed lists the keys a shipped config may state even though
+// stating them changes nothing. Each needs a reason, because the cost is real:
+// every such key is one more line that looks like it configures something.
+var restatedDefaultsAllowed = map[string]string{
+	// Written down empty, in the two configs that face the internet, so that the
+	// decision is visible in the file. What used to sit there was the digest of
+	// a token published in this repository; a reader has to be able to see that
+	// it is gone on purpose rather than wonder whether it was lost in an edit.
+	"auth.write_tokens": "the absence of a credential is the setting, and it is worth stating",
+}
+
+// TestShippedConfigsStateOnlyWhatTheyChange is the guard for the defect that
+// went unnoticed longest. worker_pool.max_retries said 3 in all four of these
+// files and 2 in the Helm chart and the struct tag, so docker deployments
+// retried a generation four times and Kubernetes ones three — a difference
+// nobody chose and nothing reported.
+//
+// It survived because the files restated nearly every default: 48 of 53
+// settings in the enterprise config came from the file, and 44 of those said
+// exactly what the binary already said. One line that genuinely differed was
+// indistinguishable from forty that did not.
+//
+// So: a key in a shipped config must change something. To see what a file
+// actually says, and what it resolves to including the defaults it leaves
+// alone, use `easyp-svc config print --cfg <file> --changed` and `--origin`.
+func TestShippedConfigsStateOnlyWhatTheyChange(t *testing.T) {
+	t.Parallel()
+
+	defaults, err := config.Defaults(t.Context())
+	require.NoError(t, err)
+
+	leaves, err := config.Leaves()
+	require.NoError(t, err)
+
+	for _, name := range shippedConfigs {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, origins, err := config.LoadWithOrigins(t.Context(), shippedPath(name), noEnv())
+			require.NoError(t, err)
+
+			for _, leaf := range leaves {
+				if origins[leaf.Name()] != config.OriginFile {
+					continue
+				}
+
+				if reason, allowed := restatedDefaultsAllowed[leaf.Name()]; allowed {
+					t.Logf("%s restates its default deliberately: %s", leaf.Name(), reason)
+
+					continue
+				}
+
+				require.False(t, leaf.SameValue(cfg, defaults),
+					"%s repeats the default (%v) and can be deleted; if it is meant to pin the value "+
+						"against a change in the binary, add it to restatedDefaultsAllowed with the reason",
+					leaf.Name(), leaf.Value(defaults).Interface())
+			}
+		})
+	}
+}
+
 // TestExplicitZerosSurviveForEveryField is the half TestExplicitZerosSurvive
 // could not cover. That test names the five fields a hand-maintained list used
 // to enumerate; this one takes a field that was never on it.
