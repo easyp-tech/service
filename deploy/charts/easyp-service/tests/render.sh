@@ -535,6 +535,76 @@ else
   fi
 fi
 
+# The host rules are compose-only and have no counterpart in the chart, so they
+# are checked for validity and for runbooks but not for parity. On Kubernetes the
+# cluster owns node monitoring; an application chart with an opinion about node
+# disk would duplicate it or disagree with it.
+host_rules="$REPO/deploy/observability/mimir/rules/anonymous/host.yaml"
+
+if [[ ! -f "$host_rules" ]]; then
+  fail "the host rules exist: $host_rules is missing"
+else
+  if check="$(promtool_check "$host_rules" 2>&1)"; then
+    pass "promtool accepts the host rules ($(grep -c 'alert:' "$host_rules") alerts)"
+  elif [[ $? -eq 2 ]]; then
+    echo "  SKIP  promtool: neither promtool nor docker is available"
+  else
+    fail "promtool rejected the host rules"$'\n'"$check"
+  fi
+
+  host_missing=""
+  while read -r alert; do
+    if ! grep -q "runbook_url:.*#${alert,,}\"" "$host_rules"; then
+      host_missing+=" $alert(no url)"
+      continue
+    fi
+
+    if ! grep -qi "^## ${alert}\$" "$runbooks"; then
+      host_missing+=" $alert(no heading)"
+    fi
+  done < <(grep -oE '^\s*- alert: \w+' "$host_rules" | awk '{print $3}')
+
+  if [[ -z "$host_missing" ]]; then
+    pass "every host alert links to a runbook section that exists"
+  else
+    fail "every host alert links to a runbook section that exists:$host_missing"
+  fi
+fi
+
+echo "== compose mounts =="
+
+# mimir.yaml names paths under /etc/mimir that only exist because a compose file
+# mounts them, and the two live in different files. That split shipped a defect:
+# the rules directory and the Alertmanager fallback were mounted in the
+# observability overlay and not in docker-compose.yml, so the single-tier stack
+# ran with a config pointing at nothing. Mimir does not complain — it starts, and
+# has no alerting rules, which looks exactly like a stack with nothing wrong.
+compose_files=(
+  "$REPO/deploy/docker-compose.yml"
+  "$REPO/deploy/docker-compose.observability.yml"
+)
+
+# Referenced paths, taken from the config rather than from a list kept by hand:
+# a list kept by hand is the same failure one level up.
+mimir_cfg="$REPO/deploy/observability/mimir/mimir.yaml"
+referenced="$(grep -oE '/etc/mimir/[A-Za-z0-9._/-]+' "$mimir_cfg" | sort -u)"
+
+unmounted=""
+for compose in "${compose_files[@]}"; do
+  grep -q '/etc/mimir/mimir.yaml' "$compose" || continue
+
+  while read -r path; do
+    [[ -z "$path" ]] && continue
+    grep -q ":${path}:ro" "$compose" || unmounted+=" $(basename "$compose"):${path}"
+  done <<<"$referenced"
+done
+
+if [[ -z "$unmounted" ]]; then
+  pass "every path mimir.yaml names is mounted wherever mimir.yaml is ($(wc -l <<<"$referenced" | tr -d ' ') paths)"
+else
+  fail "every path mimir.yaml names is mounted wherever mimir.yaml is:$unmounted"
+fi
+
 echo
 if [[ $failures -gt 0 ]]; then
   echo "$failures check(s) failed"

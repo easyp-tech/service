@@ -89,6 +89,13 @@ services:
         condition: service_completed_successfully
     volumes:
       - "./observability/mimir/mimir.yaml:/etc/mimir/mimir.yaml:ro"
+      # mimir.yaml names both of these, so they have to travel with it. Mimir
+      # does not complain when they are missing — it starts, logs nothing, and
+      # has no alerting rules at all, which is indistinguishable from a stack
+      # where nothing is wrong. tests/render.sh now checks that every path the
+      # config refers to is mounted in every compose file that mounts the config.
+      - "./observability/mimir/rules:/etc/mimir/rules:ro"
+      - "./observability/mimir/alertmanager-fallback.yaml:/etc/mimir/alertmanager-fallback.yaml:ro"
     # expand-env lets the storage settings come from the environment, so one
     # config file serves both this stack and a deployment pointing at a real
     # object store. Without the flag the ${...} placeholders are read literally.
@@ -140,6 +147,12 @@ services:
       - "./observability/alloy/config.alloy:/etc/alloy/config.alloy:ro"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - "/var/lib/docker/containers:/var/lib/docker/containers:ro"
+      # For prometheus.exporter.unix — see the same block in
+      # docker-compose.observability.yml for what the root mount costs and why
+      # the disk metrics need it.
+      - "/proc:/host/proc:ro"
+      - "/sys:/host/sys:ro"
+      - "/:/host/root:ro"
     command:
       - "run"
       - "/etc/alloy/config.alloy"
