@@ -95,10 +95,17 @@ func (g *Guard) Counter() prometheus.Counter { //nolint:ireturn // The metric in
 //
 // Call this around one unit of work — one job, one flush, one tick — so that the
 // loop around it survives to attempt the next.
+//
+// The named return is load-bearing rather than stylistic: the recover below
+// runs in a deferred closure, and only a named result can be assigned from
+// there. Made a plain local, it would be discarded and Do would report every
+// panic it caught as a clean run.
+//
+//nolint:nonamedreturns // the deferred recover assigns to it; see above
 func (g *Guard) Do(ctx context.Context, name string, fn func()) (panicked bool) {
 	defer func() {
-		p := recover()
-		if p == nil {
+		reason := recover()
+		if reason == nil {
 			return
 		}
 
@@ -107,7 +114,7 @@ func (g *Guard) Do(ctx context.Context, name string, fn func()) (panicked bool) 
 
 		monitor.FromContext(ctx).Error("recovered panic in background work",
 			slog.String("goroutine", name),
-			slog.Any("panic_reason", p),
+			slog.Any("panic_reason", reason),
 			slog.String("stacktrace", string(debug.Stack())),
 		)
 	}()
