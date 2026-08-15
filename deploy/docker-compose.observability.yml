@@ -60,6 +60,10 @@ services:
         condition: service_completed_successfully
     volumes:
       - "./observability/mimir/mimir.yaml:/etc/mimir/mimir.yaml:ro"
+      # The alerting rules and the Alertmanager configuration the ruler needs.
+      # Both are read-only by design: they belong in review, not in a UI.
+      - "./observability/mimir/rules:/etc/mimir/rules:ro"
+      - "./observability/mimir/alertmanager-fallback.yaml:/etc/mimir/alertmanager-fallback.yaml:ro"
     command: ["-config.file=/etc/mimir/mimir.yaml", "-config.expand-env=true"]
     environment:
       TELEMETRY_S3_ENDPOINT: "${TELEMETRY_S3_ENDPOINT:?TELEMETRY_S3_ENDPOINT is required, e.g. storage.example.com}"

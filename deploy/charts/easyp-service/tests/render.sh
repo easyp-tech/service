@@ -504,6 +504,37 @@ else
   fail "every alert links to a runbook section that exists:$missing"
 fi
 
+# The compose stack cannot use a PrometheusRule — there is no operator to
+# collect one — so the same alerts exist a second time as a plain rule file for
+# Mimir's ruler. Two copies with no mechanism in common is exactly the shape
+# that drifts, so the names are compared here. The expressions are not: they
+# differ in wording where the advice names a config key, and asserting on them
+# would be asserting on prose.
+compose_rules="$REPO/deploy/observability/mimir/rules/anonymous/easyp.yaml"
+
+if [[ ! -f "$compose_rules" ]]; then
+  fail "the compose stack has a copy of the rules: $compose_rules is missing"
+else
+  if check="$(promtool_check "$compose_rules" 2>&1)"; then
+    pass "promtool accepts the compose rules ($(grep -c 'alert:' "$compose_rules") alerts)"
+  elif [[ $? -eq 2 ]]; then
+    echo "  SKIP  promtool: neither promtool nor docker is available"
+  else
+    fail "promtool rejected the compose rules"$'\n'"$check"
+  fi
+
+  chart_alerts="$(grep -oE '^\s*- alert: \w+' "$rules_yaml" | awk '{print $3}' | sort)"
+  compose_alerts="$(grep -oE '^\s*- alert: \w+' "$compose_rules" | awk '{print $3}' | sort)"
+
+  if [[ "$chart_alerts" == "$compose_alerts" ]]; then
+    pass "the chart and the compose stack alert on the same things"
+  else
+    fail "the chart and the compose stack alert on the same things"$'\n'"$(
+      diff <(echo "$chart_alerts") <(echo "$compose_alerts") || true
+    )"
+  fi
+fi
+
 echo
 if [[ $failures -gt 0 ]]; then
   echo "$failures check(s) failed"

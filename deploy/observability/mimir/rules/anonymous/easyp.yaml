@@ -1,0 +1,181 @@
+# Alerting rules for the compose stack.
+#
+# The same eleven alerts the Helm chart installs as a PrometheusRule, in the
+# plain Prometheus form Mimir's ruler reads. Two copies exist because the two
+# deployments have no mechanism in common: Kubernetes has an operator that
+# collects PrometheusRule objects, compose has a directory. tests/render.sh
+# compares the alert names in both and fails when they drift, so the copies
+# cannot quietly diverge — but the expressions still have to be changed in both
+# places by hand.
+#
+# Thresholds are the chart's defaults with the templating resolved, and the
+# cache limit matches registry.cache_max_bytes in deploy/config/config.yml.
+#
+# The directory this file sits in is not decorative: with multitenancy disabled
+# every series belongs to the tenant "anonymous", and Mimir's local rule store
+# looks for <directory>/<tenant>/. A file one level up is silently ignored.
+#
+# Every alert inherits the tier label from the series it is computed over, so a
+# firing alert already says which tier it came from without any rule saying so.
+
+groups:
+  # The licence lapses quietly. Nothing fails, nothing errors: the tier drops
+  # to community, audit stops being written, and the plugin limit starts
+  # rejecting registrations. These two exist so the first sign of it is not
+  # a customer asking why their pipeline broke.
+  - name: easyp.licence
+    rules:
+      - alert: EasypLicenceExpiringSoon
+        # Zero means no licence is configured at all, which is a valid
+        # community deployment and not something to page about. On this stack
+        # that is the community container, which would otherwise alert forever.
+        expr: |
+          easyp_license_expiry_timestamp_seconds > 0
+            and easyp_license_expiry_timestamp_seconds - time() < 14 * 86400
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easyplicenceexpiringsoon"
+          summary: "EasyP licence expires in under 14 days"
+          description: >-
+            Renew it in the licence registry and roll out the new LICENSE_KEY.
+            When it expires the service keeps Enterprise for the grace period
+            written into the token, then silently drops to community.
+
+      - alert: EasypLicenceInGrace
+        expr: easyp_license_in_grace == 1
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easyplicenceingrace"
+          summary: "EasyP licence has expired and is running on its grace period"
+          description: >-
+            Enterprise features are still on, but only until the grace period
+            in the token runs out. After that audit stops and the community
+            plugin limit applies.
+
+  - name: easyp.capacity
+    rules:
+      - alert: EasypGenerationsRejected
+        expr: rate(easyp_pool_generations_rejected_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easypgenerationsrejected"
+          summary: "EasyP is refusing code generation requests"
+          description: >-
+            Clients are getting ResourceExhausted. Raise
+            worker_pool.max_concurrent_generations or add replicas.
+
+      - alert: EasypGenerationQueueSaturated
+        expr: easyp_pool_generations_waiting > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easypgenerationqueuesaturated"
+          summary: "EasyP has had generations queued for ten minutes"
+          description: >-
+            Sustained queueing means the concurrency limit is the bottleneck.
+            Refusals follow once the queue fills.
+
+      - alert: EasypPluginCacheAtLimit
+        # 21474836480 is registry.cache_max_bytes. At the limit, eviction runs
+        # continuously and most requests pay for a fresh download.
+        expr: easyp_plugin_cache_bytes / 21474836480 > 0.95
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easypplugincacheatlimit"
+          summary: "EasyP plugin cache is at its size limit"
+          description: >-
+            Raise registry.cache_max_bytes and the plugins volume together,
+            or accept that plugins are re-downloaded on most requests.
+
+  # Audit is the one thing Enterprise actually promises. Losing events is a
+  # broken promise, not a performance problem.
+  - name: easyp.audit
+    rules:
+      - alert: EasypAuditEventsLost
+        expr: rate(easyp_audit_events_lost_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easypauditeventslost"
+          summary: "EasyP is dropping audit events"
+          description: >-
+            Audit is an Enterprise commitment, so any sustained loss here is a
+            gap in what was promised. The reason label says which: enqueue_timeout
+            means the writer is not draining — raise audit.buffer_size or look at
+            why the database is slow; save_failed means writes are being rejected
+            outright; shutdown_timeout means a container stopped before it
+            finished draining.
+
+      - alert: EasypAuditMaintenanceStale
+        expr: time() - easyp_audit_partition_maintenance_last_success_seconds > 86400
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easypauditmaintenancestale"
+          summary: "EasyP has not maintained audit partitions for a day"
+          description: >-
+            Future partitions are not being created. Audit writes fail once
+            the newest existing partition is passed.
+
+      - alert: EasypAuditDefaultPartitionUsed
+        expr: easyp_audit_default_partition_used == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easypauditdefaultpartitionused"
+          summary: "EasyP audit rows have landed in the default partition"
+          description: >-
+            Maintenance did not create the month these rows belong to in time.
+            Nothing is lost, but the month cannot be created until the default
+            partition is emptied, and while it holds rows Postgres cannot prune
+            partitions for any query filtering on created_at — so audit queries
+            read the whole table. Move the rows into a new partition for their
+            month, then confirm this returns to zero.
+
+  - name: easyp.errors
+    rules:
+      - alert: EasypGenerationErrorRate
+        expr: |
+          rate(easyp_generation_errors_total[5m])
+            / clamp_min(rate(easyp_pool_jobs_total[5m]), 0.001)
+            > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easypgenerationerrorrate"
+          summary: "More than 0.05 of EasyP generations are failing"
+          description: "A plugin is broken, or its binary does not match the checksum recorded for it."
+
+      - alert: EasypPanics
+        expr: increase(easyp_panics_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easyppanics"
+          summary: "EasyP recovered from a panic"
+          description: "A recovered panic is still a bug. Check the logs for the stack."
+
+      - alert: EasypAuthFailures
+        expr: rate(easyp_auth_failures_total[5m]) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easypauthfailures"
+          summary: "EasyP is rejecting write credentials"
+          description: >-
+            Either a token was rotated without updating a caller, or somebody
+            is guessing. Callers are identified by name in the logs.

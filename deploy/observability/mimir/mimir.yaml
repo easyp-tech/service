@@ -35,6 +35,11 @@ blocks_storage:
   tsdb:
     dir: /data/ingester
     block_ranges_period: [2h]
+    # How long the ingester keeps a block on its own disk after shipping it to
+    # object storage — a local disk budget, not a data lifetime. It reads like a
+    # retention and is not one: with only this set, metrics were queryable
+    # indefinitely while the bucket grew without bound. What actually deletes
+    # data is compactor_blocks_retention_period, under limits below.
     retention_period: 24h
   bucket_store:
     sync_interval: 15m
@@ -70,25 +75,42 @@ store_gateway:
 # Ruler
 ruler:
   rule_path: /data/ruler
-  alertmanager_url: http://localhost:9093
+  # Mimir's own Alertmanager, which target: all runs in this same process and
+  # serves under /alertmanager on the HTTP port above. The previous value,
+  # localhost:9093, is where a standalone Alertmanager would listen — there has
+  # never been one here, so every evaluated alert was posted into nothing.
+  alertmanager_url: http://mimir:9009/alertmanager
   enable_api: true
   ring:
     kvstore:
       store: memberlist
 
 # Ruler Storage (top-level key)
+#
+# Local, not S3: the rules are a file in this repository, so they belong with the
+# rest of the configuration rather than in a bucket that has to be populated by
+# an API call before the stack means anything. The trade is that rules become
+# read-only — they cannot be edited through Grafana — which is the right way
+# round for something that should be reviewed in a diff.
+#
+# The directory layout is fixed by Mimir: <directory>/<tenant>/<file>. With
+# multitenancy off the tenant is "anonymous".
+#
+# The mimir-ruler bucket is still created by init-buckets and is now unused.
+# Left in place because deleting it would break rollback to an earlier config.
 ruler_storage:
-  backend: s3
-  s3:
-    endpoint: ${TELEMETRY_S3_ENDPOINT:-rustfs:9000}
-    access_key_id: ${TELEMETRY_S3_ACCESS_KEY_ID:-rustfsadmin}
-    secret_access_key: ${TELEMETRY_S3_SECRET_ACCESS_KEY:-rustfsadmin}
-    insecure: ${TELEMETRY_S3_INSECURE:-true}
-    bucket_name: ${TELEMETRY_BUCKET_PREFIX:-}mimir-ruler
+  backend: local
+  local:
+    directory: /etc/mimir/rules
 
 # Alertmanager
 alertmanager:
   data_dir: /data/alertmanager
+  # Without a configuration for the tenant the Alertmanager rejects everything
+  # the ruler sends it, so the fallback is what makes the alerts arrive
+  # somewhere at all. It routes to a receiver that discards them: they are read
+  # in Grafana, not delivered.
+  fallback_config_file: /etc/mimir/alertmanager-fallback.yaml
   sharding_ring:
     replication_factor: 1
     kvstore:
@@ -108,6 +130,13 @@ alertmanager_storage:
 limits:
   max_global_series_per_user: 1000000
   ingestion_rate: 10000
+  # The one setting that deletes metrics. Zero — the default, and what was in
+  # effect here — means never, so nothing in the pipeline ever removed a block.
+  # Matched to loki's 168h rather than to tempo's 72h on purpose: metrics and
+  # logs are the two signals read together when working out what happened, and
+  # a window that ends at a different moment for each is worse than a shorter
+  # one that ends at the same moment for both.
+  compactor_blocks_retention_period: 168h
 
 # Memberlist (Simple config for single node)
 memberlist:

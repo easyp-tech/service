@@ -1,0 +1,25 @@
+# Alertmanager configuration for the compose stack.
+#
+# Mimir runs every component in one process, Alertmanager included, and it
+# refuses to accept alerts for a tenant that has no configuration. Loading this
+# as the fallback gives the single tenant one without an API call at startup.
+#
+# The receiver deliberately sends nowhere. Alerts are meant to be read in
+# Grafana's Alerting page on this stack, and a route to Slack or a pager would
+# need a credential in ~/easyp/.env — a real dependency for something nobody
+# is on call for. What matters here is that the rules are evaluated at all:
+# before this, eleven alerts existed in the chart and none of them ran.
+#
+# Grouping is kept coarse on purpose. The two tiers produce the same alert names
+# from different series, so grouping by alertname alone would merge them into one
+# entry and hide which tier is affected.
+
+route:
+  receiver: "null"
+  group_by: ["alertname", "tier"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 12h
+
+receivers:
+  - name: "null"
