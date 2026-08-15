@@ -250,12 +250,21 @@ prometheus.exporter.unix "host" {
     "vmstat",
   ]
 
-  // The filesystem defaults are deliberately not overridden. They already drop
-  // /dev, /proc, /sys and /var/lib/docker/..., and fs_types_exclude drops
-  // overlay filesystems by type — which is what matters here, because ten
-  // containers produce dozens of overlay mounts that all measure the same
-  // physical disk. Excluding by type covers them however docker names them.
-  filesystem { }
+  // The mount point defaults are kept: they already drop /dev, /proc, /sys and
+  // /var/lib/docker/..., and the default fs_types_exclude drops overlay
+  // filesystems by type — which is what matters here, because ten containers
+  // produce dozens of overlay mounts that all measure the same physical disk.
+  // Excluding by type covers them however docker names them.
+  //
+  // tmpfs is added to that list, which upstream leaves in. Upstream is right in
+  // general — /run filling up is a real failure — but here it produced
+  // /run/lock at five megabytes and /run/user/1000 appearing and vanishing with
+  // login sessions. Both would trip a percentage-free alert for reasons that
+  // have nothing to do with the disk, and a disk alert that fires about a RAM
+  // filesystem is an alert people learn to ignore.
+  filesystem {
+    fs_types_exclude = "^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tmpfs|tracefs)$"
+  }
 }
 
 discovery.relabel "host_metrics" {
