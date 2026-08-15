@@ -20,6 +20,12 @@ datasources:
     isDefault: true
     readOnly: true
     editable: false
+    jsonData:
+      # Without these two the Alerting page shows only rules Grafana itself
+      # owns, and the eleven rules Mimir's ruler evaluates are invisible —
+      # running, but with nowhere to look at them.
+      prometheusType: Mimir
+      manageAlerts: true
 
   - name: Loki
     type: loki
@@ -47,9 +53,26 @@ datasources:
         spanStartTimeShift: "-1m"
         spanEndTimeShift: "1m"
         customQuery: true
-        query: '{compose_service="backend"} |= "${__span.traceId}"'
+        # Selects on the service label Alloy takes from each container's own
+        # `service` label, which is easyp-api-community or easyp-api-enterprise.
+        # The previous query looked for compose_service="backend" — a name no
+        # container on this stack has ever had, so the link from a span to its
+        # logs returned an empty result every time without ever looking broken.
+        query: '{service=~"easyp-api-.+"} |= "${__span.traceId}"'
         filterByTraceID: false
         filterBySpanID: false
+      # Profiles were the one signal reachable from nothing else: no link in,
+      # no link out. This makes a span offer the CPU profile of the process
+      # that produced it, over the span's own time range.
+      tracesToProfiles:
+        datasourceUid: pyroscope
+        profileTypeId: "process_cpu:cpu:nanoseconds:cpu:nanoseconds"
+        customQuery: false
+        # Both signals carry the tier, spelled the same way, so the profile
+        # shown belongs to the tier the span came from rather than to both.
+        tags:
+          - key: "tier"
+            value: "tier"
       serviceMap:
         datasourceUid: mimir
       nodeGraph:
@@ -59,5 +82,11 @@ datasources:
 
   - name: Pyroscope
     type: grafana-pyroscope-datasource
+    # The only datasource that had no uid, which meant Grafana generated one at
+    # provisioning time and anything referring to it by name — the link from
+    # Tempo above, for one — had nothing stable to point at.
+    uid: pyroscope
     url: http://pyroscope:4040
     access: proxy
+    readOnly: true
+    editable: false

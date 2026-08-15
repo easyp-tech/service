@@ -13,7 +13,7 @@
       }
     ]
   },
-  "description": "Logs",
+  "description": "Service logs from both tiers. The service label names the tier: easyp-api-community or easyp-api-enterprise.",
   "editable": true,
   "gnetId": 13639,
   "graphTooltip": 0,
@@ -139,7 +139,7 @@
       },
       "targets": [
         {
-          "expr": "{service=~\"$service\"} | json level | level=~\"$level\" |= \"$regexp\" | json",
+          "expr": "{service=~\"$service\"} | json level | level=~\"$level\" |= \"$regexp\" |= \"$trace\" | json",
           "hide": false,
           "legendFormat": "",
           "refId": "A"
@@ -262,7 +262,7 @@
           "value": ""
         },
         "hide": 0,
-        "label": "",
+        "label": "trace id",
         "name": "trace",
         "options": [
           {
@@ -273,7 +273,8 @@
         ],
         "query": "",
         "skipUrlSync": false,
-        "type": "textbox"
+        "type": "textbox",
+        "description": "Paste a trace_id to see only the lines that carry it. Logs record trace_id and span_id whenever a span is in scope, and the Tempo datasource links the other way round."
       },
       {
         "current": {

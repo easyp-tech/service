@@ -1,15 +1,18 @@
 apiVersion: 1
 
+# There used to be a third provider, "Metrics", pointing at an imported
+# Prometheus self-monitoring dashboard: prometheus_tsdb_*, prometheus_config_*,
+# and a row its author had titled "Broken, ignore". This stack has no Prometheus
+# server — metrics go to Mimir through Alloy — so every panel on it queried a
+# metric that does not exist here and drew an empty graph. An empty graph reads
+# as "nothing is happening", which is the most expensive thing a dashboard can
+# say wrongly.
+
 providers:
   - name: Logs
     folder: logs
     options:
       path: /etc/grafana/provisioning/dashboards/logs
-
-  - name: Metrics
-    folder: metrics
-    options:
-      path: /etc/grafana/provisioning/dashboards/metrics
 
   - name: Service
     folder: service
