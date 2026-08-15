@@ -138,6 +138,7 @@
     },
     {
       "datasource": "${DS_MIMIR}",
+      "description": "Extrapolated from a day of trend, and blank until there is an hour of it — after a restart there is no history to extrapolate from. 999 means the disk is not filling. Under 4 days is what EasypHostDiskFillingUp alerts on.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -148,12 +149,16 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "red",
                 "value": null
               },
               {
-                "color": "red",
-                "value": null
+                "color": "orange",
+                "value": 7
+              },
+              {
+                "color": "green",
+                "value": 30
               }
             ]
           },
@@ -185,7 +190,7 @@
       "targets": [
         {
           "datasource": "${DS_MIMIR}",
-          "expr": "node_filesystem_avail_bytes{instance=~\"$instance\",mountpoint=~\"$mountpoint\"} / clamp_min(-deriv(node_filesystem_avail_bytes{instance=~\"$instance\",mountpoint=~\"$mountpoint\"}[6h]), 0.001) / 86400",
+          "expr": "clamp_max(node_filesystem_avail_bytes{instance=~\"$instance\",mountpoint=~\"$mountpoint\"} / clamp_min(-deriv(node_filesystem_avail_bytes{instance=~\"$instance\",mountpoint=~\"$mountpoint\"}[24h]), 1) / 86400, 999)\n      and (count_over_time(node_filesystem_avail_bytes{instance=~\"$instance\",mountpoint=~\"$mountpoint\"}[24h]) > 60)",
           "legendFormat": "{{mountpoint}}",
           "refId": "A"
         }
