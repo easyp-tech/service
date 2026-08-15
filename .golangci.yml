@@ -11,6 +11,11 @@ linters:
     - exhaustruct
     - wsl
     - wsl_v5
+    # Deprecated since golangci-lint v2.12.0 and replaced by gomodguard_v2,
+    # which `default: all` already enables. Both being on meant every run
+    # printed a deprecation warning above its findings, which is the kind of
+    # noise that trains you to skim past the output.
+    - gomodguard
   settings:
     lll:
       line-length: 140
