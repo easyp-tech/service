@@ -84,7 +84,7 @@ func TestWaitForDBBacksOffInsteadOfSpinning(t *testing.T) {
 	require.LessOrEqual(t, p.calls.Load(), int64(10),
 		"too many attempts for the elapsed time; the backoff is not being applied")
 
-	require.Less(t, elapsed, budget+pingBackoffMax,
+	require.Less(t, elapsed, budget+pingBackoffCeiling,
 		"waiting outlived its context by more than one backoff interval")
 }
 
@@ -101,6 +101,6 @@ func TestWaitForDBHonoursAlreadyCancelledContext(t *testing.T) {
 	err := waitForDB(ctx, p)
 
 	require.Error(t, err)
-	require.Less(t, time.Since(start), pingBackoffMin,
+	require.Less(t, time.Since(start), pingBackoffInitial,
 		"a cancelled context still slept through a backoff interval")
 }

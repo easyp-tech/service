@@ -242,15 +242,15 @@ func startHealthServer(
 	// "/" reports readiness: once wired up it checks postgres, so a pod drops
 	// out of load balancing while the database is unreachable. Until then there
 	// is nothing truthful to report but "not yet".
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/", func(writer http.ResponseWriter, req *http.Request) {
 		checker := readiness.Load()
 		if checker == nil {
-			http.Error(w, "starting", http.StatusServiceUnavailable)
+			http.Error(writer, "starting", http.StatusServiceUnavailable)
 
 			return
 		}
 
-		checker.Handler().ServeHTTP(w, r)
+		checker.Handler().ServeHTTP(writer, req)
 	})
 
 	addr := net.JoinHostPort(cfg.Server.Host, strconv.FormatUint(healthPort, 10))
@@ -482,8 +482,8 @@ func initApp(
 	// do that by substituting a wrapped ServerStream, which is worth doing when
 	// a new context is derived (as the auth interceptor does) and is empty
 	// ceremony when, as here, the stream's own context is merely read.
-	//nolint:contextcheck // limiter reads ss.Context() and derives nothing
-	grpcSrv, apiSrv := buildGRPCServer(log, reg, gate, rl, cl, tracedCore, grpcCreds, authenticator, cfg.Server)
+	grpcSrv, apiSrv := buildGRPCServer( //nolint:contextcheck // limiter reads ss.Context(), derives nothing
+		log, reg, gate, rl, cl, tracedCore, grpcCreds, authenticator, cfg.Server)
 
 	return module, pool, gate, grpcSrv, apiSrv
 }

@@ -62,8 +62,8 @@ func (c SQLConfig) setDefault() SQLConfig {
 
 // Backoff bounds for waiting on the database at startup.
 const (
-	pingBackoffMin = 100 * time.Millisecond
-	pingBackoffMax = 5 * time.Second
+	pingBackoffInitial = 100 * time.Millisecond
+	pingBackoffCeiling = 5 * time.Second
 	// How often an unsuccessful wait is allowed to say so. Once the interval
 	// has grown, every attempt is worth a line; before that they are not.
 	pingLogInterval = 5 * time.Second
@@ -91,17 +91,18 @@ func waitForDB(ctx context.Context, conn pinger) error {
 		return nil
 	}
 
-	delay := pingBackoffMin
+	delay := pingBackoffInitial
 	sinceLog := time.Duration(0)
 
 	for {
 		// Checked before sleeping as well as after: a cancelled context should
 		// not buy the caller one more delay's worth of waiting.
-		if ctxErr := ctx.Err(); ctxErr != nil {
+		ctxErr := ctx.Err()
+		if ctxErr != nil {
 			return fmt.Errorf("db.PingContext: %w (last error: %w)", ctxErr, err)
 		}
 
-		if sinceLog >= pingLogInterval || delay == pingBackoffMin {
+		if sinceLog >= pingLogInterval || delay == pingBackoffInitial {
 			log.Warn("database not reachable, retrying", "error", err, "retry_in", delay)
 			sinceLog = 0
 		}
@@ -116,7 +117,7 @@ func waitForDB(ctx context.Context, conn pinger) error {
 		}
 
 		sinceLog += delay
-		delay = min(delay*2, pingBackoffMax) //nolint:mnd // Doubling is the backoff.
+		delay = min(delay*2, pingBackoffCeiling) //nolint:mnd // Doubling is the backoff.
 
 		err = conn.PingContext(ctx)
 		if err == nil {
