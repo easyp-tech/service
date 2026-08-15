@@ -71,6 +71,11 @@ func (m *countingMetrics) IncOperation(_ context.Context, operation, status stri
 	m.ops = append(m.ops, operationCount{operation: operation, status: status})
 }
 
+func (*countingMetrics) GenerateCode(context.Context, PluginInfo) error                   { return nil }
+func (*countingMetrics) ObserveGenerationDuration(context.Context, string, time.Duration) {}
+func (*countingMetrics) IncGenerationErrors(context.Context, string, string)              {}
+func (*countingMetrics) IncGenerationRetries(context.Context, string)                     {}
+
 func (m *countingMetrics) recorded() []operationCount {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -80,11 +85,6 @@ func (m *countingMetrics) recorded() []operationCount {
 
 	return out
 }
-
-func (*countingMetrics) GenerateCode(context.Context, PluginInfo) error                   { return nil }
-func (*countingMetrics) ObserveGenerationDuration(context.Context, string, time.Duration) {}
-func (*countingMetrics) IncGenerationErrors(context.Context, string, string)              {}
-func (*countingMetrics) IncGenerationRetries(context.Context, string)                     {}
 
 // fakeGate is an in-memory FeatureGate whose enabled set is fixed per test.
 type fakeGate struct {

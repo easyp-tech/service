@@ -387,15 +387,11 @@ func TestShutdownDoesNotRaceSend(t *testing.T) {
 	var wg sync.WaitGroup
 
 	for range 8 {
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			for range 50 {
 				worker.Send(ctx, entry(core.OperationGenerateCode))
 			}
-		}()
+		})
 	}
 
 	wg.Wait()

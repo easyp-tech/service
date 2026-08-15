@@ -34,11 +34,11 @@ func resolveCaller(t *testing.T, trusted []string, peerAddr string, headers map[
 	ip, err := netip.ParseAddr(host)
 	require.NoError(t, err)
 
-	port, err := net.LookupPort("tcp", portStr)
+	port, err := net.DefaultResolver.LookupPort(t.Context(), "tcp", portStr)
 	require.NoError(t, err)
 
-	ctx := peer.NewContext(context.Background(), &peer.Peer{ //nolint:exhaustruct // Only Addr is read.
-		Addr: net.TCPAddrFromAddrPort(netip.AddrPortFrom(ip, uint16(port))), //nolint:gosec // Port fits.
+	ctx := peer.NewContext(t.Context(), &peer.Peer{ //nolint:exhaustruct // Only Addr is read.
+		Addr: net.TCPAddrFromAddrPort(netip.AddrPortFrom(ip, uint16(port))),
 	})
 
 	md := metadata.New(headers)
@@ -49,7 +49,7 @@ func resolveCaller(t *testing.T, trusted []string, peerAddr string, headers map[
 	inner := func(ctx context.Context, _ any) (any, error) {
 		seen = core.CallerIPFromContext(ctx)
 
-		return nil, nil //nolint:nilnil // The handler's value is not under test.
+		return nil, nil
 	}
 
 	// The two interceptors are run directly, in the order NewServer chains

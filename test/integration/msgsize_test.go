@@ -52,7 +52,7 @@ func serveOverTCP(t *testing.T, h *harness) (*sdk.Client, string) {
 
 	api.New(srv, healthSrv, h.core, slog.New(slog.DiscardHandler))
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
 	go func() { _ = srv.Serve(listener) }()

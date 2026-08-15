@@ -24,7 +24,7 @@ import (
 func freePort(t *testing.T) string {
 	t.Helper()
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
 	port := listener.Addr().(*net.TCPAddr).Port //nolint:forcetypeassert // Listen on tcp always yields *TCPAddr
@@ -106,7 +106,7 @@ func TestHealthServerFailsOnBusyPort(t *testing.T) {
 
 	cfg := healthConfig(t)
 
-	listener, err := net.Listen("tcp", net.JoinHostPort(cfg.Server.Host, cfg.Server.Port.Health))
+	listener, err := new(net.ListenConfig).Listen(t.Context(), "tcp", net.JoinHostPort(cfg.Server.Host, cfg.Server.Port.Health))
 	require.NoError(t, err)
 
 	defer func() { _ = listener.Close() }()
@@ -134,7 +134,7 @@ func TestHealthServerStopsWithContext(t *testing.T) {
 
 	select {
 	case waitErr := <-done:
-		assert.NoError(t, waitErr, "a clean shutdown is not an error")
+		require.NoError(t, waitErr, "a clean shutdown is not an error")
 	case <-time.After(5 * time.Second):
 		t.Fatal("health server did not stop after its context was cancelled")
 	}

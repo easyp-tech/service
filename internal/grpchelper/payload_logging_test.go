@@ -36,12 +36,12 @@ func runLoggedCall(t *testing.T) string {
 	req := &pluginpb.CodeGeneratorRequest{ //nolint:exhaustruct // Only the fields under test.
 		FileToGenerate: []string{"acme/internal/billing.proto"},
 		ProtoFile: []*descriptorpb.FileDescriptorProto{ //nolint:exhaustruct // Only the fields under test.
-			{Name: strPtr("acme/internal/billing.proto"), Package: strPtr(callerPackage)},
+			{Name: new("acme/internal/billing.proto"), Package: new(callerPackage)},
 		},
 	}
 	resp := &pluginpb.CodeGeneratorResponse{ //nolint:exhaustruct // Only the fields under test.
 		File: []*pluginpb.CodeGeneratorResponse_File{ //nolint:exhaustruct // Only the fields under test.
-			{Name: strPtr("billing.pb.go"), Content: strPtr(generatedSource)},
+			{Name: new("billing.pb.go"), Content: new(generatedSource)},
 		},
 	}
 
@@ -109,5 +109,3 @@ func TestLoggingOptionsExcludePayloadEvents(t *testing.T) {
 	require.Equal(t, 2, strings.Count(out, "\n"),
 		"expected exactly two log lines per call (started, finished), got:\n"+out)
 }
-
-func strPtr(s string) *string { return &s }
