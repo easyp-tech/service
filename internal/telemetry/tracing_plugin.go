@@ -28,8 +28,19 @@ type TracingPlugin struct {
 }
 
 // NewTracingPlugin creates a new TracingPlugin decorator wrapping the given Plugin.
+//
+// The tier this instrument's samples belong to is not set here. It rides on the
+// resource, and Alloy turns resource attributes into labels on the way to Mimir
+// — see resource_to_telemetry_conversion in config.alloy. Threading the tier
+// through the registry and into every decorator would be a second way of saying
+// what the resource already says.
 func NewTracingPlugin(inner core.Plugin, tracer trace.Tracer) *TracingPlugin {
 	meter := otel.Meter("registry")
+
+	// The error is dropped rather than returned: on failure the SDK still hands
+	// back a working no-op instrument, so the cost is this one histogram going
+	// quiet. Failing construction here would take plugin execution down with it,
+	// which is a steep price for a measurement.
 	hist, _ := meter.Float64Histogram("plugin.execution.duration",
 		metric.WithUnit("s"),
 		metric.WithDescription("Duration of plugin code generation"))

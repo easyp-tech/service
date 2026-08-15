@@ -187,11 +187,22 @@ func (c S3Config) Enabled() bool {
 // time.
 //
 // Note the full variable names: the section prefix is part of them, so these are
-// TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT and TELEMETRY_PYROSCOPE_ENDPOINT. The
-// bare OTel SDK name is read by nothing here.
+// TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT, TELEMETRY_PYROSCOPE_ENDPOINT and
+// TELEMETRY_SERVICE_TIER. The bare OTel SDK name is read by nothing here.
 type TelemetryConfig struct {
 	OTLPEndpoint      string `env:"OTEL_EXPORTER_OTLP_ENDPOINT" yaml:"otlp_endpoint"`
 	PyroscopeEndpoint string `env:"PYROSCOPE_ENDPOINT"          yaml:"pyroscope_endpoint"`
+
+	// ServiceTier tags traces and profiles with the licence tier this
+	// deployment serves, for stacks that run community and enterprise side by
+	// side. Empty on a deployment that runs only one, where the tag would
+	// distinguish nothing.
+	//
+	// Declared here rather than read from the licence because the value has to
+	// exist before the licence is fetched, and because it must agree with the
+	// tier label Alloy derives from a container label. Two mechanisms deciding
+	// the same thing is how they end up disagreeing.
+	ServiceTier string `env:"SERVICE_TIER" yaml:"service_tier"`
 }
 
 // WorkerPoolConfig configures bounded concurrency for plugin execution.

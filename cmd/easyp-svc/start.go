@@ -78,7 +78,7 @@ func runServiceStart(ctx context.Context, cfgPath string, logLevelStr string) er
 	}
 
 	ctx = monitor.WithContext(ctx, log.With(
-		slog.String("version", "dev"),
+		slog.String("version", version),
 		slog.String("app", serviceNamespace),
 	))
 
@@ -292,6 +292,8 @@ func initObservability(ctx context.Context, cfg config.Config, namespace string,
 		OTLPEndpoint:      cfg.Telemetry.OTLPEndpoint,
 		ServiceName:       namespace,
 		PyroscopeEndpoint: cfg.Telemetry.PyroscopeEndpoint,
+		ServiceVersion:    version,
+		ServiceTier:       cfg.Telemetry.ServiceTier,
 	}
 	baseHandler := (*log).Handler()
 	shutdownTelemetry, telLog, err := telemetry.Init(ctx, telCfg, baseHandler)

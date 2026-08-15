@@ -11,7 +11,18 @@ otelcol.receiver.otlp "default" {
 }
 
 // Convert OTel Metrics -> Prometheus
+//
+// Metrics arrive here by two routes. Almost all of them are scraped from the
+// service's Prometheus registry below, where a relabel rule attaches the tier.
+// The handful sent over OTLP by the OTel SDK skip that path entirely, so
+// without the conversion their resource attributes — service.name,
+// service.version and tier — collapse into target_info and the samples
+// themselves carry no tier at all. One metric arriving unlabelled while every
+// neighbour is labelled is the kind of gap noticed only when a query silently
+// returns both tiers added together.
 otelcol.exporter.prometheus "mimir" {
+  resource_to_telemetry_conversion = true
+
   forward_to = [prometheus.remote_write.mimir.receiver]
 }
 

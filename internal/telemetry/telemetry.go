@@ -8,6 +8,7 @@ import (
 
 	"github.com/grafana/pyroscope-go"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
@@ -17,6 +18,31 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
+
+// tierAttribute names the licence tier a signal came from. The same spelling is
+// used for the trace resource attribute and the Pyroscope tag, and it matches
+// the label Alloy puts on scraped metrics, so one word selects a tier in all
+// four signals.
+const tierAttribute = "tier"
+
+// newResource describes the process every trace and profile is attributed to.
+//
+// Both tiers keep the same service.name, so a trace search still finds all of
+// the service and its service graph stays one node. The tier is a separate
+// attribute, filterable as {resource.tier="..."}, which is how the metrics
+// pipeline already spells the same distinction.
+func newResource(cfg Config) *resource.Resource {
+	attrs := []attribute.KeyValue{
+		semconv.ServiceName(cfg.ServiceName),
+		semconv.ServiceVersion(cfg.ServiceVersion),
+	}
+
+	if cfg.ServiceTier != "" {
+		attrs = append(attrs, attribute.String(tierAttribute, cfg.ServiceTier))
+	}
+
+	return resource.NewWithAttributes(semconv.SchemaURL, attrs...)
+}
 
 // Init initialises TracerProvider, MeterProvider and returns a composite
 // shutdown function together with a configured *slog.Logger.
@@ -28,11 +54,8 @@ func Init(ctx context.Context, cfg Config, baseHandler slog.Handler) (
 ) {
 	var shutdownFn func(context.Context) error
 	var logger *slog.Logger
-	res := resource.NewWithAttributes(
-		semconv.SchemaURL,
-		semconv.ServiceName(cfg.ServiceName),
-		semconv.ServiceVersion("dev"),
-	)
+
+	res := newResource(cfg)
 
 	// --- OTLP exporters ----------------------------------------------------
 	//
@@ -115,9 +138,18 @@ func Init(ctx context.Context, cfg Config, baseHandler slog.Handler) (
 	} else {
 		var pyroErr error
 
+		// Nil rather than an empty map when no tier is declared: the SDK sends
+		// the tag set as-is, and an empty one would create a second, differently
+		// tagged series for the same application.
+		var pyroTags map[string]string
+		if cfg.ServiceTier != "" {
+			pyroTags = map[string]string{tierAttribute: cfg.ServiceTier}
+		}
+
 		profiler, pyroErr = pyroscope.Start(pyroscope.Config{ //nolint:exhaustruct // the rest are library defaults
 			ApplicationName: cfg.ServiceName,
 			ServerAddress:   cfg.PyroscopeEndpoint,
+			Tags:            pyroTags,
 			ProfileTypes: []pyroscope.ProfileType{
 				pyroscope.ProfileCPU,
 				pyroscope.ProfileAllocObjects,

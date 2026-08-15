@@ -134,6 +134,11 @@ services:
       # docker-compose.observability.yml is layered on top. Set both when it is.
       TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT: "${TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT:-}"
       TELEMETRY_PYROSCOPE_ENDPOINT: "${TELEMETRY_PYROSCOPE_ENDPOINT:-}"
+      # Tags traces and profiles, the two signals that otherwise arrive from
+      # both tiers under one name and cannot be told apart afterwards. Metrics
+      # already carry the same word as a label, put there by Alloy from the
+      # service label below — keep the two spellings equal.
+      TELEMETRY_SERVICE_TIER: community
     ports:
       - "${EASYP_BIND:-127.0.0.1}:8080:8080"
       - "${EASYP_BIND:-127.0.0.1}:8081:8081"
@@ -189,6 +194,11 @@ services:
       DB_POSTGRES_DSN: "${DB_POSTGRES_DSN:-}"
       TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT: "${TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT:-}"
       TELEMETRY_PYROSCOPE_ENDPOINT: "${TELEMETRY_PYROSCOPE_ENDPOINT:-}"
+      # Declared, not derived from LICENSE_KEY above. A key that fails to verify
+      # leaves this container running as community while still tagged
+      # enterprise — which is the useful reading: it says what this container was
+      # meant to be, and the licence metrics say what it actually is.
+      TELEMETRY_SERVICE_TIER: enterprise
     ports:
       - "${EASYP_BIND:-127.0.0.1}:9080:8080"
       - "${EASYP_BIND:-127.0.0.1}:9081:8081"

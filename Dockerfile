@@ -12,6 +12,12 @@ FROM --platform=$BUILDPLATFORM golang:1.26-bookworm AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
+# The release passes the tag; a plain `docker build` gets "dev". Without this
+# the binary has no idea what it is: every log line and every trace reported
+# version "dev", so the only way to tell which build was running was to read the
+# image label from outside the container.
+ARG VERSION=dev
+
 WORKDIR /app
 
 # Dependencies are their own layer, so editing source does not re-download them.
@@ -24,7 +30,7 @@ COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o easyp-svc ./cmd/easyp-svc/
+    go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o easyp-svc ./cmd/easyp-svc/
 
 # No --platform here on purpose: this stage is the image being shipped, so it
 # has to be the target's. Only the apt step is emulated, which is seconds.

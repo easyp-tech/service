@@ -212,6 +212,12 @@ config:
     # while otherwise working.
     otlpEndpoint: ""
     pyroscopeEndpoint: ""
+    # Tags traces and profiles with the licence tier this release serves. Worth
+    # setting only where community and enterprise run side by side and their
+    # signals land in the same backends; on a cluster running one tier it would
+    # distinguish nothing. Metrics carry the same distinction already, so use
+    # the same word here that the metric label uses.
+    serviceTier: ""
 
   license:
     # Public halves of the keys licence tokens are signed with, keyed by the key

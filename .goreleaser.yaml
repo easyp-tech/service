@@ -36,6 +36,10 @@ dockers:
     use: buildx
     build_flag_templates:
       - "--platform=linux/amd64"
+      # Same value as the label below, but the label is metadata on the image
+      # and this one reaches the binary: it is what the service reports in its
+      # logs and traces. Both are set here so they cannot drift apart.
+      - "--build-arg=VERSION={{ .Version }}"
       - "--label=org.opencontainers.image.title={{ .ProjectName }}"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.source=https://github.com/easyp-tech/service"
@@ -60,6 +64,7 @@ dockers:
     use: buildx
     build_flag_templates:
       - "--platform=linux/arm64"
+      - "--build-arg=VERSION={{ .Version }}"
       - "--label=org.opencontainers.image.title={{ .ProjectName }}"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.source=https://github.com/easyp-tech/service"

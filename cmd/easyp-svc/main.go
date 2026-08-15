@@ -33,6 +33,17 @@ const (
 	usageNonInteractive = "disable interactive UI and dynamic progress bars"
 )
 
+// version is stamped at link time by the release build (-X main.version). It is
+// a variable rather than a constant for exactly that reason, and the fallback
+// is what a local `go build` gets.
+//
+// It reaches three places: `easyp-svc --version`, the version field on every log
+// line, and the service.version resource attribute on every trace and profile.
+// Before it existed all three said "dev" no matter what was running, so the only
+// way to identify a deployed build was to read the image label from outside the
+// container — which says nothing about the binary actually executing.
+var version = "dev"
+
 func main() {
 	ctx, cancel := signal.NotifyContext(
 		context.Background(),
@@ -47,6 +58,7 @@ func main() {
 	app := &cli.Command{
 		Name:     "easyp-svc",
 		Usage:    "EasyP Service CLI",
+		Version:  version,
 		Commands: getCommands(),
 	}
 

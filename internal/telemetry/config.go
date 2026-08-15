@@ -14,4 +14,19 @@ type Config struct {
 	OTLPEndpoint      string
 	ServiceName       string
 	PyroscopeEndpoint string
+
+	// ServiceVersion is stamped into the resource of every trace and profile.
+	// It comes from the same link-time variable the logs use, so the three
+	// answer the question "which build is this" the same way.
+	ServiceVersion string
+
+	// ServiceTier names the licence tier this deployment serves, and is empty
+	// when the deployment does not run tiers side by side.
+	//
+	// It is declared by whoever deploys, not derived from the licence: resource
+	// attributes are fixed when Init runs and the licence has not been fetched
+	// by then. The metrics pipeline already works this way — Alloy labels each
+	// scrape from a container label — so this keeps one answer rather than two
+	// that can disagree.
+	ServiceTier string
 }

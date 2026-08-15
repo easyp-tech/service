@@ -112,10 +112,12 @@ data:
       partition_op_timeout: {{ .partitionOpTimeout | quote }}
     {{- end }}
 
-    {{- if or .Values.config.telemetry.otlpEndpoint .Values.config.telemetry.pyroscopeEndpoint }}
-    # Omitted entirely when unset: these have no defaults precisely so that "no
-    # collector" can be expressed, and an endpoint nobody answers on is retried
-    # forever rather than reported.
+    {{- if or .Values.config.telemetry.otlpEndpoint .Values.config.telemetry.pyroscopeEndpoint .Values.config.telemetry.serviceTier }}
+    # Each key is omitted when unset, and the section with them. The endpoints
+    # have no defaults precisely so that "no collector" can be expressed, and an
+    # endpoint nobody answers on is retried forever rather than reported; the
+    # tier is omitted because a deployment running one tier has nothing to tell
+    # apart, and an empty tag would only add a dimension with one value.
     telemetry:
       {{- with .Values.config.telemetry.otlpEndpoint }}
       # Note the double prefix: the field is OTEL_EXPORTER_OTLP_ENDPOINT inside a
@@ -125,6 +127,9 @@ data:
       {{- end }}
       {{- with .Values.config.telemetry.pyroscopeEndpoint }}
       pyroscope_endpoint: {{ . | quote }}
+      {{- end }}
+      {{- with .Values.config.telemetry.serviceTier }}
+      service_tier: {{ . | quote }}
       {{- end }}
     {{- end }}
 
