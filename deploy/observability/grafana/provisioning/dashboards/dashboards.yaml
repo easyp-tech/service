@@ -18,3 +18,10 @@ providers:
     folder: service
     options:
       path: /etc/grafana/provisioning/dashboards/service
+
+  # The machine, not the service. Its own folder because it answers a different
+  # question and is read at a different time.
+  - name: Host
+    folder: host
+    options:
+      path: /etc/grafana/provisioning/dashboards/host

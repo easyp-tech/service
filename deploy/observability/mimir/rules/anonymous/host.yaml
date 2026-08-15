@@ -1,0 +1,72 @@
+# Alerting rules for the machine, as opposed to the service.
+#
+# Deliberately a separate file from easyp.yaml, and deliberately absent from the
+# Helm chart. On Kubernetes these metrics come from the cluster's own
+# node-exporter and its own node alerts; an application chart shipping its
+# opinion about node disk would either duplicate them or quietly disagree with
+# them. tests/render.sh compares the alert names in easyp.yaml against the
+# chart's PrometheusRule and would fail if these lived there.
+#
+# The metrics come from prometheus.exporter.unix in config.alloy. Nothing
+# measured the host before it: the disk reached 73% on a build cache and was
+# noticed by a person looking for something else.
+#
+# No mount point is hardcoded. The mountpoint label says which filesystem is in
+# trouble, and on this host that is / , /boot and /boot/efi — the overlay mounts
+# every container brings are excluded by filesystem type before they get here.
+
+groups:
+  - name: host.disk
+    rules:
+      - alert: EasypHostDiskLow
+        expr: |
+          node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.15
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easyphostdisklow"
+          summary: "Less than 15% of {{ $labels.mountpoint }} is free"
+          description: >-
+            A threshold, so it fires once the problem is already there. The
+            trend alert below is the one meant to catch it early; if this fired
+            first, the fill was faster than a day.
+
+      - alert: EasypHostDiskFillingUp
+        # The reason this file exists. Six hours of trend, extrapolated four
+        # days out: a build cache growing quietly for a week trips this long
+        # before it trips a percentage. Guarded on the current level so a
+        # filesystem that is nearly empty and briefly dips does not qualify —
+        # predict_linear on noise around a large free number reaches zero on
+        # paper without ever approaching it in fact.
+        expr: |
+          predict_linear(node_filesystem_avail_bytes[6h], 4 * 86400) < 0
+            and node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.40
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easyphostdiskfillingup"
+          summary: "{{ $labels.mountpoint }} runs out of space within four days at this rate"
+          description: >-
+            Nothing is broken yet. Find what is growing before it is urgent —
+            on this host the answer has been the docker build cache every time.
+
+  - name: host.memory
+    rules:
+      - alert: EasypHostMemoryLow
+        # MemAvailable, not MemFree: free memory on a healthy Linux box is
+        # supposed to be near zero, because the kernel spends it on page cache.
+        # Alerting on MemFree would fire permanently and mean nothing.
+        expr: |
+          node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.10
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easyphostmemorylow"
+          summary: "Less than 10% of the machine's memory is available"
+          description: >-
+            The next allocation that cannot be met is resolved by the OOM
+            killer, which picks its victim by size — here that is a plugin
+            process or the database, not whatever caused the pressure.

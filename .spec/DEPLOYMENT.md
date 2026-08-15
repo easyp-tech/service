@@ -225,6 +225,15 @@ source; the two-tier file pulls the published image instead and is the one to
 use remotely. And `easyp-svc` itself is gone from the host, so plugins are
 registered from a machine that has the CLI, pointed at the host through traefik.
 
+One thing the observability overlay asks of the host: the `alloy` service mounts
+`/proc`, `/sys` and `/` read-only at `/host/...`. That is what lets the embedded
+`prometheus.exporter.unix` measure the machine rather than its own container —
+the filesystem collector reads the mount list from procfs and then has to stat
+those paths, which do not exist inside the container otherwise. Worth stating
+plainly: alloy therefore reads the whole host filesystem and holds the docker
+socket, which is a lot of reach for one process. It was chosen over a separate
+node-exporter container knowingly.
+
 `check-tiers.sh` is deliberately a script rather than a Taskfile target, so the
 same implementation runs in both places. `HOST`, `COMMUNITY_METRICS_PORT` and
 `ENTERPRISE_METRICS_PORT` let it run over an SSH tunnel once the metrics ports

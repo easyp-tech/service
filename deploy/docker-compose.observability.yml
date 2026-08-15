@@ -143,6 +143,18 @@ services:
       - "./observability/alloy/config.alloy:/etc/alloy/config.alloy:ro"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - "/var/lib/docker/containers:/var/lib/docker/containers:ro"
+      # For prometheus.exporter.unix. Read-only, and read-only is the whole of
+      # the protection: this container now sees the host's entire filesystem and
+      # already holds the docker socket, which together is a lot of reach for one
+      # process. That is the price of embedding the exporter instead of running
+      # it beside alloy, and it was chosen deliberately.
+      #
+      # The root mount is what makes disk metrics possible at all — the
+      # filesystem collector takes the mount list from procfs and then has to
+      # stat those paths, which do not exist in this container without it.
+      - "/proc:/host/proc:ro"
+      - "/sys:/host/sys:ro"
+      - "/:/host/root:ro"
     command:
       - "run"
       - "/etc/alloy/config.alloy"

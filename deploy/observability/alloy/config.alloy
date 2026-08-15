@@ -218,19 +218,77 @@ prometheus.scrape "service" {
   forward_to = [prometheus.remote_write.mimir.receiver]
 }
 
-// 4. Loki Monitoring
+// 4. The Machine
+//
+// Everything else here measures the service. Nothing measured the box it runs
+// on, and that gap had a cost: the disk reached 73% on a build cache nobody was
+// watching, and it was found by hand, while looking for something else. There
+// was no metric that could have said so and no alert that could have fired.
+//
+// node_exporter, embedded rather than run as its own container. The mounts it
+// needs are on the alloy service in both compose files.
+prometheus.exporter.unix "host" {
+  // Read from the host's namespaces rather than this container's, which would
+  // otherwise report the container's own filesystem and call it the machine.
+  procfs_path = "/host/proc"
+  sysfs_path  = "/host/sys"
+  rootfs_path = "/host/root"
+
+  // Named rather than inherited. The default set is around forty collectors,
+  // and on a virtual machine a good half of them measure hardware that is not
+  // there — thermal zones, fan sensors, RAPL energy counters. This list is also
+  // the answer to "what do we actually collect", without reading upstream docs.
+  set_collectors = [
+    "cpu",
+    "diskstats",
+    "filesystem",
+    "loadavg",
+    "meminfo",
+    "netdev",
+    "stat",
+    "uname",
+    "vmstat",
+  ]
+
+  // The filesystem defaults are deliberately not overridden. They already drop
+  // /dev, /proc, /sys and /var/lib/docker/..., and fs_types_exclude drops
+  // overlay filesystems by type — which is what matters here, because ten
+  // containers produce dozens of overlay mounts that all measure the same
+  // physical disk. Excluding by type covers them however docker names them.
+  filesystem { }
+}
+
+discovery.relabel "host_metrics" {
+  targets = prometheus.exporter.unix.host.targets
+
+  // Without this, instance is the exporter's internal address, which names
+  // nothing a reader would recognise. One stack, one machine — the label is
+  // here to say what the number is about, not to tell hosts apart. It becomes a
+  // variable on the day there is a second one.
+  rule {
+    target_label = "instance"
+    replacement  = "easyp-host"
+  }
+}
+
+prometheus.scrape "host" {
+  targets    = discovery.relabel.host_metrics.output
+  forward_to = [prometheus.remote_write.mimir.receiver]
+}
+
+// 5. Loki Monitoring
 prometheus.scrape "loki" {
   targets    = [{"__address__" = "loki:3100"}]
   forward_to = [prometheus.remote_write.mimir.receiver]
 }
 
-// 5. Grafana Monitoring
+// 6. Grafana Monitoring
 prometheus.scrape "grafana" {
   targets    = [{"__address__" = "grafana:3000"}]
   forward_to = [prometheus.remote_write.mimir.receiver]
 }
 
-// 6. Tempo Monitoring
+// 7. Tempo Monitoring
 prometheus.scrape "tempo" {
   targets    = [{"__address__" = "tempo:3200"}]
   forward_to = [prometheus.remote_write.mimir.receiver]

@@ -1,11 +1,14 @@
 # Runbooks
 
-One section per alert in `deploy/charts/easyp-service/templates/prometheusrule.yaml`.
-Each alert's `runbook_url` annotation points at the matching anchor here, so the
-heading text is load-bearing: renaming one breaks the link from the alert.
+One section per alert in `deploy/charts/easyp-service/templates/prometheusrule.yaml`
+and in `deploy/observability/mimir/rules/anonymous/`. Each alert's `runbook_url`
+annotation points at the matching anchor here, so the heading text is
+load-bearing: renaming one breaks the link from the alert.
 
 Every procedure assumes `kubectl` against the namespace the release is installed
-in, and `$REL` as the release name.
+in, and `$REL` as the release name — **except the host section at the end**,
+which is about the machine rather than the service and therefore only applies to
+the compose stack. Those procedures use `ssh` and `docker`.
 
 ---
 
@@ -205,3 +208,70 @@ CreatePlugin, UpdatePlugin, DeletePlugin.
 3. If it is not a known caller, it is someone trying tokens against the
    registry. The tokens are hashed and the rate limiter applies, but this is
    worth knowing about.
+
+---
+
+# The host
+
+These three come from `prometheus.exporter.unix` in `config.alloy` and exist only
+on the compose stack. On Kubernetes the cluster's own node monitoring owns this
+ground, so the chart does not ship them.
+
+The commands assume `ssh user@host` and the stack in `~/easyp`.
+
+## EasypHostDiskLow
+
+A filesystem is under 15% free. `$labels.mountpoint` says which.
+
+This is a threshold, so by the time it fires the situation already exists. If it
+fired *before* `EasypHostDiskFillingUp`, the disk filled faster than a day —
+look for something writing hard right now rather than something growing slowly.
+
+1. `df -h` for the shape of it, then `docker system df` — on this host the
+   answer has been the build cache every time, and `ACTIVE 0` next to a large
+   number means all of it is reclaimable.
+2. `docker builder prune -af` and `docker image prune -f`. Reclaiming 3.4 GB
+   this way took the disk from 73% to 49% once already.
+3. If the build cache is not it, `du -xh --max-depth=2 / | sort -h | tail -20`.
+   The `-x` matters: without it you walk into every container's overlay.
+4. A build cache that keeps coming back means something is building images on
+   this host. It should be pulling them from the registry instead — see
+   `.spec/DEPLOYMENT.md`.
+
+## EasypHostDiskFillingUp
+
+Six hours of trend say `$labels.mountpoint` reaches zero within four days.
+
+Nothing is broken. This is the alert that exists to be acted on while it is
+still cheap, and the one the earlier disk problem would have tripped days before
+anyone noticed it by hand.
+
+1. Same first step: `docker system df`. Growth without a cause in the build
+   cache is unusual here.
+2. Check whether it is data rather than waste — `docker system df -v` separates
+   volumes from images. Postgres and the telemetry buckets grow legitimately;
+   the answer for those is retention, not deletion.
+3. Telemetry retention is set per backend: Mimir `168h`, Loki `168h`, Tempo and
+   Pyroscope `72h`. Those live in object storage, not on this disk, so they are
+   only the answer if the bucket is local.
+
+If the extrapolation looks wrong, it usually is: a filesystem that dipped once
+and recovered produces a downward line. The alert is guarded to fire only under
+40% free for exactly that reason, so a false one means real movement.
+
+## EasypHostMemoryLow
+
+Under 10% of memory is available.
+
+Available, not free. Free memory on a healthy Linux box is near zero because the
+kernel spends it on page cache, so this is measured with `MemAvailable`, which
+counts what a new allocation could actually get.
+
+1. `docker stats --no-stream` for the split by container. The plugin registry
+   caches plugin binaries in memory up to `registry.cache_max_bytes`, and that
+   is the largest single consumer by design.
+2. `free -h` — if `available` is low while `buff/cache` is large, the kernel
+   will reclaim it and there is no problem to solve.
+3. Sustained pressure ends at the OOM killer, which chooses by size: postgres or
+   a plugin process, not whatever caused the pressure. `dmesg -T | grep -i
+   oom` says whether that has already happened.
