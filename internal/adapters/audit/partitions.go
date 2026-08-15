@@ -88,17 +88,11 @@ func (c *PartitionConfig) setDefault() {
 
 // Maintainer keeps monthly audit_log partitions pre-created and drops expired ones.
 type Maintainer struct {
+	maintainerMetrics
+
 	db     *database.SQL
 	cfg    PartitionConfig
 	logger *slog.Logger
-
-	runs       *prometheus.CounterVec
-	created    prometheus.Counter
-	dropped    prometheus.Counter
-	lastOK     prometheus.Gauge
-	partitions prometheus.Gauge
-
-	defaultUsed prometheus.Gauge
 }
 
 // NewMaintainer creates a Maintainer and registers its metrics.
@@ -109,67 +103,84 @@ func NewMaintainer(
 ) *Maintainer {
 	cfg.setDefault()
 
-	runs := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: namespace,
-		Name:      "audit_partition_maintenance_runs_total",
-		Help:      "Total number of audit partition maintenance passes, by result.",
-	}, []string{labelResult})
+	return &Maintainer{
+		db:                db,
+		cfg:               cfg,
+		logger:            logger,
+		maintainerMetrics: newMaintainerMetrics(reg, namespace),
+	}
+}
 
-	created := prometheus.NewCounter(prometheus.CounterOpts{
-		Namespace: namespace,
-		Name:      "audit_partitions_created_total",
-		Help:      "Total number of audit_log partitions created.",
-	})
+// maintainerMetrics is what partition maintenance reports about itself, split
+// off for the same reason as workerMetrics in worker.go: six collector
+// definitions were the bulk of NewMaintainer and said nothing about what it
+// decides. Embedded, so m.runs and the rest read unchanged.
+type maintainerMetrics struct {
+	runs       *prometheus.CounterVec
+	created    prometheus.Counter
+	dropped    prometheus.Counter
+	lastOK     prometheus.Gauge
+	partitions prometheus.Gauge
 
-	dropped := prometheus.NewCounter(prometheus.CounterOpts{
-		Namespace: namespace,
-		Name:      "audit_partitions_dropped_total",
-		Help:      "Total number of expired audit_log partitions dropped.",
-	})
+	defaultUsed prometheus.Gauge
+}
 
-	lastOK := prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace: namespace,
-		Name:      "audit_partition_maintenance_last_success_seconds",
-		Help:      "Unix timestamp of the last successful audit partition maintenance pass.",
-	})
+func newMaintainerMetrics(reg *prometheus.Registry, namespace string) maintainerMetrics {
+	metrics := maintainerMetrics{
+		runs: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "audit_partition_maintenance_runs_total",
+			Help:      "Total number of audit partition maintenance passes, by result.",
+		}, []string{labelResult}),
 
-	partitions := prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace: namespace,
-		Name:      "audit_partitions_current",
-		Help:      "Current number of monthly audit_log partitions.",
-	})
+		created: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "audit_partitions_created_total",
+			Help:      "Total number of audit_log partitions created.",
+		}),
 
-	// Checked here, on the six-hourly maintenance tick, rather than on every
-	// metrics scrape. It answers a question about partition maintenance, which is
-	// what this component does, and its cadence is the one that matters: a
-	// non-empty default partition is a slow-moving fault, not a per-second one.
-	defaultUsed := prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace: namespace,
-		Name:      "audit_default_partition_used",
-		Help: "1 when rows have landed in the default audit partition. Must stay 0: " +
-			"a non-empty default partition blocks creating the month it overlaps, and " +
-			"defeats partition pruning for every query filtering on created_at.",
-	})
+		dropped: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "audit_partitions_dropped_total",
+			Help:      "Total number of expired audit_log partitions dropped.",
+		}),
+
+		lastOK: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "audit_partition_maintenance_last_success_seconds",
+			Help:      "Unix timestamp of the last successful audit partition maintenance pass.",
+		}),
+
+		partitions: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "audit_partitions_current",
+			Help:      "Current number of monthly audit_log partitions.",
+		}),
+
+		// Checked on the six-hourly maintenance tick rather than on every
+		// metrics scrape. It answers a question about partition maintenance,
+		// which is what this component does, and its cadence is the one that
+		// matters: a non-empty default partition is a slow-moving fault, not a
+		// per-second one.
+		defaultUsed: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "audit_default_partition_used",
+			Help: "1 when rows have landed in the default audit partition. Must stay 0: " +
+				"a non-empty default partition blocks creating the month it overlaps, and " +
+				"defeats partition pruning for every query filtering on created_at.",
+		}),
+	}
 
 	for _, result := range []string{resultSuccess, resultError, resultSkipped} {
-		runs.WithLabelValues(result)
+		metrics.runs.WithLabelValues(result)
 	}
 
 	if reg != nil {
-		reg.MustRegister(runs, created, dropped, lastOK, partitions, defaultUsed)
+		reg.MustRegister(metrics.runs, metrics.created, metrics.dropped,
+			metrics.lastOK, metrics.partitions, metrics.defaultUsed)
 	}
 
-	return &Maintainer{
-		db:          db,
-		cfg:         cfg,
-		logger:      logger,
-		runs:        runs,
-		created:     created,
-		dropped:     dropped,
-		lastOK:      lastOK,
-		partitions:  partitions,
-		defaultUsed: defaultUsed,
-	}
+	return metrics
 }
 
 // Run performs a pass immediately, then on every Interval tick until the

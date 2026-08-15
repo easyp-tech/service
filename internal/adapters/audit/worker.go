@@ -74,6 +74,8 @@ type Config struct {
 // Worker reads audit events from a queue and writes them to storage in
 // batches. It implements core.AuditSink.
 type Worker struct {
+	workerMetrics
+
 	store  core.AuditLog
 	cfg    Config
 	logger *slog.Logger
@@ -86,16 +88,75 @@ type Worker struct {
 	batch   []core.AuditEntry
 	pending atomic.Int64
 
-	eventsLost    *prometheus.CounterVec
-	eventsSkipped prometheus.Counter
-	saveFailures  prometheus.Counter
-	batchSize     prometheus.Histogram
-
 	guard  *safe.Guard
 	tracer trace.Tracer
 }
 
 var _ core.AuditSink = (*Worker)(nil)
+
+// workerMetrics is what the worker reports about itself. It is a type of its
+// own so that constructing five collectors does not sit in the middle of
+// NewWorker, where it buried the part that actually decides how the worker
+// behaves; embedded, so every w.eventsLost in this file still reads as one.
+type workerMetrics struct {
+	eventsLost    *prometheus.CounterVec
+	eventsSkipped prometheus.Counter
+	saveFailures  prometheus.Counter
+	batchSize     prometheus.Histogram
+}
+
+// newWorkerMetrics builds the collectors and registers them on reg, which may
+// be nil in tests. queue is read for the depth gauge, which is a GaugeFunc
+// rather than a number the worker has to remember to update.
+func newWorkerMetrics(reg *prometheus.Registry, namespace string, queue <-chan core.AuditEntry) workerMetrics {
+	metrics := workerMetrics{
+		eventsLost: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "audit_events_lost_total",
+			Help:      "Total number of audit events lost, by reason.",
+		}, []string{labelReason}),
+
+		eventsSkipped: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "audit_events_skipped_total",
+			Help:      "Total number of audit events not recorded because the license does not include audit.",
+		}),
+
+		saveFailures: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "audit_save_failures_total",
+			Help:      "Total number of failed audit write attempts, including those a retry later recovered.",
+		}),
+
+		batchSize: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: namespace,
+			Name:      "audit_batch_size",
+			Help:      "Number of audit entries written per batch.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 10), //nolint:mnd // 1..512 entries
+		}),
+	}
+
+	queueDepth := prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Name:      "audit_queue_depth",
+		Help:      "Current number of audit events in the queue.",
+	}, func() float64 {
+		return float64(len(queue))
+	})
+
+	// Pre-create every reason series so a zero value is visible before the
+	// first loss ever happens.
+	for _, reason := range []string{reasonEnqueueTimeout, reasonSaveFailed, reasonShutdownTimeout} {
+		metrics.eventsLost.WithLabelValues(reason)
+	}
+
+	if reg != nil {
+		reg.MustRegister(queueDepth, metrics.eventsLost, metrics.eventsSkipped,
+			metrics.saveFailures, metrics.batchSize)
+	}
+
+	return metrics
+}
 
 // NewWorker creates a worker with a buffered queue. Pass a nil registry to
 // skip metric registration, which keeps the worker usable in tests.
@@ -119,49 +180,6 @@ func NewWorker(
 
 	ch := make(chan core.AuditEntry, cfg.BufferSize)
 
-	eventsLost := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: namespace,
-		Name:      "audit_events_lost_total",
-		Help:      "Total number of audit events lost, by reason.",
-	}, []string{labelReason})
-
-	eventsSkipped := prometheus.NewCounter(prometheus.CounterOpts{
-		Namespace: namespace,
-		Name:      "audit_events_skipped_total",
-		Help:      "Total number of audit events not recorded because the license does not include audit.",
-	})
-
-	saveFailures := prometheus.NewCounter(prometheus.CounterOpts{
-		Namespace: namespace,
-		Name:      "audit_save_failures_total",
-		Help:      "Total number of failed audit write attempts, including those a retry later recovered.",
-	})
-
-	batchSize := prometheus.NewHistogram(prometheus.HistogramOpts{
-		Namespace: namespace,
-		Name:      "audit_batch_size",
-		Help:      "Number of audit entries written per batch.",
-		Buckets:   prometheus.ExponentialBuckets(1, 2, 10), //nolint:mnd // 1..512 entries
-	})
-
-	queueDepth := prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-		Namespace: namespace,
-		Name:      "audit_queue_depth",
-		Help:      "Current number of audit events in the queue.",
-	}, func() float64 {
-		return float64(len(ch))
-	})
-
-	// Pre-create every reason series so a zero value is visible before the
-	// first loss ever happens.
-	for _, reason := range []string{reasonEnqueueTimeout, reasonSaveFailed, reasonShutdownTimeout} {
-		eventsLost.WithLabelValues(reason)
-	}
-
-	if reg != nil {
-		reg.MustRegister(queueDepth, eventsLost, eventsSkipped, saveFailures, batchSize)
-	}
-
 	return &Worker{
 		store:         store,
 		cfg:           cfg,
@@ -169,10 +187,7 @@ func NewWorker(
 		entries:       ch,
 		done:          make(chan struct{}),
 		batch:         make([]core.AuditEntry, 0, cfg.BatchSize),
-		eventsLost:    eventsLost,
-		eventsSkipped: eventsSkipped,
-		saveFailures:  saveFailures,
-		batchSize:     batchSize,
+		workerMetrics: newWorkerMetrics(reg, namespace, ch),
 		guard:         safe.NewGuard(reg, namespace),
 		tracer:        otel.Tracer("audit"),
 	}
