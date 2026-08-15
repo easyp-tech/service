@@ -184,12 +184,37 @@ the endpoint, bucket and region, and take the key pair from
 checkout, no Go toolchain and no task runner — only Docker and this directory:
 
 ```bash
-rsync -a --delete deploy/ user@host:~/easyp/     # excluding .env and certs/
+rsync -a --delete \
+  --exclude='.env*' --exclude='certs/' --exclude='charts/' \
+  --exclude='plugins-community/' --exclude='plugins-enterprise/' \
+  --exclude='observability/traefik/traefik.public.yml' \
+  deploy/ user@host:~/easyp/
 ssh user@host 'cd ~/easyp && ./scripts/gen-dev-certs.sh'
 # put the licence and the storage key pair in ~/easyp/.env, mode 600
 ssh user@host 'cd ~/easyp && docker compose -f docker-compose.dev.yml up -d'
 ssh user@host 'cd ~/easyp && ./scripts/check-tiers.sh'
 ```
+
+**The excludes are load-bearing, and `--delete` is why.** Everything they protect
+lives on the host and in no checkout, so a bare `rsync -a --delete deploy/` does
+four things at once. It deletes `~/easyp/.env` — the only copy of the licence
+key, the database DSN and the storage credentials — and uploads the developer's
+own `deploy/.env.dev` in its place, putting local secrets on a shared host. It
+deletes `observability/traefik/traefik.public.yml`, which is what terminates TLS
+for the public names. And it empties `plugins-community/` and
+`plugins-enterprise/`: those directories are empty in the repository and hold
+the built plugin binaries on the host, so generation stops working with no
+error that points at the cause. `certs/` and `charts/` are excluded for smaller
+reasons — the host generates its own certificates, and the Helm chart is not
+part of a compose deployment.
+
+Run it with `-n` first. The list of what `--delete` intends to remove is the
+only part of this worth reading, and it takes a second.
+
+For an update to a host that is already running, prefer syncing the
+subdirectories that actually changed and leaving `--delete` off entirely. It is
+the difference between a deploy that is wrong and a deploy that has destroyed
+the only copy of something.
 
 Paths inside the compose file resolve against the file itself, so the copy works
 unedited — which is the property the `deploy/` layout was arranged for.
