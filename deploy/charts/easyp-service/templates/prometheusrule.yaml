@@ -1,5 +1,4 @@
 {{- if .Values.prometheusRule.enabled }}
-{{- $cacheLimit := .Values.config.registry.cacheMaxBytes | int64 }}
 {{/*
 Anchors are the alert name lower-cased, which is what GitHub generates for the
 headings in RUNBOOKS.md. Renaming an alert or a heading breaks the link silently,
@@ -79,11 +78,16 @@ spec:
               Sustained queueing means the concurrency limit is the bottleneck.
               Refusals follow once the queue fills.
 
-        {{- if gt $cacheLimit 0 }}
         - alert: EasypPluginCacheAtLimit
-          # Rendered from config.registry.cacheMaxBytes. At the limit, eviction
-          # runs continuously and most requests pay for a fresh download.
-          expr: easyp_plugin_cache_bytes / {{ $cacheLimit }} > {{ .Values.prometheusRule.cacheUsageWarningRatio }}
+          # The limit is read from the service, not rendered from values. A
+          # rendered number is right only until someone sets the limit through
+          # the environment instead, or installs the chart against a release
+          # configured elsewhere — and the compose stack shipped exactly that
+          # divergence, with a threshold above the size of its own disk.
+          #
+          # The metric is absent when eviction is disabled, so this alert is too,
+          # which is what the removed `if gt $cacheLimit 0` guard used to do.
+          expr: easyp_plugin_cache_bytes / easyp_plugin_cache_limit_bytes > {{ .Values.prometheusRule.cacheUsageWarningRatio }}
           for: 30m
           labels:
             severity: warning
@@ -93,7 +97,6 @@ spec:
             description: >-
               Raise config.registry.cacheMaxBytes and persistence.size together,
               or accept that plugins are re-downloaded on most requests.
-        {{- end }}
 
     # Audit is the one thing Enterprise actually promises. Losing events is a
     # broken promise, not a performance problem.

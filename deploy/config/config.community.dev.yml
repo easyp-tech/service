@@ -34,6 +34,10 @@ db:
   postgres: "postgres://easyp_svc:easyp_pass@postgres:5432/easyp_community_db?sslmode=disable"
 
 registry:
+  # See the same key in config.enterprise.dev.yml: the 20 GiB default does not
+  # fit a 14 GB disk shared by two tiers, and left at the default the cache
+  # never evicts — the disk fills first.
+  cache_max_bytes: 2147483648
   s3:
     endpoint: "https://storage.h3llo.cloud"
     bucket: "easyp-plugins"

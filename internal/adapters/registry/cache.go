@@ -83,8 +83,25 @@ func newPluginCache(root string, opts CacheOptions) *pluginCache {
 		Help:      "Total plugin version directories removed to stay under the cache limit.",
 	})
 
+	// Exported so that an alert can ask "how full is the cache" without being
+	// told the limit separately. It used to be told: the rule carried the byte
+	// count as a literal, copied from the default rather than from the
+	// deployment, and on a 14 GB disk it worked out to a threshold of 19.5 GB —
+	// a level the filesystem cannot reach, so the alert could never fire while
+	// the disk filled underneath it.
+	//
+	// Set once. The limit is fixed for the life of the process, and a gauge that
+	// never moves is still the right shape: it makes the ratio expressible in
+	// one query, on both tiers, whatever each was configured with.
+	limitGauge := prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: opts.Namespace,
+		Name:      "plugin_cache_limit_bytes",
+		Help:      "Configured ceiling for unpacked plugins on local disk, from registry.cache_max_bytes.",
+	})
+	limitGauge.Set(float64(opts.MaxBytes))
+
 	if opts.Registry != nil {
-		opts.Registry.MustRegister(sizeGauge, evictions)
+		opts.Registry.MustRegister(sizeGauge, evictions, limitGauge)
 	}
 
 	return &pluginCache{

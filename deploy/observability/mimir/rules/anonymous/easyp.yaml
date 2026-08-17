@@ -83,9 +83,15 @@ groups:
             Refusals follow once the queue fills.
 
       - alert: EasypPluginCacheAtLimit
-        # 21474836480 is registry.cache_max_bytes. At the limit, eviction runs
-        # continuously and most requests pay for a fresh download.
-        expr: easyp_plugin_cache_bytes / 21474836480 > 0.95
+        # The limit comes from the service rather than from a number written
+        # here. It used to be a literal copied from the default — 20 GiB — which
+        # on a 14 GB disk put the threshold above anything the filesystem could
+        # hold, so the alert was unfireable while the disk filled underneath it.
+        # Read from easyp_plugin_cache_limit_bytes the ratio is right for
+        # whatever each tier was configured with, and cannot drift from it.
+        #
+        # The metric is absent when eviction is disabled, and then so is this.
+        expr: easyp_plugin_cache_bytes / easyp_plugin_cache_limit_bytes > 0.95
         for: 30m
         labels:
           severity: warning

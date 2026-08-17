@@ -31,6 +31,13 @@ db:
   postgres: "postgres://easyp_svc:easyp_pass@postgres:5432/easyp_enterprise_db?sslmode=disable"
 
 registry:
+  # Written down although the file is otherwise only differences from the
+  # defaults, because this is a difference — the default is 20 GiB and this host
+  # has a 14 GB disk. Left implicit it was worse than wrong: eviction could
+  # never start, so the disk would fill instead, taking postgres on the same
+  # volume with it, and the alert meant to warn was set at 95% of a size the
+  # filesystem cannot hold. Two tiers share this disk, so 2 GiB each.
+  cache_max_bytes: 2147483648
   s3:
     endpoint: "https://storage.h3llo.cloud"
     bucket: "easyp-plugins"
