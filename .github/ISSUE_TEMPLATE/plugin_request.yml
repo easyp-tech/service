@@ -1,0 +1,95 @@
+name: Plugin request
+description: Ask for a protoc plugin to be added to the registry
+labels: ["plugin"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Plugins live in the catalogue as `registry/{group}/{name}/{version}`,
+        each one a Dockerfile that builds a static binary. If you would rather
+        add it yourself than wait, the README section
+        [Contributing Plugins](https://github.com/easyp-tech/service#contributing-plugins)
+        is the whole procedure — a pull request is faster than this form.
+
+  - type: input
+    id: name
+    attributes:
+      label: Plugin
+      description: As it would be addressed — group and name.
+      placeholder: connectrpc/go
+    validations:
+      required: true
+
+  - type: input
+    id: upstream
+    attributes:
+      label: Upstream source
+      description: >-
+        Where the plugin is built from. A module path or a repository URL, not
+        a homepage — this is what the Dockerfile will install.
+      placeholder: connectrpc.com/connect/cmd/protoc-gen-connect-go
+    validations:
+      required: true
+
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: >-
+        Which ones you need. The registry holds versions side by side, so
+        pinning an old one alongside a new one is normal rather than a problem.
+      placeholder: v1.18.1, or "latest release"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: language
+    attributes:
+      label: What it is written in
+      description: >-
+        Only because it decides the Dockerfile. Go plugins are a `go install`;
+        everything else needs its own build stage and a static output.
+      options:
+        - Go
+        - Rust
+        - C / C++
+        - JVM
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contract
+    attributes:
+      label: The plugin contract
+      description: >-
+        This service runs plugins as processes and speaks to them over stdio.
+        A tool that does not work this way cannot be run by it, however useful
+        it is — that is a property of protoc plugins, not a policy.
+      options:
+        - label: >-
+            It reads a `CodeGeneratorRequest` from stdin and writes a
+            `CodeGeneratorResponse` to stdout
+          required: true
+        - label: >-
+            It can be built as a static binary with no runtime dependencies
+            outside the image
+          required: true
+
+  - type: checkboxes
+    id: offer
+    attributes:
+      label: Would you like to add it yourself
+      options:
+        - label: >-
+            I can send a pull request with the Dockerfile — say so and one of
+            us will not duplicate the other's work
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else
+      description: >-
+        Build quirks worth knowing about. Plugins that need a protoc plugin of
+        their own, expect files beside them, or only publish binaries for one
+        architecture are the ones that take a second attempt.

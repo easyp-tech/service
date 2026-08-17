@@ -1,0 +1,63 @@
+name: Feature request
+description: Propose a change to how the service works
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The problem is the useful half. A described solution can only be
+        accepted or refused; a described problem can be solved a way neither of
+        us had thought of.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve
+      description: >-
+        What you were trying to do, and what stopped you. If it is a limit you
+        ran into, the number you needed is worth more than the word "more".
+    validations:
+      required: true
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What do you do about it today
+      description: >-
+        Every workaround describes the shape of the missing thing. "Nothing, we
+        gave up on it" is also an answer, and a strong one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: Optional. Skip it if the problem statement above is enough.
+
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Which tier does this concern
+      description: >-
+        Asked because the answer is sometimes "enterprise only" and that
+        changes the conversation. Most changes are neither.
+      options:
+        - Both / it does not depend on the tier
+        - Community
+        - Enterprise
+        - Not sure
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the existing issues
+          required: true
+        - label: >-
+            This is not a request to add a plugin to the registry — those have
+            their own form
+          required: true

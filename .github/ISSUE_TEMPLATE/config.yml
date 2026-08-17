@@ -1,0 +1,18 @@
+# Blank issues are off so that reports arrive with a version, a tier and a
+# deployment method already in them. Those three decide whether the rest of a
+# report can be read at all, and asking for them afterwards costs a round trip
+# each time.
+blank_issues_enabled: false
+
+contact_links:
+  - name: Add a plugin yourself
+    url: https://github.com/easyp-tech/service#contributing-plugins
+    about: >-
+      A plugin is a Dockerfile under registry/{group}/{name}/{version}. If you
+      are willing to write it, a pull request lands faster than a request does.
+
+  - name: Deployment and configuration
+    url: https://github.com/easyp-tech/service/blob/master/.spec/DEPLOYMENT.md
+    about: >-
+      How the stack is put together, what each setting does, and what
+      `easyp-svc config print` will tell you before you ask anyone.

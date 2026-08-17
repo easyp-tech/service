@@ -1,0 +1,113 @@
+name: Bug report
+description: Something behaves differently from what it says it does
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The service is self-hosted and ships two licence tiers, so the same
+        version can behave differently on two installations. The first three
+        questions are what make the rest of the report readable.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: >-
+        `easyp-svc --version`. That flag exists from v0.12.0 onward; earlier
+        builds report `dev` everywhere, including in their logs, because the
+        version was a literal until then. If yours says `dev`, the image label
+        `org.opencontainers.image.version` is the next best answer —
+        `docker inspect <image> --format '{{index .Config.Labels "org.opencontainers.image.version"}}'`.
+      placeholder: v0.12.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Licence tier
+      description: >-
+        The licence is a ceiling rather than a switch, so a community
+        deployment is not a broken enterprise one — it has different limits and
+        no audit trail. "Not sure" is a real answer; `easyp_license_valid` in
+        the metrics settles it.
+      options:
+        - Community (no licence)
+        - Enterprise (licensed)
+        - Both, and they differ
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How is it deployed
+      options:
+        - Docker Compose
+        - Helm chart
+        - Built from source
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what you expected instead
+      description: Both halves. "It does not work" describes neither.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: How to reproduce
+      description: >-
+        The request you made, or the command you ran. If it involves code
+        generation, the plugin and its version matter more than anything else
+        here.
+      placeholder: |
+        1. easyp generate with plugins.beta.easyp.tech/protocolbuffers/go:v1.36.11
+        2. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: >-
+        `easyp-svc config print --changed --origin` — it prints only what
+        differs from the built-in defaults and says where each value came from,
+        which is usually shorter and always more accurate than describing the
+        setup in prose.
+
+        Credentials are masked, but read it before pasting: the S3 endpoint and
+        access key id are shown deliberately, because they are what you need to
+        see when the problem is storage. Delete them if they are not.
+      render: yaml
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: >-
+        The lines around the failure. Logs are JSON; if a request is involved,
+        the `trace_id` field ties the whole call together.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the existing issues
+          required: true
+        - label: >-
+            This is not a security vulnerability. Vulnerabilities should not be
+            filed here — contact the maintainers directly instead.
+          required: true
