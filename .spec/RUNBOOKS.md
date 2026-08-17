@@ -267,11 +267,71 @@ Available, not free. Free memory on a healthy Linux box is near zero because the
 kernel spends it on page cache, so this is measured with `MemAvailable`, which
 counts what a new allocation could actually get.
 
-1. `docker stats --no-stream` for the split by container. The plugin registry
-   caches plugin binaries in memory up to `registry.cache_max_bytes`, and that
-   is the largest single consumer by design.
+1. `docker stats --no-stream` for the split by container.
 2. `free -h` — if `available` is low while `buff/cache` is large, the kernel
    will reclaim it and there is no problem to solve.
 3. Sustained pressure ends at the OOM killer, which chooses by size: postgres or
    a plugin process, not whatever caused the pressure. `dmesg -T | grep -i
    oom` says whether that has already happened.
+
+`registry.cache_max_bytes` is not the place to look. It bounds unpacked plugins
+**on disk**, not in memory — `internal/config/config.go` says so and this
+section used to say the opposite, which sent the reader to the largest number in
+the configuration for a problem it has nothing to do with.
+
+## EasypTargetDown
+
+A scrape target exists and does not answer. `$labels.job` says which; the
+service tiers arrive as `prometheus.scrape.service`, the rest are named after
+the component.
+
+The container is still there — that is what distinguishes this from
+`EasypServiceMissing`. So the process is wedged, crashlooping, or no longer
+listening on the port.
+
+1. `docker ps -a --filter name=easyp` — a restart count climbing is a
+   crashloop; `Up` with a failing scrape is a wedge.
+2. `docker logs --tail 100 <container>`. For the service tiers the last line
+   before it stopped answering is usually enough.
+3. Scrape it by hand from inside the network:
+   `docker exec easyp-grafana curl -s http://easyp-api-enterprise:8081/metrics | head`.
+   A connection refused and a hang mean different things — refused is a dead
+   listener, a hang is a live process that cannot answer.
+4. `docker restart <container>` clears a wedge and tells you nothing about why.
+   Capture the logs first.
+
+## EasypServiceMissing
+
+A whole tier has disappeared from discovery. Not "down" — *absent*: no container
+carries the `service=easyp-api-<tier>` label that Alloy finds them by, so there
+is no target and no `up` series to be zero.
+
+Two ways to get here, and they need different answers.
+
+1. The container is stopped. `docker ps -a --filter label=service` shows it as
+   `Exited`; `docker compose ... up -d` brings it back.
+2. The container is running but lost its label — recreated from an edited
+   compose file, or started by hand with `docker run`. Then the service is
+   serving traffic and invisible to every metric and alert in this file, which
+   is the worse case because nothing else will tell you.
+   `docker inspect <container> --format '{{ index .Config.Labels "service" }}'`
+   returns empty when this is what happened.
+
+## EasypCertificateExpiringSoon
+
+The edge certificate expires within 21 days and Traefik has not replaced it.
+
+Traefik attempts renewal at 30 days, so reaching 21 means an attempt has already
+failed. Note that on this stand issuance was proven once, at setup, and renewal
+has never run — the first attempt is due around 7 October 2026.
+
+1. `docker logs easyp-traefik 2>&1 | grep -i acme | tail -30`. The reason is
+   almost always the HTTP-01 challenge.
+2. HTTP-01 needs port 80 reachable from the internet and answered by Traefik.
+   `curl -sI http://<domain>/.well-known/acme-challenge/probe` from outside
+   should reach Traefik rather than time out or hit something else.
+3. `docker exec easyp-traefik cat /acme.json | head -c 200` — an empty or
+   truncated store means the volume was lost and the certificate will be
+   requested fresh, which is fine but rate-limited by Let's Encrypt.
+4. Rate limits are the one failure that waiting fixes: five failures per account
+   per hostname per hour. Read the log before retrying.

@@ -1,11 +1,13 @@
-# Alerting rules for the machine, as opposed to the service.
+# Alerting rules about the deployment rather than about the business logic: the
+# machine it runs on, and whether the parts of it are answering at all.
 #
 # Deliberately a separate file from easyp.yaml, and deliberately absent from the
-# Helm chart. On Kubernetes these metrics come from the cluster's own
-# node-exporter and its own node alerts; an application chart shipping its
-# opinion about node disk would either duplicate them or quietly disagree with
-# them. tests/render.sh compares the alert names in easyp.yaml against the
-# chart's PrometheusRule and would fail if these lived there.
+# Helm chart. On Kubernetes both of these belong to the cluster: node metrics
+# come from its own node-exporter, and a pod that stops answering is the
+# business of kubelet and the probes, not of an application chart. Shipping
+# either from here would duplicate them or quietly disagree with them.
+# tests/render.sh compares the alert names in easyp.yaml against the chart's
+# PrometheusRule and would fail if these lived there.
 #
 # The metrics come from prometheus.exporter.unix in config.alloy. Nothing
 # measured the host before it: the disk reached 73% on a build cache and was
@@ -70,3 +72,68 @@ groups:
             The next allocation that cannot be met is resolved by the OOM
             killer, which picks its victim by size — here that is a plugin
             process or the database, not whatever caused the pressure.
+
+  # Everything else in this stack is computed from metrics the service itself
+  # emits, which means a dead service produces no metrics, and no metric means
+  # no alert. Fourteen rules watched a service that could vanish without any of
+  # them noticing. These two are the floor under the rest.
+  - name: service.liveness
+    rules:
+      - alert: EasypTargetDown
+        # The container is there and the scrape fails: a wedged process, a
+        # crashloop, a port that stopped listening. Five minutes rather than one
+        # because a recreate takes seconds and should not read as an outage.
+        expr: up == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easyptargetdown"
+          summary: "{{ $labels.job }} is not answering scrapes"
+          description: >-
+            The target still exists, so this is a process that stopped
+            responding rather than one that went away — see EasypServiceMissing
+            for the other half.
+
+      - alert: EasypServiceMissing
+        # The other half, and the reason `up == 0` alone is not enough. Service
+        # targets come from Docker discovery: stop the container and the target
+        # leaves the target list, taking its `up` series with it. The series
+        # does not go to zero, it stops existing, and an expression comparing it
+        # to zero matches nothing at all.
+        #
+        # absent() keeps the labels of its matchers, so the alert says which
+        # tier disappeared. Ten minutes: longer than any recreate, short enough
+        # to be the same working day.
+        expr: |
+          absent(up{job="prometheus.scrape.service", tier="community"})
+            or absent(up{job="prometheus.scrape.service", tier="enterprise"})
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easypservicemissing"
+          summary: "A service tier has vanished from discovery entirely"
+          description: >-
+            No container carries the label this tier is found by. Either it is
+            stopped, or it was recreated without its service label, in which
+            case it is running and invisible — which is worse.
+
+  - name: edge
+    rules:
+      - alert: EasypCertificateExpiringSoon
+        # Traefik renews at 30 days, so 21 means an attempt has already been
+        # made and did not take. That is the case worth knowing about: issuing
+        # the certificate was proven once, renewing it has never happened at
+        # all, and the first attempt falls in early October.
+        expr: |
+          (traefik_tls_certs_not_after - time()) / 86400 < 21
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easypcertificateexpiringsoon"
+          summary: "The edge certificate expires in under 21 days"
+          description: >-
+            ACME uses the HTTP-01 challenge, so renewal needs port 80 reachable
+            from the internet and not answered by anything else.

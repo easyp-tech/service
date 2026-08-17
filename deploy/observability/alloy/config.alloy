@@ -285,19 +285,36 @@ prometheus.scrape "host" {
   forward_to = [prometheus.remote_write.mimir.receiver]
 }
 
-// 5. Loki Monitoring
+// 5. Traefik
+//
+// The one component every external request passes through, and the only one
+// nothing was collecting from — it has served the stack for weeks with no
+// series to its name. It publishes prometheus on its own entrypoint, see
+// metrics: in traefik.yml; the port is not published to the host, which is why
+// this is reachable by service name and by nothing else.
+//
+// It also carries traefik_tls_certs_not_after, which is what makes an alert on
+// certificate expiry possible at all. The stand's certificate has never been
+// renewed once: the first attempt is due around 7 October, and without this
+// scrape the way to find out would have been a browser warning.
+prometheus.scrape "traefik" {
+  targets    = [{"__address__" = "traefik:8082"}]
+  forward_to = [prometheus.remote_write.mimir.receiver]
+}
+
+// 6. Loki Monitoring
 prometheus.scrape "loki" {
   targets    = [{"__address__" = "loki:3100"}]
   forward_to = [prometheus.remote_write.mimir.receiver]
 }
 
-// 6. Grafana Monitoring
+// 7. Grafana Monitoring
 prometheus.scrape "grafana" {
   targets    = [{"__address__" = "grafana:3000"}]
   forward_to = [prometheus.remote_write.mimir.receiver]
 }
 
-// 7. Tempo Monitoring
+// 8. Tempo Monitoring
 prometheus.scrape "tempo" {
   targets    = [{"__address__" = "tempo:3200"}]
   forward_to = [prometheus.remote_write.mimir.receiver]
