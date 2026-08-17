@@ -6,7 +6,15 @@ on:
       - 'v[0-9]+.[0-9]+.[0-9]+'
 
 jobs:
+  # The same checks master gets, run against the tagged commit before anything
+  # is published. A tag usually points at a commit master has already tested,
+  # but "usually" was the whole guarantee: nothing stopped a tag on an untested
+  # commit, or on a branch, from publishing an image.
+  verify:
+    uses: ./.github/workflows/go.yml
+
   release:
+    needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -7,6 +7,15 @@ on:
   pull_request:
     branches:
       - master
+  # Callable so that a release can depend on it. Publishing used to run none of
+  # this: these jobs are bound to master, the release workflow to a tag, and
+  # nothing connected the two — `git push --tags` shipped an image without a
+  # test, a linter or a vulnerability scan having run against it. That it never
+  # went wrong is down to the habit of waiting for a green master by hand.
+  #
+  # No job here reads pull-request context, which is what makes calling it from
+  # a tag safe.
+  workflow_call:
 
 permissions:
   contents: read
