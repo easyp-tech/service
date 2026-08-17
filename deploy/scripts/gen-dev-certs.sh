@@ -7,9 +7,21 @@
 #   client.*    presented by traefik to easyp-api-service (the mTLS leg)
 #   edge.*      served by traefik to the outside world
 #
-# These are development credentials only. The keys are deliberately left
-# world-readable because the service container runs as UID 65532 and reads them
-# through a bind mount, where host ownership carries over on Linux. Production
+# Who gets what, because it is the whole point of splitting them:
+#
+#   service   server.crt, server.key, ca.crt
+#   traefik   ca.crt, client.crt, client.key, edge.crt, edge.key
+#   ca.key    nobody
+#
+# ca.key signs the rest and is used only here, on the host. It reaches no
+# container, and that matters because the service container executes plugin
+# binaries: anything mounted beside them is readable by them, and whoever holds
+# this key can issue a client certificate the service will accept — the mTLS
+# boundary is checked for a signature by this CA and nothing else.
+#
+# The other keys are deliberately left world-readable: the service container
+# runs as UID 65532 and reads them through a bind mount, where host ownership
+# carries over on Linux. That is a development compromise. Production
 # certificates come from your own CA and are mounted with restrictive modes.
 
 set -euo pipefail
@@ -71,6 +83,13 @@ issue edge easyp.api.localhost \
     "serverAuth"
 
 chmod 644 ./*.key ./*.crt
+
+# The CA's private key is the exception, and the reason for the two lines: it is
+# mounted into no container, so nothing needs to read it but this script, and
+# leaving it world-readable next to keys that must be would invite it back into
+# a mount by resemblance. ca.srl is not secret but is equally useless in a
+# container, so it goes the same way.
+chmod 600 ./ca.key ./ca.srl 2>/dev/null || chmod 600 ./ca.key
 
 echo
 echo "Wrote $(pwd)"

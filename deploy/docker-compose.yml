@@ -33,8 +33,14 @@ services:
       - "./observability/traefik/traefik.yml:/etc/traefik/traefik.yml:ro"
       - "./observability/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro"
       # Edge certificate plus the client key pair traefik presents to the
-      # service. Run `task certs` before the first `docker compose up`.
-      - "./certs:/certs:ro"
+      # service, named file by file — see docker-compose.dev.yml for why the
+      # directory is not mounted whole. Run `task certs` before the first
+      # `docker compose up`.
+      - "./certs/ca.crt:/certs/ca.crt:ro"
+      - "./certs/client.crt:/certs/client.crt:ro"
+      - "./certs/client.key:/certs/client.key:ro"
+      - "./certs/edge.crt:/certs/edge.crt:ro"
+      - "./certs/edge.key:/certs/edge.key:ro"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
     ports:
       - "${EASYP_TRAEFIK_PORT:-4043}:80"
@@ -253,8 +259,12 @@ services:
     command: ["service", "start", "--cfg=/config.yml", "--log_level=debug"]
     volumes:
       - "./config/config.yml:/config.yml:ro"
-      # Server key pair and the CA that signs the certificates it accepts.
-      - "./certs:/certs:ro"
+      # Server key pair and the CA that signs the certificates it accepts —
+      # those three and nothing else, because this container runs plugin
+      # binaries and reads what it is given.
+      - "./certs/server.crt:/certs/server.crt:ro"
+      - "./certs/server.key:/certs/server.key:ro"
+      - "./certs/ca.crt:/certs/ca.crt:ro"
       # rw: the service writes lazily downloaded plugin binaries here.
       - "../plugins:/plugins"
     # Every variable here overrides the matching field in config/config.yml. An

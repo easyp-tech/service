@@ -434,7 +434,13 @@ promtool_check() {
     return
   fi
 
-  if command -v docker >/dev/null 2>&1; then
+  # Having the docker command is not the same as having a daemon to talk to,
+  # and the difference showed: with Docker Desktop stopped this reported
+  # "promtool rejected the rules" three times over, which sends the reader to
+  # look for a PromQL error that does not exist. An unreachable daemon is the
+  # same situation as no docker at all — the rules went unchecked — so it says
+  # so.
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
     docker run --rm -v "$file:/rules.yaml:ro" --entrypoint promtool \
       prom/prometheus:latest check rules /rules.yaml
     return
@@ -463,7 +469,7 @@ if out="$(render --set prometheusRule.enabled=true --show-only templates/prometh
   if check="$(promtool_check "$rules_yaml" 2>&1)"; then
     pass "promtool accepts the rules ($(grep -c 'alert:' "$rules_yaml") alerts)"
   elif [[ $? -eq 2 ]]; then
-    echo "  SKIP  promtool: neither promtool nor docker is available"
+    echo "  SKIP  promtool: no promtool, and no docker daemon to borrow one from"
   else
     fail "promtool rejected the rules"$'\n'"$check"
   fi
@@ -518,7 +524,7 @@ else
   if check="$(promtool_check "$compose_rules" 2>&1)"; then
     pass "promtool accepts the compose rules ($(grep -c 'alert:' "$compose_rules") alerts)"
   elif [[ $? -eq 2 ]]; then
-    echo "  SKIP  promtool: neither promtool nor docker is available"
+    echo "  SKIP  promtool: no promtool, and no docker daemon to borrow one from"
   else
     fail "promtool rejected the compose rules"$'\n'"$check"
   fi
@@ -547,7 +553,7 @@ else
   if check="$(promtool_check "$host_rules" 2>&1)"; then
     pass "promtool accepts the host rules ($(grep -c 'alert:' "$host_rules") alerts)"
   elif [[ $? -eq 2 ]]; then
-    echo "  SKIP  promtool: neither promtool nor docker is available"
+    echo "  SKIP  promtool: no promtool, and no docker daemon to borrow one from"
   else
     fail "promtool rejected the host rules"$'\n'"$check"
   fi
@@ -603,6 +609,57 @@ if [[ -z "$unmounted" ]]; then
   pass "every path mimir.yaml names is mounted wherever mimir.yaml is ($(wc -l <<<"$referenced" | tr -d ' ') paths)"
 else
   fail "every path mimir.yaml names is mounted wherever mimir.yaml is:$unmounted"
+fi
+
+echo "== certificates =="
+
+# deploy/certs used to be mounted whole, which handed the CA's private key to
+# every container including the two that execute plugin binaries. Whoever holds
+# that key can issue a client certificate the service accepts, because the mTLS
+# leg checks the signature and nothing else. The mounts are named file by file
+# now; these two checks are what keeps them that way.
+all_compose=("$REPO"/deploy/docker-compose*.yml)
+certs_script="$REPO/deploy/scripts/gen-dev-certs.sh"
+
+# A mount of the directory itself would reintroduce everything at once, so it is
+# rejected as firmly as the key.
+leaked=""
+for compose in "${all_compose[@]}"; do
+  while read -r mount; do
+    [[ -z "$mount" ]] && continue
+    case "$mount" in
+      *ca.key*|*ca.srl*) leaked+=" $(basename "$compose"):${mount}" ;;
+      ./certs:*)         leaked+=" $(basename "$compose"):${mount} (whole directory)" ;;
+    esac
+  done < <(grep -oE '\./certs[A-Za-z0-9._/-]*:[^"]*' "$compose")
+done
+
+if [[ -z "$leaked" ]]; then
+  pass "no container is given the CA private key"
+else
+  fail "no container is given the CA private key:$leaked"
+fi
+
+# A named mount whose source does not exist is worse than a missing one: Docker
+# creates a directory in its place and the service fails its TLS handshake with
+# nothing that points at the cause. The generator is the authority on which
+# files exist, so the names are checked against it rather than against a list.
+missing=""
+for compose in "${all_compose[@]}"; do
+  while read -r file; do
+    [[ -z "$file" ]] && continue
+    base="${file%.*}"
+    # issue <name> ... produces <name>.crt and <name>.key; ca.crt comes from the
+    # openssl req that creates the authority itself.
+    grep -qE "^issue ${base}( |$)|-keyout ${file}|-out ${file}" "$certs_script" \
+      || missing+=" $(basename "$compose"):${file}"
+  done < <(grep -oE '\./certs/[A-Za-z0-9._-]+' "$compose" | sed 's|\./certs/||' | sort -u)
+done
+
+if [[ -z "$missing" ]]; then
+  pass "every certificate a compose file mounts is one gen-dev-certs.sh writes"
+else
+  fail "every certificate a compose file mounts is one gen-dev-certs.sh writes:$missing"
 fi
 
 echo

@@ -347,6 +347,28 @@ the stack traefik serves `edge.crt` on `easyp.api.localhost`.
 certificates for development. Production certificates come from your own CA and
 are mounted at the paths in `deploy/config/config.yml`.
 
+Each container is given the certificate files it needs by name, not the
+`deploy/certs` directory:
+
+| | |
+|---|---|
+| service | `server.crt`, `server.key`, `ca.crt` |
+| traefik | `ca.crt`, `client.crt`, `client.key`, `edge.crt`, `edge.key` |
+| `ca.key` | no container |
+
+The last row is the one worth keeping. The mTLS leg accepts any client
+certificate signed by this CA and checks nothing else about it, so the CA's
+private key is equivalent to a permanent credential for the gRPC listener — and
+the service container executes plugin binaries, which read whatever is mounted
+beside them. Mounting the directory whole, which is what used to happen, handed
+that key to them. Nothing but `gen-dev-certs.sh` signs with it, and that runs on
+the host, so it belongs in no image and no mount. `tests/render.sh` fails if it
+reappears in one.
+
+The Helm chart was always right about this: `templates/deployment.yaml` mounts
+the server key pair and the client CA as two separate secrets, with no CA
+private key in either.
+
 ## Backup and restore
 
 Deliberately tool-agnostic: whatever takes your Postgres backups today takes

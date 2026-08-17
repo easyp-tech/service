@@ -30,7 +30,19 @@ services:
     volumes:
       - "./observability/traefik/traefik.yml:/etc/traefik/traefik.yml:ro"
       - "./observability/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro"
-      - "./certs:/certs:ro"
+      # Named file by file rather than mounting deploy/certs wholesale, which is
+      # what used to happen and which handed every container the CA's private
+      # key along with everything else. ca.key belongs in no container at all:
+      # only gen-dev-certs.sh signs with it, and that runs on the host.
+      #
+      # These five are what dynamic.yml refers to: the CA to verify the service
+      # against, traefik's own identity on the mTLS leg inward, and the edge
+      # certificate it serves outward.
+      - "./certs/ca.crt:/certs/ca.crt:ro"
+      - "./certs/client.crt:/certs/client.crt:ro"
+      - "./certs/client.key:/certs/client.key:ro"
+      - "./certs/edge.crt:/certs/edge.crt:ro"
+      - "./certs/edge.key:/certs/edge.key:ro"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
     # The only service published on all interfaces, because it is the entry
     # point: it terminates the edge certificate and is the single party holding
@@ -113,7 +125,12 @@ services:
     command: ["service", "start", "--cfg=/config.community.dev.yml", "--log_level=debug"]
     volumes:
       - "./config/config.community.dev.yml:/config.community.dev.yml:ro"
-      - "./certs:/certs:ro"
+      # The three files server.tls in the config names, and no more. This
+      # container executes plugin binaries; anything mounted here is readable by
+      # them, which is why the CA's private key is not among these.
+      - "./certs/server.crt:/certs/server.crt:ro"
+      - "./certs/server.key:/certs/server.key:ro"
+      - "./certs/ca.crt:/certs/ca.crt:ro"
       - "./plugins-community:/plugins"
     environment:
       # No LICENSE_* here, deliberately: this container is the control in the
@@ -177,7 +194,10 @@ services:
     command: ["service", "start", "--cfg=/config.enterprise.dev.yml", "--log_level=debug"]
     volumes:
       - "./config/config.enterprise.dev.yml:/config.enterprise.dev.yml:ro"
-      - "./certs:/certs:ro"
+      # Same three as the community container above, and for the same reason.
+      - "./certs/server.crt:/certs/server.crt:ro"
+      - "./certs/server.key:/certs/server.key:ro"
+      - "./certs/ca.crt:/certs/ca.crt:ro"
       - "./plugins-enterprise:/plugins"
     environment:
       # What makes this container the enterprise one. An unset or unverifiable
