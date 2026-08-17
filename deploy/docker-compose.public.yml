@@ -2,7 +2,7 @@
 #
 #   docker compose -f deploy/docker-compose.dev.yml -f deploy/docker-compose.public.yml \
 #     --env-file deploy/.env.dev up -d
-#   task up-dev-public
+#   task up-dev-full
 #
 # It exists as an overlay rather than a flag because the difference is not a
 # setting but a trust model. On a laptop the stack serves the throwaway CA from

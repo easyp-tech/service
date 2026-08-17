@@ -168,10 +168,18 @@ look healthy. `task tier-dev` reads `easyp_license_valid` from both and asserts
 tells you about tiering.
 
 The development licence — `sub=test-dev-license`, `tier=enterprise`,
-`max_workers=16`, unlimited plugins, valid to 2036 — is committed in
-`deploy/.env.dev.example`. It cannot be reissued from this repository: the
-service only verifies PASETO tokens, and the signing key lives in the licence
-registry (`easyp-tech/licenses`).
+`max_workers=16`, unlimited plugins, valid to 2036 — is **not in this
+repository**. `deploy/.env.dev.example:36` has `LICENSE_KEY=` empty, and the
+token comes from `easyp-tech/licenses`, which is private; ask whoever
+administers it for access.
+
+Treat that as a precondition rather than a detail. Without the token the
+enterprise container starts, fails to verify, logs it, and runs as community —
+so the two-tier stand comes up looking correct and tests nothing it exists to
+test. `task tier-dev` is what catches it, and it is the only thing that will.
+
+The licence cannot be reissued from here in any case: the service only verifies
+PASETO tokens, and the signing key lives in the registry above.
 
 Storage credentials are *not* committed. `deploy/config/config.*.dev.yml` carry
 the endpoint, bucket and region, and take the key pair from
@@ -190,10 +198,23 @@ rsync -a --delete \
   --exclude='observability/traefik/traefik.public.yml' \
   deploy/ user@host:~/easyp/
 ssh user@host 'cd ~/easyp && ./scripts/gen-dev-certs.sh'
-# put the licence and the storage key pair in ~/easyp/.env, mode 600
-ssh user@host 'cd ~/easyp && docker compose -f docker-compose.dev.yml up -d'
+# put the licence and both storage key pairs in ~/easyp/.env, mode 600
+ssh user@host 'cd ~/easyp && docker compose -p easyp-svc \
+  -f docker-compose.dev.yml \
+  -f docker-compose.observability.yml \
+  -f docker-compose.public.yml up -d'
 ssh user@host 'cd ~/easyp && ./scripts/check-tiers.sh'
 ```
+
+**Three files, not one.** This line used to name `docker-compose.dev.yml` alone,
+which is a different and smaller stack: two tiers, a database and a proxy, with
+no telemetry and no public certificate. Nothing announces the difference — the
+six missing containers simply are not there, and Grafana does not exist — so
+rebuilding from the old instruction produced a stand that looked like this one
+and was not. `-p easyp-svc` matters for the same reason: without it compose
+names the project after the directory and adopts none of the existing volumes.
+
+Locally the same combination is `task up-dev-full`.
 
 **The excludes are load-bearing, and `--delete` is why.** Everything they protect
 lives on the host and in no checkout, so a bare `rsync -a --delete deploy/` does

@@ -6,7 +6,12 @@ vars:
   # -f is all that is needed — the volume paths stay readable from deploy/.
   COMPOSE: "docker compose -f deploy/docker-compose.yml"
   COMPOSE_DEV: "docker compose -f deploy/docker-compose.dev.yml"
-  COMPOSE_DEV_PUBLIC: "docker compose -f deploy/docker-compose.dev.yml -f deploy/docker-compose.public.yml"
+  # The three files the deployed stand actually runs on: tiers, telemetry, and
+  # the public entry point. Named here because the combination is what has been
+  # running for weeks while the documentation described a one-file command —
+  # anyone rebuilding from the docs got a smaller stack, silently, with no
+  # Grafana and no public TLS.
+  COMPOSE_DEV_FULL: "docker compose -f deploy/docker-compose.dev.yml -f deploy/docker-compose.observability.yml -f deploy/docker-compose.public.yml"
 
 tasks:
   certs:
@@ -61,12 +66,38 @@ tasks:
         echo "Confirm the tiers actually differ before trusting the stack:"
         echo "  task tier-dev"
 
+  up-dev-full:
+    desc: "Start both tiers with telemetry and the public entry point — what the deployed stand runs"
+    dir: "{{.USER_WORKING_DIR}}"
+    preconditions:
+      - "test -f deploy/docker-compose.dev.yml"
+      - sh: "test -f deploy/.env.dev"
+        msg: "deploy/.env.dev not found. Copy deploy/.env.dev.example to deploy/.env.dev — it carries the development licence."
+      # The overlay requires these through `${VAR:?}`, so a missing one fails
+      # somewhere inside compose rather than here. Named up front instead.
+      - sh: "grep -q '^TELEMETRY_S3_ACCESS_KEY_ID=.' deploy/.env.dev"
+        msg: "deploy/.env.dev has no TELEMETRY_S3_* keys. The observability overlay stores metrics, logs, traces and profiles in object storage and will not start without them."
+    cmds:
+      - task: certs
+      - "{{.COMPOSE_DEV_FULL}} --env-file deploy/.env.dev up --remove-orphans --detach"
+      - |
+        echo
+        echo "  community   localhost:8080-8083     enterprise  localhost:9080-9083"
+        echo "  grafana     localhost:3000"
+        echo
+        echo "Confirm the tiers actually differ before trusting the stack:"
+        echo "  task tier-dev"
+
   down-dev:
     dir: "{{.USER_WORKING_DIR}}"
     preconditions:
       - "test -f deploy/docker-compose.dev.yml"
     cmds:
-      - "{{.COMPOSE_DEV}} down --volumes"
+      # The full set, so that `down` reaches everything `up-dev-full` started.
+      # With the one-file variant the six telemetry containers survive a down
+      # and are then adopted by the next up, which is how a stack ends up half
+      # from one revision and half from another.
+      - "{{.COMPOSE_DEV_FULL}} down --volumes"
 
   logs-dev:
     desc: "Follow both dev tiers"

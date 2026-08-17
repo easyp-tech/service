@@ -3,7 +3,7 @@
 #   docker compose -f deploy/docker-compose.dev.yml \
 #     -f deploy/docker-compose.observability.yml \
 #     -f deploy/docker-compose.public.yml --env-file deploy/.env.dev up -d
-#   task up-dev-observability
+#   task up-dev-full
 #
 # The dev stack ships without it on purpose — two service tiers, a database and
 # a proxy are what the tier comparison needs, and six more containers are not.

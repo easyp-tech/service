@@ -611,6 +611,24 @@ else
   fail "every path mimir.yaml names is mounted wherever mimir.yaml is:$unmounted"
 fi
 
+echo "== image tag =="
+
+# The default image tag is Chart.appVersion, and it has to be a tag the release
+# workflow can actually produce. It was "0.9.0" while the registry only ever
+# holds "v0.9.0", so a default install pulled a tag that has never existed. Two
+# things hid it: the chart is installed nowhere, and `helm template` renders a
+# wrong tag as readily as a right one.
+release_pattern="$(grep -oE "v\[0-9\]\+\\\\?\.\[0-9\]\+\\\\?\.\[0-9\]\+" "$REPO/.github/workflows/release.yml" | head -1)"
+app_version="$(grep -E '^appVersion:' "$CHART/Chart.yaml" | sed 's/^appVersion: *//; s/"//g')"
+
+if [[ -z "$release_pattern" ]]; then
+  fail "the release tag pattern is still in release.yml (it moved, so this check is blind)"
+elif [[ "$app_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  pass "the default image tag ($app_version) is shaped like a published release"
+else
+  fail "the default image tag is shaped like a published release: Chart.appVersion is '$app_version', releases are tagged v0.0.0"
+fi
+
 echo "== certificates =="
 
 # deploy/certs used to be mounted whole, which handed the CA's private key to
