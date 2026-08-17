@@ -267,6 +267,21 @@ process kill itself mid-generation while the grace period still looked generous.
 {{- end }}
 {{- end }}
 
+{{/*
+The ServersTransport tells the router which client certificate to present on
+the mTLS leg, and the chart creates no such Secret — it can only be supplied.
+Left empty it fell back to a generated name, "<fullname>-client-tls", that
+exists nowhere: the resource rendered, applied, and pointed at nothing, and the
+first sign of it would have been the router failing every request to a listener
+that was working fine. The server certificate has been guarded this way from
+the start; this is the other half of the same pair.
+*/}}
+{{- if and .Values.ingress.enabled .Values.tls.enabled .Values.ingress.serversTransport.enabled }}
+{{- if not .Values.ingress.serversTransport.clientSecret }}
+{{- fail "easyp-service: ingress.serversTransport.enabled requires ingress.serversTransport.clientSecret — a kubernetes.io/tls Secret with the client certificate the router presents. The chart does not create one." }}
+{{- end }}
+{{- end }}
+
 {{- if .Values.certManager.enabled }}
 {{- if not .Values.certManager.issuerRef.name }}
 {{- fail "easyp-service: certManager.enabled requires certManager.issuerRef.name." }}

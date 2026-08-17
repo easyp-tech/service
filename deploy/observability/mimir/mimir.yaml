@@ -139,8 +139,15 @@ limits:
   compactor_blocks_retention_period: 168h
 
 # Memberlist (Simple config for single node)
+# Memberlist is what the ring components gossip over. On one node there is
+# nobody to gossip with, so this exists only to stop Mimir looking for peers.
+#
+# join_members used to name back_template_mimir — a hostname from whatever
+# template this file was copied out of, resolvable nowhere. Harmless, because
+# abort_if_cluster_join_fails is false, and permanent: ten retries at startup
+# and a warning in the log forever after, on a stack where the log is meant to
+# be worth reading. An empty list says the same thing without the search.
 memberlist:
   abort_if_cluster_join_fails: false
   bind_port: 7946
-  join_members:
-    - back_template_mimir:7946
+  join_members: []

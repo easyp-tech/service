@@ -42,9 +42,20 @@ services:
       - "./certs/edge.crt:/certs/edge.crt:ro"
       - "./certs/edge.key:/certs/edge.key:ro"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    # Loopback by default, like every other port in this file. It was not: this
+    # stack published postgres with a committed password, rustfs with
+    # rustfsadmin/rustfsadmin, the Alloy admin port and Grafana on all
+    # interfaces, while DEPLOYMENT.md stated that only traefik listens outside.
+    # That was true of docker-compose.dev.yml, where EASYP_BIND appears ten
+    # times, and false here, where it appeared none. Run it on a machine with a
+    # public address and one `docker compose up` hands out the database.
+    #
+    # Unlike the dev stack, traefik gets the same treatment: this one is a
+    # laptop stack with no public role, so there is nothing here that should
+    # answer a stranger.
     ports:
-      - "${EASYP_TRAEFIK_PORT:-4043}:80"
-      - "${EASYP_TRAEFIK_TLS_PORT:-4443}:443"
+      - "${EASYP_BIND:-127.0.0.1}:${EASYP_TRAEFIK_PORT:-4043}:80"
+      - "${EASYP_BIND:-127.0.0.1}:${EASYP_TRAEFIK_TLS_PORT:-4443}:443"
     networks:
       - easyp_network
 
@@ -58,8 +69,8 @@ services:
     volumes:
       - rustfs-data:/data
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "${EASYP_BIND:-127.0.0.1}:9000:9000"
+      - "${EASYP_BIND:-127.0.0.1}:9001:9001"
     labels:
       traefik.enable: "true"
       traefik.http.routers.rustfs.rule: "Host(`easyp.s3.localhost`)"
@@ -164,7 +175,7 @@ services:
       - "/etc/alloy/config.alloy"
       - "--storage.path=/var/lib/alloy/data"
     ports:
-      - "12345:12345"
+      - "${EASYP_BIND:-127.0.0.1}:12345:12345"
     networks:
       - easyp_network
 
@@ -200,8 +211,14 @@ services:
     environment:
       GF_PATHS_CONFIG: "/etc/grafana/grafana.ini"
       GF_PATHS_PROVISIONING: "/etc/grafana/provisioning"
+      # No GF_SECURITY_ADMIN_PASSWORD, unlike the observability overlay, which
+      # demands one through `${VAR:?}`. The difference is who can reach it:
+      # that stack puts Grafana on the internet, this one binds every port to
+      # loopback. admin/admin on a port only this machine can open is a
+      # convenience, not an exposure — but it is one only while the binding
+      # above holds, which is why the two facts are written next to each other.
     ports:
-      - "${EASYP_GRAFANA_PORT:-3000}:3000"
+      - "${EASYP_BIND:-127.0.0.1}:${EASYP_GRAFANA_PORT:-3000}:3000"
     labels:
       traefik.enable: "true"
       traefik.http.routers.grafana.rule: "Host(`easyp.grafana.localhost`)"
@@ -220,7 +237,7 @@ services:
       POSTGRES_USER: easyp_svc
       POSTGRES_PASSWORD: easyp_pass
     ports:
-      - "${EASYP_POSTGRES_PORT:-5432}:5432"
+      - "${EASYP_BIND:-127.0.0.1}:${EASYP_POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U easyp_svc -d easyp_db"]
       interval: 2s
@@ -302,9 +319,9 @@ services:
     # single party holding a client certificate. The remaining ports serve
     # plaintext diagnostics and stay local.
     ports:
-      - "${EASYP_METRICS_PORT:-8081}:8081"
-      - "${EASYP_HEALTH_PORT:-8082}:8082"
-      - "${EASYP_GATEWAY_PORT:-8083}:8083"
+      - "${EASYP_BIND:-127.0.0.1}:${EASYP_METRICS_PORT:-8081}:8081"
+      - "${EASYP_BIND:-127.0.0.1}:${EASYP_HEALTH_PORT:-8082}:8082"
+      - "${EASYP_BIND:-127.0.0.1}:${EASYP_GATEWAY_PORT:-8083}:8083"
     labels:
       service: easyp-api-service
       traefik.enable: "true"

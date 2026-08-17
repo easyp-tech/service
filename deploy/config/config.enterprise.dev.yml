@@ -17,11 +17,16 @@ server:
     metric: 8081
     health: 8082
     mcp: 8083
-  # The easyp_network subnet, pinned in docker-compose.dev.yml. Callers arriving
-  # through traefik all share its address, so without this the rate limit and the
-  # per-caller concurrency limit apply to everyone combined and the audit log
-  # names the proxy. Leave it empty only for a listener clients reach directly.
-  trusted_proxies: ["172.28.0.0/16"]
+  # Traefik's address, fixed in docker-compose.dev.yml. Callers arriving through
+  # it all share that address, so without this the rate limit and the per-caller
+  # concurrency limit apply to everyone combined and the audit log names the
+  # proxy.
+  #
+  # It used to be the whole 172.28.0.0/16 subnet, which trusted every container
+  # on the network to say truthfully who its caller was — one X-Forwarded-For
+  # header and you pick whose rate-limit bucket to spend and whose name goes in
+  # the audit log. Leave it empty only for a listener clients reach directly.
+  trusted_proxies: ["172.28.0.10/32"]
   tls:
     cert_file: "/certs/server.crt"
     key_file: "/certs/server.key"

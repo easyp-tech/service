@@ -52,7 +52,13 @@ services:
       - "80:80"
       - "443:443"
     networks:
-      - easyp_network
+      easyp_network:
+        # Fixed so that server.trusted_proxies can name traefik rather than the
+        # whole subnet. Trusting 172.28.0.0/16 meant trusting every container on
+        # it: any one of them could set X-Forwarded-For and with it choose whose
+        # rate-limit bucket to spend and whose name to write into the audit log.
+        # The subnet is already pinned above, so an address inside it is stable.
+        ipv4_address: 172.28.0.10
 
   postgres:
     image: postgres:17.7

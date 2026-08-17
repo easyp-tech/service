@@ -5,10 +5,18 @@ and in `deploy/observability/mimir/rules/anonymous/`. Each alert's `runbook_url`
 annotation points at the matching anchor here, so the heading text is
 load-bearing: renaming one breaks the link from the alert.
 
-Every procedure assumes `kubectl` against the namespace the release is installed
-in, and `$REL` as the release name — **except the host section at the end**,
-which is about the machine rather than the service and therefore only applies to
-the compose stack. Those procedures use `ssh` and `docker`.
+Most of what follows is environment-independent: configuration keys, PromQL, and
+what a number means. Where a procedure needs to read logs it is written twice,
+because the two deployments this service has are a Kubernetes release and a
+compose stack, and only one of them has ever run in anger:
+
+| | |
+|---|---|
+| Kubernetes | `kubectl` in the release's namespace, `$REL` as the release name |
+| compose | `ssh` to the host, `docker` against the container |
+
+The host section at the end is compose-only by nature — it is about the machine
+rather than the service, and on Kubernetes the cluster owns that ground.
 
 ---
 
@@ -21,9 +29,12 @@ of that, the tier drops to community: audit stops, workers cap at 4, plugin
 registration starts refusing past 10. All of it silent.
 
 1. Confirm what the service actually loaded, rather than what you think it has:
-   `kubectl logs deploy/$REL | grep -i licen`
+   `kubectl logs deploy/$REL | grep -i licen`, or
+   `docker logs easyp-api-enterprise 2>&1 | grep -i licen`
 2. Check `easyp_license_expiry_timestamp_seconds` against `time()`.
-3. Get a renewed token, put it in the secret as `LICENSE_KEY`, restart the pods.
+3. Get a renewed token, put it in the secret as `LICENSE_KEY` (on compose, in
+   `~/easyp/.env`), and restart — `kubectl rollout restart deploy/$REL`, or
+   `docker compose ... up -d --force-recreate service-enterprise`.
    The licence is read at startup.
 
 If the token is present but ignored, the usual cause is a missing or mismatched
@@ -105,8 +116,9 @@ Consequence: future partitions stop being created. Once the newest existing
 partition is passed, audit rows land in the default partition (see below), and
 if there is no default either, writes fail outright.
 
-1. `kubectl logs deploy/$REL | grep -i partition` — the failure is logged with
-   the reason.
+1. `kubectl logs deploy/$REL | grep -i partition`, or
+   `docker logs easyp-api-enterprise 2>&1 | grep -i partition` — the failure is
+   logged with the reason.
 2. Most often a permissions problem: the role needs to CREATE and DROP tables in
    the schema, not merely write rows.
 3. Check `easyp_audit_partition_maintenance_last_success_seconds` recovers after
@@ -189,9 +201,13 @@ The service recovered from a panic. It kept running — that is what the barrier
 for — but a recovered panic is still a bug, and the counter exists so that it is
 not silent.
 
-`kubectl logs deploy/$REL | grep -A30 panic` for the stack. The barrier's `name`
+`kubectl logs deploy/$REL | grep -A30 panic` for the stack, or
+`docker logs easyp-api-enterprise 2>&1 | grep -A30 panic`. The barrier's `name`
 label says which unit of work it was: `worker.process_job` for generation,
 `audit.flush` for the audit writer.
+
+The alert carries a `tier` label; on the compose stack it names the container,
+so read `easyp-api-community` from it when that is the one that panicked.
 
 ## EasypAuthFailures
 
