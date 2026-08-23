@@ -116,7 +116,10 @@ func (c *Client) GenerateCode(
 	return resp.GetCodeGeneratorResponse(), nil
 }
 
-// ListPlugins retrieves a list of available plugins, optionally filtered.
+// ListPlugins retrieves the complete list of available plugins, optionally
+// filtered. The server pages its listing; this walks every page before
+// returning, so the caller sees one list, not the first hundred entries. The
+// configured list timeout spans the whole walk.
 func (c *Client) ListPlugins(ctx context.Context, filter ...PluginFilter) ([]*generator.PluginInfo, error) {
 	ctx, cancel := c.withTimeout(ctx, c.cfg.listPluginsTimeout)
 	defer cancel()
@@ -135,16 +138,29 @@ func (c *Client) ListPlugins(ctx context.Context, filter ...PluginFilter) ([]*ge
 		req.Tags = append([]string(nil), filter[0].Tags...)
 	}
 
-	resp, err := c.genClient.Plugins(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("c.genClient.Plugins: %w", err)
+	var plugins []*generator.PluginInfo
+
+	for {
+		resp, err := c.genClient.Plugins(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("c.genClient.Plugins: %w", err)
+		}
+
+		plugins = append(plugins, resp.GetPlugins()...)
+
+		token := resp.GetNextPageToken()
+		if token == "" {
+			break
+		}
+
+		req.PageToken = &token
 	}
 
 	if len(filter) == 0 || filter[0].isEmpty() {
-		return resp.GetPlugins(), nil
+		return plugins, nil
 	}
 
-	return applyFilter(resp.GetPlugins(), filter[0]), nil
+	return applyFilter(plugins, filter[0]), nil
 }
 
 // CreatePlugin registers a new plugin in the service.

@@ -40,7 +40,7 @@ func (p *countingPinger) PingContext(context.Context) error {
 func TestWaitForDBReturnsImmediatelyWhenReachable(t *testing.T) {
 	t.Parallel()
 
-	p := &countingPinger{failures: 0} //nolint:exhaustruct // Zero value is the counter.
+	p := &countingPinger{failures: 0}
 
 	require.NoError(t, waitForDB(quiet(t), p))
 	require.Equal(t, int64(1), p.calls.Load(), "a reachable database must not be polled twice")
@@ -49,7 +49,7 @@ func TestWaitForDBReturnsImmediatelyWhenReachable(t *testing.T) {
 func TestWaitForDBRetriesUntilReachable(t *testing.T) {
 	t.Parallel()
 
-	p := &countingPinger{failures: 3} //nolint:exhaustruct // Zero value is the counter.
+	p := &countingPinger{failures: 3}
 
 	require.NoError(t, waitForDB(quiet(t), p))
 	require.Equal(t, int64(4), p.calls.Load())
@@ -65,7 +65,7 @@ func TestWaitForDBBacksOffInsteadOfSpinning(t *testing.T) {
 
 	const budget = 700 * time.Millisecond
 
-	p := &countingPinger{failures: 1 << 30} //nolint:exhaustruct // Never succeeds.
+	p := &countingPinger{failures: 1 << 30}
 
 	ctx, cancel := context.WithTimeout(quiet(t), budget)
 	defer cancel()
@@ -92,7 +92,7 @@ func TestWaitForDBBacksOffInsteadOfSpinning(t *testing.T) {
 func TestWaitForDBHonoursAlreadyCancelledContext(t *testing.T) {
 	t.Parallel()
 
-	p := &countingPinger{failures: 1 << 30} //nolint:exhaustruct // Never succeeds.
+	p := &countingPinger{failures: 1 << 30}
 
 	ctx, cancel := context.WithCancel(quiet(t))
 	cancel()

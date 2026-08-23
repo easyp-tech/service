@@ -23,7 +23,7 @@ var (
 )
 
 // CockroachSSL is a type for setting connection ssl mode to CockroachDB.
-type CockroachSSL uint8 //nolint:recvcheck // Mixed receivers are intended (pointer for Unmarshal, value for String)
+type CockroachSSL uint8
 
 var ErrUnknownMode = errors.New("unknown mode")
 

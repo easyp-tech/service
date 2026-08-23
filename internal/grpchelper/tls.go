@@ -38,7 +38,7 @@ func BuildServerCreds(cfg config.TLSConfig, log *slog.Logger) (credentials.Trans
 		return nil, fmt.Errorf("tls.LoadX509KeyPair: %w", err)
 	}
 
-	tlsCfg := &tls.Config{ //nolint:exhaustruct // the remaining fields keep their secure defaults
+	tlsCfg := &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS13,
 	}

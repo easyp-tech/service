@@ -7,9 +7,11 @@ package telemetry
 // connection is lazy, so an address nobody answers on is not an error but an
 // export retried forever, and a deployment that never asked for telemetry would
 // pay for it in log noise. The names of the variables these come from are
-// TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT and TELEMETRY_PYROSCOPE_ENDPOINT — the
-// section prefix is part of them, and the bare OTel SDK names are read by
-// nothing here.
+// TELEMETRY_OTLP_ENDPOINT and TELEMETRY_PYROSCOPE_ENDPOINT — the section
+// prefix is part of them. The one exception is the standard
+// OTEL_EXPORTER_OTLP_ENDPOINT, which internal/config reads as an alias of the
+// canonical name (see the envAliases table there); it usually carries a URL
+// with a scheme, which is why Init accepts both endpoint forms.
 type Config struct {
 	OTLPEndpoint      string
 	ServiceName       string

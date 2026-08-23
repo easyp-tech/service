@@ -36,9 +36,12 @@ the shape this takes:
 - `GenerateCode` is anonymous by necessity: it is the product. Anyone reaching
   the service can consume workers. The per-IP rate limiter (10 rps, burst 20)
   bounds accidental floods but is not a quota and not an identity.
-- The MCP endpoint on :8083 is plaintext HTTP with no authentication. It is
-  read-only — `internal/api/mcp_tools.go` exposes only `Plugins` — but it is a
-  surface, and it is not covered by the gRPC interceptor chain.
+- The MCP endpoint on :8083 is plaintext HTTP with no authentication, outside
+  the gRPC interceptor chain. It is read-only — `internal/api/mcp_tools.go`
+  exposes only `Plugins` — and, since v0.13.0, **off unless `mcp.enabled` is
+  set**: the surface exists only where a deployment decided it should.
+  easyp-tech's own deployments enable it behind their edge proxy; the Helm
+  chart ships it disabled.
 
 Identity beyond a shared token is deliberately out of scope; see
 [features/auth-roadmap.md](features/auth-roadmap.md).

@@ -80,7 +80,15 @@ generate:
       opts:
         paths: source_relative
         require_unimplemented_servers: false
-    - command: ["go", "run", "github.com/easyp-tech/protoc-gen-mcp/cmd/protoc-gen-mcp@v0.3.1"]
+    # The version here has to match the mcpruntime version in go.mod: the
+    # generated .mcp.go calls into that library, so generating with one
+    # version and linking another is how the two stop agreeing.
+    #
+    # KNOWN ISSUE: easyp's command executor currently feeds this plugin a
+    # request it answers with an empty response, so generate leaves .mcp.go
+    # stale without any error. Until that is fixed, regenerate it with:
+    #   go run -tags mcpgen ./test/mcpgen
+    - command: ["go", "run", "github.com/easyp-tech/protoc-gen-mcp/cmd/protoc-gen-mcp@v0.5.0"]
       out: .
       opts:
         paths: source_relative

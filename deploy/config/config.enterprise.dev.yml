@@ -70,5 +70,10 @@ rate_limit:
 
 # See config.community.dev.yml for why this is written down empty rather than
 # left out. Real digests arrive through AUTH_WRITE_TOKENS in deploy/.env.dev.
+# The MCP endpoint is opt-in (off by default): these are easyp-tech's own
+# deployments, where it sits behind the stack's edge and is meant to be open.
+mcp:
+  enabled: true
+
 auth:
   write_tokens: []

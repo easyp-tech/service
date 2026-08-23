@@ -12,14 +12,24 @@ type: application
 # that patched the Deployment's env block directly, or supplied a setting the
 # chart had no `config.*` key for, has to move: use `config.*`, or `extraEnv`
 # for a setting the chart does not model.
-version: 0.2.0
+#
+# 0.3.1 hashes the chart-managed secret into the pod template, the way the
+# ConfigMap already was. Found on the chart's first real install (kind): an
+# upgrade that only rotated AUTH_WRITE_TOKENS kept the old pod, and the new
+# token was rejected until a manual restart. Upgrading to this version rolls
+# the pod once even with unchanged values — the annotation is new.
+#
+# 0.3.1 also makes the MCP endpoint opt-in (`mcp.enabled`, off by default),
+# matching the service's own v0.13.0 default. Deployments that used :8083
+# must now say so.
+version: 0.3.1
 # appVersion tracks the service release this chart was validated against and is
 # the default image tag — so it has to be a tag that exists. It was "0.9.0",
 # and the registry publishes "v0.9.0": a default install pulled a tag that has
-# never existed and stopped at ImagePullBackOff. Nothing caught it because the
-# chart has never been installed anywhere; `helm template` renders a wrong tag
-# as happily as a right one.
-appVersion: "v0.12.0"
+# never existed and stopped at ImagePullBackOff; `helm template` renders a
+# wrong tag as happily as a right one. v0.13.0 is the release this chart ships
+# with — do not publish the chart before that tag exists.
+appVersion: "v0.13.0"
 
 home: https://github.com/easyp-tech/service
 sources:

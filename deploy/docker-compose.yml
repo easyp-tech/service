@@ -273,7 +273,7 @@ services:
         condition: service_started
       init-buckets:
         condition: service_completed_successfully
-    command: ["service", "start", "--cfg=/config.yml", "--log_level=debug"]
+    command: ["service", "start", "--cfg=/config.yml"]
     volumes:
       - "./config/config.yml:/config.yml:ro"
       # Server key pair and the CA that signs the certificates it accepts —
@@ -293,10 +293,12 @@ services:
     # telemetry section and so needs its prefix, and the service name is fixed in
     # the binary. Changing them looked like it did something and did not.
     environment:
+      # The level is a setting now, not a command-line argument, so it can be
+      # changed without editing this committed file: LOG_LEVEL=info docker compose up.
+      LOG_LEVEL: "${LOG_LEVEL:-debug}"
       # Issued by the licence registry (easyp-tech/licenses); passed in from the
       # shell. LICENSE_PUBLIC_KEYS is "<kid>:<hex>,<kid>:<hex>".
       LICENSE_KEY: "${LICENSE_KEY:-}"
-      LICENSE_PUBLIC_KEY: "${LICENSE_PUBLIC_KEY:-}"
       LICENSE_PUBLIC_KEYS: "${LICENSE_PUBLIC_KEYS:-}"
       # Digests of the credentials allowed to call the mutating RPCs, as
       # "ci=<64 hex>,me=<64 hex>". config.yml ships a publicly known one so the
@@ -306,7 +308,7 @@ services:
       # config.yml points at the postgres container with a demo password. Set
       # this to point the stack at a database whose credentials are not in git.
       DB_POSTGRES_DSN: "${DB_POSTGRES_DSN:-}"
-      TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT: "${TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+      TELEMETRY_OTLP_ENDPOINT: "${TELEMETRY_OTLP_ENDPOINT:-}"
       TELEMETRY_PYROSCOPE_ENDPOINT: "${TELEMETRY_PYROSCOPE_ENDPOINT:-}"
       # The stack's own object store is named in config.yml; these override it
       # for a deployment reading archives from somewhere else.
@@ -321,7 +323,7 @@ services:
     ports:
       - "${EASYP_BIND:-127.0.0.1}:${EASYP_METRICS_PORT:-8081}:8081"
       - "${EASYP_BIND:-127.0.0.1}:${EASYP_HEALTH_PORT:-8082}:8082"
-      - "${EASYP_BIND:-127.0.0.1}:${EASYP_GATEWAY_PORT:-8083}:8083"
+      - "${EASYP_BIND:-127.0.0.1}:${EASYP_MCP_PORT:-8083}:8083"
     labels:
       service: easyp-api-service
       traefik.enable: "true"

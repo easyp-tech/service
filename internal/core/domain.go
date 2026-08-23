@@ -102,8 +102,10 @@ type (
 		// The pluginName parameter specifies the plugin to retrieve (e.g., "protobuf/go:v1.36.9").
 		// Returns an error if the plugin is not found or cannot be loaded.
 		Get(ctx context.Context, pluginGroup, pluginName, pluginVersion string) (Plugin, error)
-		// List retrieves a list of plugins matching the filter.
-		List(ctx context.Context, filter PluginFilter) ([]PluginInfo, error)
+		// List retrieves plugins matching the filter, sorted by
+		// (group, name, version), at most page.Size of them, starting after
+		// page.After. Callers pass page.Size already normalised.
+		List(ctx context.Context, filter PluginFilter, page PluginPage) ([]PluginInfo, error)
 		// Create registers a new plugin in the registry.
 		Create(ctx context.Context, req CreatePluginRequest) (*PluginInfo, error)
 		// Update modifies config and tags of an existing plugin.
@@ -153,6 +155,35 @@ type (
 		Name    string
 		Version string
 		Tags    []string
+	}
+
+	// PluginKey identifies one plugin in the listing order. The listing sorts
+	// by (group, name, version) — the registry's uniqueness key — so a key
+	// names an exact position to resume from, and stays valid when rows are
+	// inserted or deleted around it, which an offset would not.
+	PluginKey struct {
+		Group   string
+		Name    string
+		Version string
+	}
+
+	// PluginPage bounds one page of a plugin listing.
+	PluginPage struct {
+		// Size is the number of entries the caller wants. Zero and anything
+		// above MaxPageSize are normalised by ListPlugins, not rejected: the
+		// caller cannot know the server's ceiling, so guessing too high should
+		// cost precision, not an error.
+		Size int
+		// After resumes the listing after this key; nil starts from the top.
+		After *PluginKey
+	}
+
+	// PluginList is one page of a plugin listing.
+	PluginList struct {
+		Plugins []PluginInfo
+		// Next resumes the listing where this page ended; nil means this page
+		// was the last one.
+		Next *PluginKey
 	}
 
 	// CreatePluginRequest represents a request to register a new plugin.
@@ -218,7 +249,7 @@ type (
 	// Service defines the business logic interface used by the API layer.
 	Service interface {
 		Generate(ctx context.Context, req GenerateCodeRequest) (*GenerateCodeResponse, error)
-		ListPlugins(ctx context.Context, filter PluginFilter) ([]PluginInfo, error)
+		ListPlugins(ctx context.Context, filter PluginFilter, page PluginPage) (PluginList, error)
 		CreatePlugin(ctx context.Context, req CreatePluginRequest) (*PluginInfo, error)
 		UpdatePlugin(ctx context.Context, req UpdatePluginRequest) (*PluginInfo, error)
 		DeletePlugin(ctx context.Context, group, name, version string) error

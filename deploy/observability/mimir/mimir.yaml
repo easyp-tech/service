@@ -21,17 +21,17 @@ common:
   storage:
     backend: s3
     s3:
-      endpoint: ${TELEMETRY_S3_ENDPOINT:-rustfs:9000}
-      access_key_id: ${TELEMETRY_S3_ACCESS_KEY_ID:-rustfsadmin}
-      secret_access_key: ${TELEMETRY_S3_SECRET_ACCESS_KEY:-rustfsadmin}
-      insecure: ${TELEMETRY_S3_INSECURE:-true}
-      bucket_name: ${TELEMETRY_BUCKET_PREFIX:-}mimir-blocks
+      endpoint: ${OBS_S3_ENDPOINT:-rustfs:9000}
+      access_key_id: ${OBS_S3_ACCESS_KEY_ID:-rustfsadmin}
+      secret_access_key: ${OBS_S3_SECRET_ACCESS_KEY:-rustfsadmin}
+      insecure: ${OBS_S3_INSECURE:-true}
+      bucket_name: ${OBS_BUCKET_PREFIX:-}mimir-blocks
 
 # Blocks Storage
 blocks_storage:
   backend: s3
   s3:
-    bucket_name: ${TELEMETRY_BUCKET_PREFIX:-}mimir-blocks
+    bucket_name: ${OBS_BUCKET_PREFIX:-}mimir-blocks
   tsdb:
     dir: /data/ingester
     block_ranges_period: [2h]
@@ -120,11 +120,11 @@ alertmanager:
 alertmanager_storage:
   backend: s3
   s3:
-    endpoint: ${TELEMETRY_S3_ENDPOINT:-rustfs:9000}
-    access_key_id: ${TELEMETRY_S3_ACCESS_KEY_ID:-rustfsadmin}
-    secret_access_key: ${TELEMETRY_S3_SECRET_ACCESS_KEY:-rustfsadmin}
-    insecure: ${TELEMETRY_S3_INSECURE:-true}
-    bucket_name: ${TELEMETRY_BUCKET_PREFIX:-}mimir-alertmanager
+    endpoint: ${OBS_S3_ENDPOINT:-rustfs:9000}
+    access_key_id: ${OBS_S3_ACCESS_KEY_ID:-rustfsadmin}
+    secret_access_key: ${OBS_S3_SECRET_ACCESS_KEY:-rustfsadmin}
+    insecure: ${OBS_S3_INSECURE:-true}
+    bucket_name: ${OBS_BUCKET_PREFIX:-}mimir-alertmanager
 
 # Limits
 limits:

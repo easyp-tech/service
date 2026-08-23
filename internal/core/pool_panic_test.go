@@ -37,11 +37,11 @@ func (r *flakyRegistry) Get(context.Context, string, string, string) (core.Plugi
 type stubPlugin struct{}
 
 func (stubPlugin) Generate(context.Context, *pluginpb.CodeGeneratorRequest) (*pluginpb.CodeGeneratorResponse, error) {
-	return &pluginpb.CodeGeneratorResponse{}, nil //nolint:exhaustruct // Empty response is enough.
+	return &pluginpb.CodeGeneratorResponse{}, nil
 }
 
 func (stubPlugin) Info(context.Context) *core.PluginInfo {
-	return &core.PluginInfo{Group: "g", Name: "n", Version: "v1.0.0"} //nolint:exhaustruct // Only the name is read.
+	return &core.PluginInfo{Group: "g", Name: "n", Version: "v1.0.0"}
 }
 
 type noMetrics struct{}
@@ -55,7 +55,7 @@ func (noMetrics) IncOperation(context.Context, string, string)                  
 func newPanicPool(t *testing.T, reg *prometheus.Registry, inner core.Registry) *core.WorkerPool {
 	t.Helper()
 
-	pool := core.NewWorkerPool(inner, core.WorkerPoolConfig{ //nolint:exhaustruct // Defaults fill the rest.
+	pool := core.NewWorkerPool(inner, core.WorkerPoolConfig{
 		Workers:                  1,
 		QueueSize:                4,
 		MaxConcurrentGenerations: 1,
@@ -75,7 +75,7 @@ func TestPanicInLookupDoesNotKillTheProcess(t *testing.T) {
 	t.Parallel()
 
 	reg := prometheus.NewRegistry()
-	inner := &flakyRegistry{} //nolint:exhaustruct // Counters start at zero.
+	inner := &flakyRegistry{}
 	inner.panicsLeft.Store(1)
 
 	pool := newPanicPool(t, reg, inner)
@@ -93,7 +93,7 @@ func TestPoolKeepsWorkingAfterAPanic(t *testing.T) {
 	t.Parallel()
 
 	reg := prometheus.NewRegistry()
-	inner := &flakyRegistry{} //nolint:exhaustruct // Counters start at zero.
+	inner := &flakyRegistry{}
 	inner.panicsLeft.Store(1)
 
 	pool := newPanicPool(t, reg, inner)
@@ -116,7 +116,7 @@ func TestPoolSurvivesRepeatedPanics(t *testing.T) {
 	t.Parallel()
 
 	reg := prometheus.NewRegistry()
-	inner := &flakyRegistry{} //nolint:exhaustruct // Counters start at zero.
+	inner := &flakyRegistry{}
 	inner.panicsLeft.Store(5)
 
 	pool := newPanicPool(t, reg, inner)
@@ -141,7 +141,7 @@ func TestPanicsAreCounted(t *testing.T) {
 	t.Parallel()
 
 	reg := prometheus.NewRegistry()
-	inner := &flakyRegistry{} //nolint:exhaustruct // Counters start at zero.
+	inner := &flakyRegistry{}
 	inner.panicsLeft.Store(3)
 
 	pool := newPanicPool(t, reg, inner)

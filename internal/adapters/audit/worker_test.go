@@ -304,6 +304,59 @@ func TestWorkerEnqueueTimeoutIsCounted(t *testing.T) {
 		"Send should give up at the timeout rather than block indefinitely")
 }
 
+// A zero timeout means "drop rather than wait", not "flip a coin".
+//
+// Send used to feed the zero straight into context.WithTimeout, whose Done
+// channel is closed from birth; with room in the queue both select cases were
+// ready at once and Go picked at random, dropping about half of all entries
+// under no pressure at all. The volume here is what makes that visible: a
+// single send would pass the old code half the time.
+func TestZeroEnqueueTimeoutQueuesWhenThereIsRoom(t *testing.T) {
+	t.Parallel()
+
+	cfg := testConfig()
+	cfg.EnqueueTimeout = 0
+	cfg.BufferSize = 1000
+
+	worker := NewWorker(newFakeStore(), cfg, discardLogger(), nil, "test")
+
+	ctx := t.Context()
+
+	const sends = 1000
+	for range sends {
+		worker.Send(ctx, entry(core.OperationGenerateCode))
+	}
+
+	assert.Len(t, worker.entries, sends,
+		"every entry should be queued: the queue had room, so a zero timeout has no reason to drop anything")
+	assert.Zero(t, lostValue(t, worker, reasonEnqueueTimeout),
+		"an entry the queue had room for must not be counted as lost")
+}
+
+func TestZeroEnqueueTimeoutDropsImmediatelyWhenFull(t *testing.T) {
+	t.Parallel()
+
+	cfg := testConfig()
+	cfg.EnqueueTimeout = 0
+	cfg.BufferSize = 1
+
+	worker := NewWorker(newFakeStore(), cfg, discardLogger(), nil, "test")
+
+	// Run is never started, so the one queue slot fills and the second send has
+	// nowhere to go.
+	ctx := t.Context()
+	worker.Send(ctx, entry(core.OperationGenerateCode))
+
+	start := time.Now()
+	worker.Send(ctx, entry(core.OperationGenerateCode))
+	waited := time.Since(start)
+
+	assert.Equal(t, 1, lostValue(t, worker, reasonEnqueueTimeout),
+		"an event dropped because the queue was full must be counted as lost")
+	assert.Less(t, waited, 100*time.Millisecond,
+		"a zero timeout means Send gives up without waiting")
+}
+
 // A cancelled caller must not cost the entry its place in the queue.
 //
 // Send used to select on the request context alongside the queue write. With

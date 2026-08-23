@@ -17,7 +17,7 @@ import (
 // It runs until failed or ctx.Done.
 func HTTP(log *slog.Logger, host string, port uint16, handler http.Handler) func(context.Context) error {
 	return func(ctx context.Context) error {
-		srv := &http.Server{ //nolint:gosec,exhaustruct
+		srv := &http.Server{ //nolint:gosec
 			Addr:    net.JoinHostPort(host, strconv.FormatUint(uint64(port), 10)),
 			Handler: handler,
 		}
@@ -60,7 +60,7 @@ func HandleMetrics(mux *http.ServeMux, reg *prometheus.Registry) {
 		reg,
 		promhttp.HandlerFor(
 			reg,
-			promhttp.HandlerOpts{}, //nolint:exhaustruct
+			promhttp.HandlerOpts{},
 		),
 	)
 	mux.Handle("/metrics", handler)

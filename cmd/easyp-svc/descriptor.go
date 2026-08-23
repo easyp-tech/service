@@ -32,7 +32,7 @@ func runAPIDescriptor(outPath string) error {
 		return fmt.Errorf("protoregistry.FindFileByPath: %w", err)
 	}
 
-	set := &descriptorpb.FileDescriptorSet{} //nolint:exhaustruct // only File is meaningful
+	set := &descriptorpb.FileDescriptorSet{}
 	collectFileDescriptors(root, set, make(map[string]struct{}))
 
 	data, err := proto.Marshal(set)

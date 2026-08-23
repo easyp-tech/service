@@ -81,8 +81,7 @@ func (p *TracingPlugin) Generate(ctx context.Context, req *pluginpb.CodeGenerato
 		processSpan.RecordError(err)
 		processSpan.SetStatus(codes.Error, err.Error())
 
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 			processSpan.SetAttributes(attribute.Int("process.exit_code", exitErr.ExitCode()))
 		}
 	}

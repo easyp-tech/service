@@ -49,16 +49,16 @@ func (c *TracingCore) Generate(ctx context.Context, req core.GenerateCodeRequest
 
 // ListPlugins creates a span "core.ListPlugins",
 // proxies the call to the inner service, and on error sets span status to Error with RecordError.
-func (c *TracingCore) ListPlugins(ctx context.Context, filter core.PluginFilter) ([]core.PluginInfo, error) {
+func (c *TracingCore) ListPlugins(ctx context.Context, filter core.PluginFilter, page core.PluginPage) (core.PluginList, error) {
 	ctx, span := c.tracer.Start(ctx, "core.ListPlugins")
 	defer span.End()
 
-	result, err := c.inner.ListPlugins(ctx, filter)
+	result, err := c.inner.ListPlugins(ctx, filter, page)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 
-		return nil, err
+		return core.PluginList{}, err
 	}
 
 	return result, nil

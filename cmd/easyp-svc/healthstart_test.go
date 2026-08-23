@@ -36,7 +36,7 @@ func freePort(t *testing.T) string {
 func healthConfig(t *testing.T) config.Config {
 	t.Helper()
 
-	cfg := config.Config{} //nolint:exhaustruct // only the fields the health server reads
+	cfg := config.Config{}
 	cfg.Server.Host = "127.0.0.1"
 	cfg.Server.Port.Health = freePort(t)
 

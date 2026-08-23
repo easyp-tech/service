@@ -6,9 +6,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"net/netip"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +31,21 @@ type Config struct {
 	RateLimit  RateLimitConfig  `env:", prefix=RATE_LIMIT_"  yaml:"rate_limit"`
 	Audit      AuditConfig      `env:", prefix=AUDIT_"       yaml:"audit"`
 	Auth       AuthConfig       `env:", prefix=AUTH_"        yaml:"auth"`
+	MCP        MCPConfig        `env:", prefix=MCP_"         yaml:"mcp"`
+	Log        LogConfig        `env:", prefix=LOG_"         yaml:"log"`
+}
+
+// MCPConfig configures the MCP endpoint — the HTTP surface AI tooling uses to
+// read the plugin catalog and the easyp.yaml schema.
+//
+// Off by default because the endpoint sits outside the gRPC interceptor chain:
+// no TLS, no rate limit, no audit. It exposes nothing the anonymous gRPC reads
+// do not, so turning it on inside a trusted network or behind an ingress that
+// terminates TLS is a one-line, low-stakes decision — but it should be a
+// decision, not a port that was open before anyone asked.
+type MCPConfig struct {
+	// Enabled starts the MCP HTTP listener on server.port.mcp.
+	Enabled bool `env:"ENABLED,default=false" yaml:"enabled"`
 }
 
 // Server holds HTTP/gRPC server settings.
@@ -124,14 +143,28 @@ type Ports struct {
 	MCP    string `env:"MCP, default=23413"    yaml:"mcp"`
 }
 
+// LogConfig holds the logging settings.
+//
+// The level was a command-line flag and nothing else: no YAML key, no variable,
+// and absent from `config print`, which claims to show the configuration the
+// service will run with. It is also the setting an operator reaches for most
+// often, and the one they most often want to change without editing a committed
+// docker-compose.yml.
+//
+// The default is info. The flag's default was debug, which on this service means
+// full request tracing over other people's source code — the loudest possible
+// setting, chosen by anyone who said nothing.
+type LogConfig struct {
+	Level string `env:"LEVEL,default=info" yaml:"level"`
+}
+
 // DBConfig holds database connection settings.
 //
 // The DSN carries the database password, so it is marked secret: `config print`
 // redacts it, and anything else that reports the configuration back to a human
 // has one place to ask rather than a list to remember.
 type DBConfig struct {
-	Driver   string `env:"DRIVER, default=postgres" yaml:"driver"`
-	Postgres string `env:"POSTGRES_DSN"             secret:"true" yaml:"postgres"`
+	Postgres string `env:"POSTGRES_DSN" secret:"true" yaml:"postgres"`
 }
 
 // RegistryConfig configures plugin execution.
@@ -187,11 +220,18 @@ func (c S3Config) Enabled() bool {
 // time.
 //
 // Note the full variable names: the section prefix is part of them, so these are
-// TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT, TELEMETRY_PYROSCOPE_ENDPOINT and
-// TELEMETRY_SERVICE_TIER. The bare OTel SDK name is read by nothing here.
+// TELEMETRY_OTLP_ENDPOINT, TELEMETRY_PYROSCOPE_ENDPOINT and
+// TELEMETRY_SERVICE_TIER.
+//
+// The endpoint was called TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT until v0.13.0, a
+// name that looked like the OpenTelemetry SDK variable without being it, and
+// that the repository carried four separate comments to warn about. It is now
+// named after its own key, and the real OTEL_EXPORTER_OTLP_ENDPOINT is read as
+// an alternative — see envAliases — so an operator who knows OTel gets it right
+// on the first try instead of getting a service with no traces and no error.
 type TelemetryConfig struct {
-	OTLPEndpoint      string `env:"OTEL_EXPORTER_OTLP_ENDPOINT" yaml:"otlp_endpoint"`
-	PyroscopeEndpoint string `env:"PYROSCOPE_ENDPOINT"          yaml:"pyroscope_endpoint"`
+	OTLPEndpoint      string `env:"OTLP_ENDPOINT"      yaml:"otlp_endpoint"`
+	PyroscopeEndpoint string `env:"PYROSCOPE_ENDPOINT" yaml:"pyroscope_endpoint"`
 
 	// ServiceTier tags traces and profiles with the licence tier this
 	// deployment serves, for stacks that run community and enterprise side by
@@ -241,18 +281,19 @@ type LicenseConfig struct {
 	// File is a path to a file holding the token.
 	File string `env:"FILE" yaml:"file"`
 
-	// PublicKey is the hex-encoded Ed25519 key that licence tokens are verified
-	// against, for installations that trust a single key. Note that this makes
-	// the trust anchor configuration rather than a property of the build:
-	// whoever can edit this file — or set LICENSE_PUBLIC_KEY — decides which
-	// authority may issue licences.
-	//
-	// It applies to any token whose key id names nothing in PublicKeys.
-	PublicKey string `env:"PUBLIC_KEY" yaml:"public_key"`
-
 	// PublicKeys maps key id to hex-encoded Ed25519 public key. The key id in
 	// the token footer selects one of these, which is what lets a signing key be
 	// rotated without every deployment having to change key on the same day.
+	//
+	// Note that this makes the trust anchor configuration rather than a property
+	// of the build: whoever can edit this file — or set LICENSE_PUBLIC_KEYS —
+	// decides which authority may issue licences.
+	//
+	// The key id "*" is reserved and means "verify any token this map does not
+	// otherwise cover", including one whose footer carries no usable key id.
+	// That was a second setting, license.public_key, until v0.13.0: one trust
+	// anchor described by two fields, spelled three ways across the YAML, the
+	// environment and the chart's values, and already diverging between them.
 	//
 	// Through the environment: LICENSE_PUBLIC_KEYS="<kid>:<hex>,<kid>:<hex>".
 	PublicKeys map[string]string `env:"PUBLIC_KEYS" yaml:"public_keys"`
@@ -277,6 +318,9 @@ func (c LicenseConfig) Validate() error {
 			return fmt.Errorf("license.public_keys: key id must not be empty")
 		}
 
+		// The separators of the environment encoding, "<kid>:<hex>,<kid>:<hex>":
+		// a key id containing either would be unreadable from that layer while
+		// working from the file.
 		if strings.ContainsAny(kid, ",:") {
 			return fmt.Errorf("license.public_keys: key id %q must not contain ',' or ':'", kid)
 		}
@@ -284,10 +328,6 @@ func (c LicenseConfig) Validate() error {
 		if err := validateHexKey(fmt.Sprintf("license.public_keys[%s]", kid), hexKey); err != nil {
 			return err
 		}
-	}
-
-	if c.PublicKey != "" {
-		return validateHexKey("license.public_key", c.PublicKey)
 	}
 
 	return nil
@@ -360,14 +400,25 @@ func (c *Config) Validate() error {
 	// The remaining ports are parsed long after startup begins — metric and mcp
 	// only once the listeners are built — so an empty one would fail after the
 	// migrations had run rather than before anything happened.
-	for name, port := range map[string]string{
-		"server.port.metric": c.Server.Port.Metric,
-		"server.port.health": c.Server.Port.Health,
-		"server.port.mcp":    c.Server.Port.MCP,
+	//
+	// Iterated in a fixed order rather than over the map directly: Go randomises
+	// map iteration, so a config with two empty ports would report a different
+	// one on each run and a test pinning the message would flake.
+	for _, port := range []struct {
+		name  string
+		value string
+	}{
+		{"server.port.metric", c.Server.Port.Metric},
+		{"server.port.health", c.Server.Port.Health},
+		{"server.port.mcp", c.Server.Port.MCP},
 	} {
-		if port == "" {
-			return fmt.Errorf("%s is required", name)
+		if port.value == "" {
+			return fmt.Errorf("%s is required", port.name)
 		}
+	}
+
+	if err := c.validatePorts(); err != nil {
+		return err
 	}
 
 	// A certificate without its key (or the reverse) is a half-applied change
@@ -413,16 +464,15 @@ func (c *Config) Validate() error {
 		)
 	}
 
-	if c.DB.Driver == "" {
-		return fmt.Errorf("db.driver is required")
-	}
-
 	// Checked because an empty DSN is not refused by the driver: lib/pq falls
 	// back to the libpq defaults, so on a host with PGHOST and PGDATABASE set the
-	// service connects somewhere plausible and runs its migrations there. The
-	// driver above has a default and is nearly always right; this has neither.
+	// service connects somewhere plausible and runs its migrations there.
 	if c.DB.Postgres == "" {
 		return fmt.Errorf("db.postgres is required: an empty DSN silently falls back to the libpq environment")
+	}
+
+	if err := validateDSN(c.DB.Postgres); err != nil {
+		return err
 	}
 
 	if c.WorkerPool.Workers <= 0 {
@@ -543,7 +593,23 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	return nil
+	if err := c.validateS3Completeness(); err != nil {
+		return err
+	}
+
+	if err := c.validateCacheSize(); err != nil {
+		return err
+	}
+
+	if err := c.validateTelemetry(); err != nil {
+		return err
+	}
+
+	if err := c.validateLogLevel(); err != nil {
+		return err
+	}
+
+	return c.validateRuntimeZeros()
 }
 
 // maxConfigFileSize bounds the config file. A YAML larger than this is not a
@@ -551,9 +617,36 @@ func (c *Config) Validate() error {
 // would surface as a parse error somewhere in the middle of the file.
 const maxConfigFileSize = 1 << 20
 
-// LoadAndValidate builds the configuration from a YAML file, the environment and
-// the defaults in the `env` struct tags, and validates the result. It returns the
-// config, warnings about unknown YAML fields, and any error.
+// Result is everything one attempt at resolving a configuration produced: the
+// settings themselves, where each of them came from, and what was wrong with the
+// input.
+//
+// It is a struct rather than four return values because the callers that need
+// the diagnostics are exactly the ones that used to drop them. With `_` in the
+// third position, `config print` and `plugins push` each silently discarded the
+// warnings they existed to surface; with a field, ignoring it has to be written
+// down on purpose.
+type Result struct {
+	// Config is the resolved configuration. It is set even when the load
+	// failed, so that `config print` can show the operator what the file would
+	// have produced alongside the reason it will not start.
+	Config *Config
+
+	// Origins says which layer supplied each setting.
+	Origins Origins
+
+	// Diagnostics is everything wrong with the input, fatal or not.
+	Diagnostics Diagnostics
+
+	// EnvAliases maps a setting's canonical environment variable to the
+	// alternative name that actually supplied its value, for the settings where
+	// one did. `config print --origin` reports the name that was read, not the
+	// name it stands for.
+	EnvAliases map[string]string
+}
+
+// Load builds the configuration from a YAML file, the environment and the
+// defaults in the `env` struct tags, and validates the result.
 //
 // Precedence, highest first:
 //
@@ -575,19 +668,55 @@ const maxConfigFileSize = 1 << 20
 // and fills each from the tag, so "cache_max_bytes: 0", written down to disable
 // eviction, came back as 20 GiB. The document still knows the difference, so the
 // decision is made there: see mergeFileValues.
-func LoadAndValidate(ctx context.Context, path string) (*Config, []string, error) {
-	cfg, warnings, _, err := loadAndValidate(ctx, path, environmentLookuper())
+//
+// An unrecognised key is an error, not a warning. A configuration that starts
+// on defaults after ignoring what the operator wrote is indistinguishable from
+// one that was obeyed, and the three spellings this project carries — YAML
+// snake_case, environment UPPER_SNAKE, Helm camelCase — guarantee the mistake
+// will be made.
+func Load(ctx context.Context, path string) (Result, error) {
+	lookuper := newAliasLookuper(environmentLookuper())
 
-	return cfg, warnings, err
+	res, err := load(ctx, path, lookuper)
+
+	return withEnvironmentFindings(res, lookuper, err)
 }
 
-// LoadAndValidateWithOrigins is LoadAndValidate, and also reports where each
-// setting's value came from. `config print --origin` is the reason it exists:
-// with three layers and a validation failure to explain, "which of them supplied
-// this" is the question, and recomputing the answer outside the loader would
-// mean two implementations of it that could disagree.
-func LoadAndValidateWithOrigins(ctx context.Context, path string) (*Config, []string, Origins, error) {
-	return loadAndValidate(ctx, path, environmentLookuper())
+// LoadFromEnv builds the configuration from the environment and the tag defaults
+// alone, which is the shape every Helm deployment had before the chart began
+// rendering a file, and still the shape of `config print` with no --cfg.
+//
+// It exists so that this path is not a second, diagnostics-blind loader: a
+// mistyped variable has to be reported here too, and it was not reportable at
+// all while the environment-only path was a bare call to ApplyEnv.
+func LoadFromEnv(ctx context.Context) (Result, error) {
+	lookuper := newAliasLookuper(environmentLookuper())
+
+	res, err := loadFromEnv(ctx, lookuper)
+
+	return withEnvironmentFindings(res, lookuper, err)
+}
+
+// withEnvironmentFindings adds what only the real process environment can say:
+// which alternative variable names were read, and which variables were aimed at
+// this service and matched nothing.
+//
+// Kept out of load and loadFromEnv because those take an injected lookuper, and
+// a test that hands them a map has no environment to scan. UnknownEnv is
+// exported and tested directly on an environ slice instead.
+func withEnvironmentFindings(res Result, lookuper *aliasLookuper, err error) (Result, error) {
+	res.EnvAliases = lookuper.used
+
+	// Warnings, so they never turn a working configuration into a failure; they
+	// are appended after the fatal check for that reason.
+	unknown, envErr := UnknownEnv(os.Environ())
+	if envErr != nil {
+		return res, envErr
+	}
+
+	res.Diagnostics = append(res.Diagnostics, unknown...)
+
+	return res, err
 }
 
 // Origin says which layer supplied a setting's value.
@@ -620,14 +749,9 @@ func (o Origin) String() string {
 // Origins maps a setting's dotted YAML name to the layer that supplied it.
 type Origins map[string]Origin
 
-// EnvironmentOrigins reports where each setting comes from when the service is
-// started without a config file, which is the shape every Helm deployment has.
-// There is no file layer there, so every setting is either an environment
-// variable or a default.
-func EnvironmentOrigins() (Origins, error) {
-	return environmentOrigins(environmentLookuper())
-}
-
+// environmentOrigins reports where each setting comes from when the service is
+// started without a config file. There is no file layer there, so every setting
+// is either an environment variable or a default.
 func environmentOrigins(lookuper envconfig.Lookuper) (Origins, error) {
 	leaves, err := Leaves()
 	if err != nil {
@@ -724,75 +848,236 @@ func documentHasKey(doc map[string]any, path []string) bool {
 	return false
 }
 
-// loadAndValidate is LoadAndValidate with the environment injected, so that a
-// test can pin what the file resolves to instead of inheriting whatever the
-// shell that started it happened to export.
-func loadAndValidate(
-	ctx context.Context,
-	path string,
-	lookuper envconfig.Lookuper,
-) (*Config, []string, Origins, error) {
+// load is Load with the environment injected, so that a test can pin what the
+// file resolves to instead of inheriting whatever the shell that started it
+// happened to export.
+func load(ctx context.Context, path string, lookuper envconfig.Lookuper) (Result, error) {
+	var res Result
+
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("reading config file %s: %w", path, err)
+		return res, fmt.Errorf("reading config file %s: %w", path, err)
 	}
 
 	if int64(len(data)) > maxConfigFileSize {
-		return nil, nil, nil, fmt.Errorf("config file %s is %d bytes, over the %d byte limit",
+		return res, fmt.Errorf("config file %s is %d bytes, over the %d byte limit",
 			path, len(data), maxConfigFileSize)
 	}
 
-	// First pass: strict parsing to detect unknown fields.
-	var warnings []string
-
-	strictDec := yaml.NewDecoder(bytes.NewReader(data))
-	strictDec.KnownFields(true)
-
-	var strictCfg Config
-
-	if strictErr := strictDec.Decode(&strictCfg); strictErr != nil {
-		// If it's a type error about unknown fields, collect as warnings and re-parse leniently.
-		warnings = append(warnings, strictErr.Error())
+	root, diags, err := parseDocument(data)
+	if err != nil {
+		return res, err
 	}
 
-	// Second pass: lenient parsing to get the actual config.
-	lenientDec := yaml.NewDecoder(bytes.NewReader(data))
-
-	var fromFile Config
-	if err = lenientDec.Decode(&fromFile); err != nil {
-		return nil, warnings, nil, fmt.Errorf("parsing config YAML: %w", err)
+	fromFile, doc, decodeDiags, err := decodeDocument(root)
+	if err != nil {
+		return res, err
 	}
 
-	// Third pass, over the document rather than the struct: which keys the file
-	// actually names. The struct cannot answer that — see mergeFileValues.
-	//
-	// A document that is not a mapping (an empty file, say) names nothing, which
-	// leaves every setting to the environment and the defaults.
-	var doc map[string]any
+	diags = append(diags, decodeDiags...)
 
-	if err = yaml.Unmarshal(data, &doc); err != nil {
-		return nil, warnings, nil, fmt.Errorf("parsing config YAML: %w", err)
+	docDiags, err := documentDiagnostics(root)
+	if err != nil {
+		return res, err
 	}
+
+	diags = append(diags, docDiags...)
+	res.Diagnostics = diags
 
 	// Started from zero rather than from the file: envconfig applies a tag
 	// default only to a field that is still zero, so filling it first would let
 	// the file suppress the very defaults the merge needs to fall back on.
-	cfg := Config{} //nolint:exhaustruct // filled from the environment and the tag defaults
+	cfg := Config{}
 
 	if err = applyEnv(ctx, &cfg, lookuper); err != nil {
-		return nil, warnings, nil, err
+		return res, err
 	}
 
 	origins, err := mergeFileValues(&cfg, fromFile, doc, lookuper)
 	if err != nil {
-		return nil, warnings, nil, err
+		return res, err
+	}
+
+	res.Config = &cfg
+	res.Origins = origins
+
+	if err = res.Diagnostics.Err(); err != nil {
+		return res, fmt.Errorf("config file %s: %w", path, err)
 	}
 
 	if err = cfg.Validate(); err != nil {
-		return &cfg, warnings, origins, fmt.Errorf("config validation: %w", err)
+		return res, fmt.Errorf("config validation: %w", err)
 	}
 
-	return &cfg, warnings, origins, nil
+	return res, nil
+}
+
+// loadFromEnv is LoadFromEnv with the environment injected.
+func loadFromEnv(ctx context.Context, lookuper envconfig.Lookuper) (Result, error) {
+	var res Result
+
+	cfg := Config{}
+
+	if err := applyEnv(ctx, &cfg, lookuper); err != nil {
+		return res, err
+	}
+
+	origins, err := environmentOrigins(lookuper)
+	if err != nil {
+		return res, err
+	}
+
+	res.Config = &cfg
+	res.Origins = origins
+
+	if err = res.Diagnostics.Err(); err != nil {
+		return res, err
+	}
+
+	if err = cfg.Validate(); err != nil {
+		return res, fmt.Errorf("config validation: %w", err)
+	}
+
+	return res, nil
+}
+
+// parseDocument parses the file into a node tree, which is what carries the line
+// number of every key, and reports a second YAML document if the file has one.
+//
+// A syntax error is fatal and is returned as an error: there is no document to
+// diagnose, so there is nothing more useful to say than what the parser said.
+func parseDocument(data []byte) (*yaml.Node, Diagnostics, error) {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+
+	var root yaml.Node
+
+	err := dec.Decode(&root)
+
+	switch {
+	case errors.Is(err, io.EOF):
+		// An empty file is a valid configuration: it names nothing, so every
+		// setting comes from the environment and the defaults. This used to be
+		// reported as "unrecognised field, ignored: EOF".
+		return nil, nil, nil
+	case err != nil:
+		return nil, nil, fmt.Errorf("parsing config YAML: %w", err)
+	}
+
+	var diags Diagnostics
+
+	// yaml.Unmarshal reads the first document and drops the rest without a
+	// word, so a file whose second half is separated by a --- is half applied.
+	// A second document that fails to parse is still a second document — the
+	// settings after the --- would vanish all the same, so it gets the same
+	// diagnostic rather than a silent pass.
+	var extra yaml.Node
+	if extraErr := dec.Decode(&extra); hasSecondDocument(&extra, extraErr) {
+		diags = append(diags, Diagnostic{
+			Severity: SeverityError,
+			Source:   "file",
+			Line:     extra.Line,
+			Message:  "the file holds more than one YAML document; only the first one would be read",
+		})
+	}
+
+	return &root, diags, nil
+}
+
+// hasSecondDocument reports whether anything follows the first YAML document.
+//
+// Three outcomes have to be told apart, and only the first is harmless:
+//
+//   - io.EOF, or a document holding nothing: the file simply ended. A file that
+//     ends in "---" parses as a second document containing a null scalar, which
+//     drops nothing and is ordinary punctuation.
+//   - any other parse error: there is more in the file and it does not parse.
+//     Still a second document, and still silently dropped.
+//   - a document with real content: the half of the file nobody would notice
+//     was ignored.
+func hasSecondDocument(doc *yaml.Node, err error) bool {
+	if errors.Is(err, io.EOF) {
+		return false
+	}
+
+	if err != nil {
+		return true
+	}
+
+	if doc == nil || len(doc.Content) == 0 {
+		return false
+	}
+
+	root := doc.Content[0]
+
+	return root.Kind != yaml.ScalarNode || root.Tag != "!!null"
+}
+
+// decodeDocument turns the node tree into a Config and into the plain map that
+// mergeFileValues consults for which keys the file actually names.
+//
+// A type error is reported per offending key rather than as one blob, and
+// without the word "ignored": nothing is ignored, the configuration is refused.
+func decodeDocument(root *yaml.Node) (Config, map[string]any, Diagnostics, error) {
+	var fromFile Config
+
+	if root == nil || len(root.Content) == 0 {
+		return fromFile, nil, nil, nil
+	}
+
+	var diags Diagnostics
+
+	if err := root.Decode(&fromFile); err != nil {
+		var typeErr *yaml.TypeError
+		if !errors.As(err, &typeErr) {
+			return fromFile, nil, nil, fmt.Errorf("parsing config YAML: %w", err)
+		}
+
+		diags = append(diags, typeErrorDiagnostics(typeErr)...)
+	}
+
+	// A document that is not a mapping names no keys, which leaves every
+	// setting to the environment and the defaults. The type errors above have
+	// already said what is wrong with it.
+	var doc map[string]any
+
+	if resolveAlias(root.Content[0]).Kind == yaml.MappingNode {
+		if err := root.Decode(&doc); err != nil {
+			var typeErr *yaml.TypeError
+			if !errors.As(err, &typeErr) {
+				return fromFile, nil, nil, fmt.Errorf("parsing config YAML: %w", err)
+			}
+		}
+	}
+
+	return fromFile, doc, diags, nil
+}
+
+// yamlErrorLine matches the "line N: " prefix yaml.v3 puts on each entry of a
+// TypeError, so the number becomes a field rather than staying buried in prose.
+var yamlErrorLine = regexp.MustCompile(`^line (\d+): `) //nolint:gochecknoglobals // compiled once
+
+func typeErrorDiagnostics(typeErr *yaml.TypeError) Diagnostics {
+	diags := make(Diagnostics, 0, len(typeErr.Errors))
+
+	for _, message := range typeErr.Errors {
+		diag := Diagnostic{
+			Severity: SeverityError,
+			Source:   "file",
+			Message:  message,
+		}
+
+		if match := yamlErrorLine.FindStringSubmatch(message); match != nil {
+			line, err := strconv.Atoi(match[1])
+			if err == nil {
+				diag.Line = line
+				diag.Message = strings.TrimPrefix(message, match[0])
+			}
+		}
+
+		diags = append(diags, diag)
+	}
+
+	return diags
 }
 
 // Defaults returns a Config holding nothing but the defaults in the `env`
@@ -803,7 +1088,7 @@ func loadAndValidate(
 // made hard: which of these hundred lines actually says something. A field with
 // no default comes back as its zero value, which is the same answer.
 func Defaults(ctx context.Context) (*Config, error) {
-	cfg := Config{} //nolint:exhaustruct // filled from the tag defaults below
+	cfg := Config{}
 
 	err := applyEnv(ctx, &cfg, envconfig.MapLookuper(map[string]string{}))
 	if err != nil {
@@ -853,7 +1138,7 @@ func (l emptyIsUnset) Lookup(key string) (string, bool) {
 }
 
 func applyEnv(ctx context.Context, cfg *Config, lookuper envconfig.Lookuper) error {
-	err := envconfig.ProcessWith(ctx, &envconfig.Config{ //nolint:exhaustruct // the rest of the defaults are right
+	err := envconfig.ProcessWith(ctx, &envconfig.Config{
 		Target:   cfg,
 		Lookuper: lookuper,
 		// Without this envconfig leaves any field the file already filled and

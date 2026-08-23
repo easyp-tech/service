@@ -8,7 +8,11 @@ run:
 linters:
   default: all
   disable:
+    # Old and new names of the same disabled linter, like wsl/wsl_v5 below:
+    # `default: all` enables whichever spelling the installed version ships,
+    # so both have to be named or an upgrade silently re-enables it.
     - exhaustruct
+    - exhaustruct_v5
     - wsl
     - wsl_v5
     # Deprecated since golangci-lint v2.12.0 and replaced by gomodguard_v2,
@@ -74,7 +78,6 @@ linters:
       - linters:
           - dupl
           - errcheck
-          - exhaustruct
           - funlen
           - gochecknoglobals
           - gocyclo

@@ -171,13 +171,23 @@ func TestMonthlyPartitionsExcludesDefault(t *testing.T) {
 func TestPartitionConfigSetDefault(t *testing.T) {
 	t.Parallel()
 
-	// The YAML config path bypasses envconfig defaults, so a missing audit
-	// block arrives as all-zero. A zero Interval would panic time.NewTicker.
+	// This guards a PartitionConfig built directly rather than loaded: the
+	// loader now applies the struct-tag defaults on the file path too, so an
+	// omitted audit block no longer arrives as all-zero. What remains here is
+	// the safety net for a zero Interval, which would panic time.NewTicker from
+	// a background goroutine after startup had reported success.
 	cfg := PartitionConfig{}
 	cfg.setDefault()
 
-	assert.Equal(t, defaultPreCreateMonths, cfg.PreCreateMonths)
 	assert.Equal(t, defaultCheckInterval, cfg.Interval)
 	assert.Equal(t, defaultOperationTimeout, cfg.OperationTimeout)
 	assert.Zero(t, cfg.RetentionMonths, "zero retention means keep everything and must survive defaulting")
+	// Zero pre-creation is a setting — create no partitions ahead — and the
+	// loader carries it through from a file that says so. Substituting 3 here
+	// would make `config print` report a value the service does not use.
+	assert.Zero(t, cfg.PreCreateMonths, "an explicit zero must not be replaced")
+
+	negative := PartitionConfig{PreCreateMonths: -1}
+	negative.setDefault()
+	assert.Equal(t, defaultPreCreateMonths, negative.PreCreateMonths, "a negative count is not a setting")
 }

@@ -44,7 +44,8 @@ func TestShippedConfigsAreValid(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			cfg, warnings, err := config.LoadAndValidateWith(t.Context(), shippedPath(name), noEnv())
+			res, err := config.LoadWith(t.Context(), shippedPath(name), noEnv())
+			cfg, warnings := res.Config, res.Diagnostics
 			require.NoError(t, err)
 			require.NotNil(t, cfg)
 			require.Empty(t, warnings, "unknown fields in a shipped config are settings that do nothing")
@@ -65,7 +66,8 @@ func TestShippedConfigsHaveNoWriteTokensOnPublicStacks(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			cfg, _, err := config.LoadAndValidateWith(t.Context(), shippedPath(name), noEnv())
+			res, err := config.LoadWith(t.Context(), shippedPath(name), noEnv())
+			cfg := res.Config
 			require.NoError(t, err)
 			require.Empty(t, cfg.Auth.WriteTokens,
 				"a publicly reachable stack must not ship a credential in a committed file")
@@ -87,7 +89,8 @@ func TestShippedConfigsTrustTheProxy(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			cfg, _, err := config.LoadAndValidateWith(t.Context(), shippedPath(name), noEnv())
+			res, err := config.LoadWith(t.Context(), shippedPath(name), noEnv())
+			cfg := res.Config
 			require.NoError(t, err)
 			require.NotEmpty(t, cfg.Server.TrustedProxies,
 				"this stack is reached through traefik, so the proxy range has to be trusted")
@@ -155,7 +158,7 @@ func TestPrecedence(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			cfg := config.Config{} //nolint:exhaustruct // one field under test
+			cfg := config.Config{}
 			cfg.Registry.S3.Region = tc.inFile
 
 			require.NoError(t, config.ApplyEnvWith(t.Context(), &cfg, envconfig.MapLookuper(tc.inEnv)))
@@ -174,7 +177,7 @@ func TestPrecedence(t *testing.T) {
 func TestTelemetryHasNoDefault(t *testing.T) {
 	t.Parallel()
 
-	cfg := config.Config{} //nolint:exhaustruct // telemetry under test
+	cfg := config.Config{}
 
 	require.NoError(t, config.ApplyEnvWith(t.Context(), &cfg, envconfig.MapLookuper(map[string]string{})))
 	require.Empty(t, cfg.Telemetry.OTLPEndpoint, "an unset collector must stay unset")
@@ -182,7 +185,8 @@ func TestTelemetryHasNoDefault(t *testing.T) {
 
 	// And the tier configs, which ship it empty on purpose, must stay that way.
 	for _, name := range []string{"config.community.dev.yml", "config.enterprise.dev.yml"} {
-		loaded, _, err := config.LoadAndValidateWith(t.Context(), shippedPath(name), noEnv())
+		res, err := config.LoadWith(t.Context(), shippedPath(name), noEnv())
+		loaded := res.Config
 		require.NoError(t, err)
 		require.Empty(t, loaded.Telemetry.OTLPEndpoint,
 			"%s has no collector unless the observability overlay is layered on", name)
@@ -200,7 +204,7 @@ func TestEmptyVariableDoesNotClobber(t *testing.T) {
 
 	const dsn = "postgres://easyp_svc:easyp_pass@postgres:5432/easyp_db?sslmode=disable"
 
-	cfg := config.Config{} //nolint:exhaustruct // one field under test
+	cfg := config.Config{}
 	cfg.DB.Postgres = dsn
 
 	// Set, but empty — exactly what compose produces for an unexported variable.
@@ -235,7 +239,7 @@ func TestEnvOverridesNonZeroCollections(t *testing.T) {
 		digest = "0000000000000000000000000000000000000000000000000000000000000001"
 	)
 
-	cfg := config.Config{} //nolint:exhaustruct // collections under test
+	cfg := config.Config{}
 	// Exactly what the shipped configs decode to.
 	cfg.License.PublicKeys = map[string]string{}
 	cfg.Server.TrustedProxies = []string{}
@@ -266,13 +270,14 @@ func TestShippedConfigsAcceptEnvOverrides(t *testing.T) {
 	const digest = "0000000000000000000000000000000000000000000000000000000000000002"
 
 	env := envconfig.MapLookuper(map[string]string{
-		"AUTH_WRITE_TOKENS":                     "ci=" + digest,
-		"TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT": "easyp-alloy:4317",
-		"REGISTRY_S3_ACCESS_KEY_ID":             "key",
-		"REGISTRY_S3_SECRET_ACCESS_KEY":         "secret",
+		"AUTH_WRITE_TOKENS":             "ci=" + digest,
+		"TELEMETRY_OTLP_ENDPOINT":       "easyp-alloy:4317",
+		"REGISTRY_S3_ACCESS_KEY_ID":     "key",
+		"REGISTRY_S3_SECRET_ACCESS_KEY": "secret",
 	})
 
-	cfg, _, err := config.LoadAndValidateWith(t.Context(), shippedPath("config.enterprise.dev.yml"), env)
+	res, err := config.LoadWith(t.Context(), shippedPath("config.enterprise.dev.yml"), env)
+	cfg := res.Config
 	require.NoError(t, err)
 
 	require.Equal(t, config.TokenList{{Name: "ci", SHA256: digest}}, cfg.Auth.WriteTokens)
@@ -295,7 +300,7 @@ func TestS3CredentialsValidatedAfterEnv(t *testing.T) {
 		"REGISTRY_S3_ACCESS_KEY_ID": "key-without-its-secret",
 	})
 
-	_, _, err := config.LoadAndValidateWith(t.Context(), shippedPath("config.enterprise.dev.yml"), env)
+	_, err := config.LoadWith(t.Context(), shippedPath("config.enterprise.dev.yml"), env)
 	require.ErrorContains(t, err, "must be set together")
 }
 
@@ -311,7 +316,7 @@ server:
   port: {grpc: "8080", metric: "8081", health: "8082", mcp: "8083"}
   force_shutdown_after: 150s
   max_send_msg_size: 67108864
-db: {driver: postgres, postgres: "postgres://u:p@h:5432/d?sslmode=disable"}
+db: {postgres: "postgres://u:p@h:5432/d?sslmode=disable"}
 registry: {plugins_dir: /plugins, max_output_size: 67108864` + registry + `}
 worker_pool:
   workers: 4
@@ -366,11 +371,12 @@ func TestExplicitZerosSurvive(t *testing.T) {
 			audit = "\n  max_save_retries: 0\n  retention_months: 0"
 		}
 
-		cfg, _, err := config.LoadAndValidateWith(
+		res, err := config.LoadWith(
 			t.Context(),
 			zeroFixture(t, registry, workerPool, rateLimit, audit),
 			config.EmptyIsUnset(envconfig.MapLookuper(env)),
 		)
+		cfg := res.Config
 		require.NoError(t, err)
 
 		return cfg
@@ -413,16 +419,17 @@ func TestExplicitZerosSurvive(t *testing.T) {
 	t.Run("a non-zero value from the file is untouched", func(t *testing.T) {
 		t.Parallel()
 
-		cfg, _, err := config.LoadAndValidateWith(
+		res, err := config.LoadWith(
 			t.Context(),
-			zeroFixture(t, ", cache_max_bytes: 99", "\n  max_retries: 7",
+			zeroFixture(t, ", cache_max_bytes: 268435456", "\n  max_retries: 7",
 				"\n  max_concurrent_per_ip: 4", "\n  max_save_retries: 9\n  retention_months: 6"),
 			noEnv(),
 		)
+		cfg := res.Config
 		require.NoError(t, err)
 
 		require.Equal(t, 7, cfg.WorkerPool.MaxRetries)
-		require.Equal(t, int64(99), cfg.Registry.CacheMaxBytes)
+		require.Equal(t, int64(268435456), cfg.Registry.CacheMaxBytes)
 		require.Equal(t, 4, cfg.RateLimit.MaxConcurrentPerIP)
 		require.Equal(t, 6, cfg.Audit.RetentionMonths)
 		require.Equal(t, 9, cfg.Audit.MaxSaveRetries)
@@ -467,7 +474,8 @@ func TestShippedConfigsStateOnlyWhatTheyChange(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			cfg, origins, err := config.LoadWithOrigins(t.Context(), shippedPath(name), noEnv())
+			res, err := config.LoadWith(t.Context(), shippedPath(name), noEnv())
+			cfg, origins := res.Config, res.Origins
 			require.NoError(t, err)
 
 			for _, leaf := range leaves {
@@ -504,18 +512,20 @@ func TestShippedConfigsStateOnlyWhatTheyChange(t *testing.T) {
 func TestExplicitZerosSurviveForEveryField(t *testing.T) {
 	t.Parallel()
 
-	cfg, _, err := config.LoadAndValidateWith(
+	res, err := config.LoadWith(
 		t.Context(),
 		zeroFixture(t, "", "", "", "\n  pre_create_months: 0"),
 		noEnv(),
 	)
+	cfg := res.Config
 	require.NoError(t, err)
 	require.Zero(t, cfg.Audit.PreCreateMonths,
 		"a key the file states outright is kept, whether or not anyone listed it")
 
 	// And omitting it still takes the default, which is the other half of the
 	// distinction being drawn.
-	omitted, _, err := config.LoadAndValidateWith(t.Context(), zeroFixture(t, "", "", "", ""), noEnv())
+	res, err = config.LoadWith(t.Context(), zeroFixture(t, "", "", "", ""), noEnv())
+	omitted := res.Config
 	require.NoError(t, err)
 	require.Equal(t, 3, omitted.Audit.PreCreateMonths)
 }
@@ -534,7 +544,8 @@ func TestOriginsReportEachLayer(t *testing.T) {
 		"REGISTRY_S3_BUCKET": "",
 	}))
 
-	cfg, origins, err := config.LoadWithOrigins(t.Context(), shippedPath("config.enterprise.dev.yml"), env)
+	res, err := config.LoadWith(t.Context(), shippedPath("config.enterprise.dev.yml"), env)
+	cfg, origins := res.Config, res.Origins
 	require.NoError(t, err)
 
 	require.Equal(t, config.OriginEnv, origins["registry.s3.access_key_id"])
@@ -593,6 +604,101 @@ func TestValidateRejects(t *testing.T) {
 			want:   "server.port.metric is required",
 		},
 		{
+			name:   "a non-numeric port is refused before the listener sees it",
+			mutate: func(c *config.Config) { c.Server.Port.GRPC = "not-a-number" },
+			want:   "server.port.grpc must be a number between 1 and 65535",
+		},
+		{
+			name:   "a port out of range is refused",
+			mutate: func(c *config.Config) { c.Server.Port.Metric = "99999" },
+			want:   "server.port.metric must be a number between 1 and 65535",
+		},
+		{
+			// The kernel reads 0 as "any free port", so the service would listen
+			// somewhere the Service, the probe and the port mapping cannot find.
+			name:   "port zero is not a port",
+			mutate: func(c *config.Config) { c.Server.Port.Health = "0" },
+			want:   "zero asks the kernel for an arbitrary port",
+		},
+		{
+			name:   "two listeners cannot share a port",
+			mutate: func(c *config.Config) { c.Server.Port.MCP = c.Server.Port.GRPC },
+			want:   "each listener needs its own port",
+		},
+		{
+			// Used to pass: the only check was that the DSN was non-empty, so
+			// the failure arrived during migrations, after startup.
+			name:   "a DSN that is not one is refused",
+			mutate: func(c *config.Config) { c.DB.Postgres = "postgres://%zz" },
+			want:   "db.postgres is not a usable connection string",
+		},
+		{
+			// The audit's own example. It passed because the only test was that
+			// the DSN was not empty, so the failure arrived during migrations.
+			name:   "a DSN of ordinary prose is refused",
+			mutate: func(c *config.Config) { c.DB.Postgres = "i am not a dsn" },
+			want:   "neither a postgres:// URL",
+		},
+		{
+			name:   "a negative cache ceiling is not a setting",
+			mutate: func(c *config.Config) { c.Registry.CacheMaxBytes = -1 },
+			want:   "registry.cache_max_bytes must not be negative",
+		},
+		{
+			name: "a cache too small for one plugin's output thrashes",
+			mutate: func(c *config.Config) {
+				c.Registry.MaxOutputSize = 1024
+				c.Server.MaxSendMsgSize = 1024
+				c.Registry.CacheMaxBytes = 512
+			},
+			want: "is below registry.max_output_size",
+		},
+		{
+			// S3 counts as on when the bucket is set, so this section is filled
+			// in, valid, and does nothing.
+			name:   "S3 without a bucket is a section that does nothing",
+			mutate: func(c *config.Config) { c.Registry.S3.Endpoint = "http://rustfs:9000" },
+			want:   "registry.s3.bucket is empty",
+		},
+		{
+			name:   "a tier label no dashboard matches is refused",
+			mutate: func(c *config.Config) { c.Telemetry.ServiceTier = "platinum-deluxe" },
+			want:   `telemetry.service_tier must be "community" or "enterprise"`,
+		},
+		{
+			name:   "an unreadable log level is refused in a file",
+			mutate: func(c *config.Config) { c.Log.Level = "trace" },
+			want:   "log.level must be one of",
+		},
+		{
+			// These six are the fields whose consumers replace a zero with
+			// something else. Carrying the zero would make `config print`
+			// disagree with the running service, so the input is refused.
+			name:   "a zero licence TTL would be replaced at runtime",
+			mutate: func(c *config.Config) { c.License.CacheTTL = 0 },
+			want:   "license.cache_ttl must be positive",
+		},
+		{
+			name:   "a zero receive limit would be replaced at runtime",
+			mutate: func(c *config.Config) { c.Server.MaxRecvMsgSize = 0 },
+			want:   "server.max_recv_msg_size must be positive",
+		},
+		{
+			name:   "a zero stream limit would be replaced at runtime",
+			mutate: func(c *config.Config) { c.Server.MaxConcurrentStreams = 0 },
+			want:   "server.max_concurrent_streams must be positive",
+		},
+		{
+			name:   "a zero flush timeout fails every audit write",
+			mutate: func(c *config.Config) { c.Audit.FlushTimeout = 0 },
+			want:   "audit.flush_timeout must be positive",
+		},
+		{
+			name:   "a zero partition interval panics the ticker",
+			mutate: func(c *config.Config) { c.Audit.PartitionCheckInterval = 0 },
+			want:   "audit.partition_check_interval must be positive",
+		},
+		{
 			name:   "an unparseable trusted proxy is refused",
 			mutate: func(c *config.Config) { c.Server.TrustedProxies = []string{"172.28.0.0"} },
 			want:   "is not a CIDR",
@@ -609,11 +715,6 @@ func TestValidateRejects(t *testing.T) {
 				c.Server.MaxSendMsgSize = 1
 			},
 			want: "must be at least registry.max_output_size",
-		},
-		{
-			name:   "db driver is required",
-			mutate: func(c *config.Config) { c.DB.Driver = "" },
-			want:   "db.driver is required",
 		},
 		{
 			name:   "an empty DSN would fall back to the libpq environment",
@@ -741,4 +842,29 @@ func TestValidateAcceptsZeroRetries(t *testing.T) {
 	cfg := baseConfig()
 	cfg.WorkerPool.MaxRetries = 0
 	require.NoError(t, cfg.Validate())
+}
+
+// TestValidateAcceptsAKeywordDSN is the other half of the DSN check. The
+// keyword/value form is valid, lib/pq exports no parser for it, and rejecting
+// what cannot be parsed would refuse a connection string the driver would have
+// accepted — a worse failure than the one being fixed.
+func TestValidateAcceptsAKeywordDSN(t *testing.T) {
+	t.Parallel()
+
+	cfg := baseConfig()
+	cfg.DB.Postgres = "host=localhost port=5432 user=easyp dbname=easyp sslmode=disable"
+
+	require.NoError(t, cfg.Validate())
+}
+
+// TestValidateAcceptsRegionOnlyS3 guards the trap in the half-configured-S3
+// rule. Region carries a default, so it is never empty; including it in the
+// trigger set would refuse every configuration in existence.
+func TestValidateAcceptsRegionOnlyS3(t *testing.T) {
+	t.Parallel()
+
+	cfg := baseConfig()
+	cfg.Registry.S3.Region = "us-east-1"
+
+	require.NoError(t, cfg.Validate(), "a defaulted region must not look like a half-filled S3 section")
 }

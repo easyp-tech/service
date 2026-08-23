@@ -119,7 +119,15 @@ services:
       - easyp_network
 
   service-community:
-    image: ghcr.io/easyp-tech/service:latest
+    # Pinned, not floating. `:latest` is published only when a release tag is
+    # pushed, so it means "the last release" rather than "the current master" —
+    # and `docker compose up` without an explicit pull will keep an old layer
+    # indefinitely. That combination produced a dead end: the sparse config files
+    # in this repository were rejected by a `:latest` image built before the
+    # loader learned to supply defaults, with an error naming a key whose default
+    # is documented. Set EASYP_SERVICE_VERSION to a release tag, to `edge` for
+    # the tip of master, or to `sha-<short>` to pin the exact commit under test.
+    image: ghcr.io/easyp-tech/service:${EASYP_SERVICE_VERSION:-v0.13.0}
     container_name: easyp-api-community
     restart: always
     user: "${EASYP_UID:-65532}:${EASYP_GID:-65532}"
@@ -128,7 +136,7 @@ services:
         condition: service_healthy
       init-db:
         condition: service_completed_successfully
-    command: ["service", "start", "--cfg=/config.community.dev.yml", "--log_level=debug"]
+    command: ["service", "start", "--cfg=/config.community.dev.yml"]
     volumes:
       - "./config/config.community.dev.yml:/config.community.dev.yml:ro"
       # The three files server.tls in the config names, and no more. This
@@ -139,6 +147,9 @@ services:
       - "./certs/ca.crt:/certs/ca.crt:ro"
       - "./plugins-community:/plugins"
     environment:
+      # The level is a setting now, not a command-line argument, so it can be
+      # changed without editing this committed file: LOG_LEVEL=info docker compose up.
+      LOG_LEVEL: "${LOG_LEVEL:-debug}"
       # No LICENSE_* here, deliberately: this container is the control in the
       # experiment, and a licence reaching it would make the stack unable to tell
       # the two tiers apart.
@@ -155,7 +166,7 @@ services:
       DB_POSTGRES_DSN: "${DB_POSTGRES_DSN:-}"
       # Empty in the tier configs, because this stack has no collector unless
       # docker-compose.observability.yml is layered on top. Set both when it is.
-      TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT: "${TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+      TELEMETRY_OTLP_ENDPOINT: "${TELEMETRY_OTLP_ENDPOINT:-}"
       TELEMETRY_PYROSCOPE_ENDPOINT: "${TELEMETRY_PYROSCOPE_ENDPOINT:-}"
       # Tags traces and profiles, the two signals that otherwise arrive from
       # both tiers under one name and cannot be told apart afterwards. Metrics
@@ -188,7 +199,15 @@ services:
       - easyp_network
 
   service-enterprise:
-    image: ghcr.io/easyp-tech/service:latest
+    # Pinned, not floating. `:latest` is published only when a release tag is
+    # pushed, so it means "the last release" rather than "the current master" —
+    # and `docker compose up` without an explicit pull will keep an old layer
+    # indefinitely. That combination produced a dead end: the sparse config files
+    # in this repository were rejected by a `:latest` image built before the
+    # loader learned to supply defaults, with an error naming a key whose default
+    # is documented. Set EASYP_SERVICE_VERSION to a release tag, to `edge` for
+    # the tip of master, or to `sha-<short>` to pin the exact commit under test.
+    image: ghcr.io/easyp-tech/service:${EASYP_SERVICE_VERSION:-v0.13.0}
     container_name: easyp-api-enterprise
     restart: always
     user: "${EASYP_UID:-65532}:${EASYP_GID:-65532}"
@@ -197,7 +216,7 @@ services:
         condition: service_healthy
       init-db:
         condition: service_completed_successfully
-    command: ["service", "start", "--cfg=/config.enterprise.dev.yml", "--log_level=debug"]
+    command: ["service", "start", "--cfg=/config.enterprise.dev.yml"]
     volumes:
       - "./config/config.enterprise.dev.yml:/config.enterprise.dev.yml:ro"
       # Same three as the community container above, and for the same reason.
@@ -206,11 +225,13 @@ services:
       - "./certs/ca.crt:/certs/ca.crt:ro"
       - "./plugins-enterprise:/plugins"
     environment:
+      # The level is a setting now, not a command-line argument, so it can be
+      # changed without editing this committed file: LOG_LEVEL=info docker compose up.
+      LOG_LEVEL: "${LOG_LEVEL:-debug}"
       # What makes this container the enterprise one. An unset or unverifiable
       # key is not a startup failure — the service logs it and runs as community,
       # so `task tier-dev` exists to assert the difference rather than assume it.
       LICENSE_KEY: "${LICENSE_KEY:-}"
-      LICENSE_PUBLIC_KEY: "${LICENSE_PUBLIC_KEY:-}"
       LICENSE_PUBLIC_KEYS: "${LICENSE_PUBLIC_KEYS:-}"
       REGISTRY_S3_ACCESS_KEY_ID: "${REGISTRY_S3_ACCESS_KEY_ID:-}"
       REGISTRY_S3_SECRET_ACCESS_KEY: "${REGISTRY_S3_SECRET_ACCESS_KEY:-}"
@@ -218,7 +239,7 @@ services:
       # so writes stay denied until a credential arrives here.
       AUTH_WRITE_TOKENS: "${AUTH_WRITE_TOKENS:-}"
       DB_POSTGRES_DSN: "${DB_POSTGRES_DSN:-}"
-      TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT: "${TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+      TELEMETRY_OTLP_ENDPOINT: "${TELEMETRY_OTLP_ENDPOINT:-}"
       TELEMETRY_PYROSCOPE_ENDPOINT: "${TELEMETRY_PYROSCOPE_ENDPOINT:-}"
       # Declared, not derived from LICENSE_KEY above. A key that fails to verify
       # leaves this container running as community while still tagged

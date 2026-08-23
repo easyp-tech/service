@@ -10,6 +10,33 @@ import (
 	"github.com/easyp-tech/service/internal/telemetry"
 )
 
+// TestEndpointFormPicksTheExporterOption pins which endpoint spellings go
+// through WithEndpointURL rather than WithEndpoint. The standard
+// OTEL_EXPORTER_OTLP_ENDPOINT variable (read through the env alias) carries a
+// URL with a scheme, which WithEndpoint would use verbatim as a hostname — the
+// exporter would then retry a nonexistent host forever.
+func TestEndpointFormPicksTheExporterOption(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		endpoint string
+		isURL    bool
+	}{
+		{"bare host and port", "easyp-alloy:4317", false},
+		{"bare host", "localhost", false},
+		{"http URL, as the OTel operator injects it", "http://otel-collector:4317", true},
+		{"https URL", "https://collector.example.com:4317", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.isURL, telemetry.EndpointIsURL(tc.endpoint))
+		})
+	}
+}
+
 // TestInitWithoutEndpointsBuildsNoExporters pins the behaviour the empty
 // endpoint is for.
 //
@@ -24,7 +51,7 @@ func TestInitWithoutEndpointsBuildsNoExporters(t *testing.T) {
 
 	var log strings.Builder
 
-	handler := slog.NewTextHandler(&log, &slog.HandlerOptions{Level: slog.LevelInfo}) //nolint:exhaustruct
+	handler := slog.NewTextHandler(&log, &slog.HandlerOptions{Level: slog.LevelInfo})
 
 	shutdown, logger, err := telemetry.Init(t.Context(), telemetry.Config{
 		OTLPEndpoint:      "",

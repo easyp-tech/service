@@ -67,3 +67,6 @@ deploy/.env.dev
 # rather than to the repository. Copied from the .example beside it.
 deploy/observability/traefik/traefik.public.yml
 
+
+# Claude Code session data and worktrees
+.claude/

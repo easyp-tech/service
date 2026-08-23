@@ -198,8 +198,7 @@ func (s *S3Storage) Exists(ctx context.Context, key string) (bool, error) {
 		Key:    aws.String(fullKey),
 	})
 	if err != nil {
-		var notFound *types.NotFound
-		if errors.As(err, &notFound) {
+		if _, ok := errors.AsType[*types.NotFound](err); ok {
 			return false, nil
 		}
 

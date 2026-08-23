@@ -143,13 +143,13 @@ func TestAuthInterceptor(t *testing.T) {
 		t.Run("unary/"+tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			handler := &recordingHandler{} //nolint:exhaustruct // zero value is the point
+			handler := &recordingHandler{}
 			interceptor := newInterceptor(t)
 
 			_, err := interceptor.UnaryServerInterceptor()(
 				ctxWith(t, tt.authorization),
 				nil,
-				&grpc.UnaryServerInfo{FullMethod: tt.method}, //nolint:exhaustruct // only FullMethod is read
+				&grpc.UnaryServerInfo{FullMethod: tt.method},
 				handler.unary,
 			)
 
@@ -173,8 +173,8 @@ func TestAuthInterceptor(t *testing.T) {
 
 			err := interceptor.StreamServerInterceptor()(
 				nil,
-				&fakeStream{ctx: ctxWith(t, tt.authorization)}, //nolint:exhaustruct // only Context is read
-				&grpc.StreamServerInfo{FullMethod: tt.method},  //nolint:exhaustruct // only FullMethod is read
+				&fakeStream{ctx: ctxWith(t, tt.authorization)},
+				&grpc.StreamServerInfo{FullMethod: tt.method},
 				func(_ any, _ grpc.ServerStream) error {
 					called = true
 
@@ -201,12 +201,12 @@ func TestAuthInterceptor(t *testing.T) {
 func TestAuthInterceptorErrorCarriesStatus(t *testing.T) {
 	t.Parallel()
 
-	handler := &recordingHandler{} //nolint:exhaustruct // zero value is the point
+	handler := &recordingHandler{}
 
 	_, err := newInterceptor(t).UnaryServerInterceptor()(
 		t.Context(),
 		nil,
-		&grpc.UnaryServerInfo{FullMethod: generator.ServiceAPI_DeletePlugin_FullMethodName}, //nolint:exhaustruct
+		&grpc.UnaryServerInfo{FullMethod: generator.ServiceAPI_DeletePlugin_FullMethodName},
 		handler.unary,
 	)
 
@@ -231,13 +231,13 @@ func TestEveryRPCIsClassified(t *testing.T) {
 		t.Run(method.MethodName, func(t *testing.T) {
 			t.Parallel()
 
-			handler := &recordingHandler{} //nolint:exhaustruct // zero value is the point
+			handler := &recordingHandler{}
 			fullMethod := "/" + generator.ServiceAPI_ServiceDesc.ServiceName + "/" + method.MethodName
 
 			_, err := newInterceptor(t).UnaryServerInterceptor()(
 				t.Context(),
 				nil,
-				&grpc.UnaryServerInfo{FullMethod: fullMethod}, //nolint:exhaustruct // only FullMethod is read
+				&grpc.UnaryServerInfo{FullMethod: fullMethod},
 				handler.unary,
 			)
 

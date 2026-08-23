@@ -27,11 +27,11 @@ func newLimiter(limit int, key ratelimiter.KeyExtractor) *ratelimiter.Concurrenc
 }
 
 func streamInfo() *grpc.StreamServerInfo {
-	return &grpc.StreamServerInfo{FullMethod: "/test/Method"} //nolint:exhaustruct // only FullMethod is read
+	return &grpc.StreamServerInfo{FullMethod: "/test/Method"}
 }
 
 func unaryInfo() *grpc.UnaryServerInfo {
-	return &grpc.UnaryServerInfo{FullMethod: "/test/Method"} //nolint:exhaustruct // only FullMethod is read
+	return &grpc.UnaryServerInfo{FullMethod: "/test/Method"}
 }
 
 // TestConcurrencyLimitRejectsExcess holds one request open and checks that the

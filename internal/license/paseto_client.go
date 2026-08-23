@@ -78,12 +78,18 @@ func withClock(clock func() time.Time) option {
 	}
 }
 
-// NewPasetoLicenseClient builds a client from a map of key id to hex-encoded
-// Ed25519 public key.
+// AnyKeyID is the reserved key id meaning "verify a token this map does not
+// otherwise cover", including one whose footer carries no usable key id.
 //
-// fallbackKeyHex, when set, is used for tokens whose key id names nothing in the
-// map — the path for installations configured with a single LICENSE_PUBLIC_KEY.
-// It is no weaker than the map: the signature still has to verify against it.
+// It replaces a separate single-key setting. One trust anchor described by two
+// fields is a way for the two to disagree, and they already had: the chart
+// rendered only the map while compose passed both.
+const AnyKeyID = "*"
+
+// NewPasetoLicenseClient builds a client from a map of key id to hex-encoded
+// Ed25519 public key. The entry under AnyKeyID, if present, covers every key id
+// the rest of the map does not. It is no weaker than the others: the signature
+// still has to verify against it.
 //
 // A key that does not decode is an error rather than a quiet fall back to
 // community mode. Having no key at all is a valid community configuration;
@@ -91,11 +97,12 @@ func withClock(clock func() time.Time) option {
 func NewPasetoLicenseClient(
 	token string,
 	publicKeysHex map[string]string,
-	fallbackKeyHex string,
 	logger *slog.Logger,
 	opts ...option,
 ) (*PasetoLicenseClient, error) {
 	keys := make(map[string]paseto.V4AsymmetricPublicKey, len(publicKeysHex))
+
+	var fallback *paseto.V4AsymmetricPublicKey
 
 	for kid, hexKey := range publicKeysHex {
 		key, err := paseto.NewV4AsymmetricPublicKeyFromHex(strings.TrimSpace(hexKey))
@@ -103,18 +110,15 @@ func NewPasetoLicenseClient(
 			return nil, fmt.Errorf("licence public key for key id %q: %w", kid, err)
 		}
 
-		keys[kid] = key
-	}
+		// Kept out of the map as well as recorded as the fallback, so that a
+		// token whose footer literally says "*" cannot select it by name.
+		if kid == AnyKeyID {
+			fallback = &key
 
-	var fallback *paseto.V4AsymmetricPublicKey
-
-	if trimmed := strings.TrimSpace(fallbackKeyHex); trimmed != "" {
-		key, err := paseto.NewV4AsymmetricPublicKeyFromHex(trimmed)
-		if err != nil {
-			return nil, fmt.Errorf("licence public key: %w", err)
+			continue
 		}
 
-		fallback = &key
+		keys[kid] = key
 	}
 
 	client := &PasetoLicenseClient{
@@ -197,7 +201,7 @@ func (c *PasetoLicenseClient) resolveKey(ctx context.Context) (paseto.V4Asymmetr
 			return *c.fallbackKey, true
 		}
 
-		c.report(ctx, slog.LevelWarn, "licence token carries no usable key id and no single public key is configured; "+
+		c.report(ctx, slog.LevelWarn, "licence token carries no usable key id and no \"*\" public key is configured; "+
 			"running in community mode", "error", err)
 
 		return none, false

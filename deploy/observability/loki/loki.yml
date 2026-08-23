@@ -23,12 +23,12 @@ schema_config:
 
 storage_config:
   aws:
-    endpoint: ${TELEMETRY_S3_ENDPOINT:-rustfs:9000}
-    access_key_id: ${TELEMETRY_S3_ACCESS_KEY_ID:-rustfsadmin}
-    secret_access_key: ${TELEMETRY_S3_SECRET_ACCESS_KEY:-rustfsadmin}
+    endpoint: ${OBS_S3_ENDPOINT:-rustfs:9000}
+    access_key_id: ${OBS_S3_ACCESS_KEY_ID:-rustfsadmin}
+    secret_access_key: ${OBS_S3_SECRET_ACCESS_KEY:-rustfsadmin}
     s3forcepathstyle: true
-    insecure: ${TELEMETRY_S3_INSECURE:-true}
-    bucketnames: ${TELEMETRY_BUCKET_PREFIX:-}loki-chunks
+    insecure: ${OBS_S3_INSECURE:-true}
+    bucketnames: ${OBS_BUCKET_PREFIX:-}loki-chunks
 
   tsdb_shipper:
     active_index_directory: /tmp/loki/tsdb-index
@@ -51,9 +51,9 @@ ruler:
   storage:
     type: s3
     s3:
-      endpoint: ${TELEMETRY_S3_ENDPOINT:-rustfs:9000}
-      access_key_id: ${TELEMETRY_S3_ACCESS_KEY_ID:-rustfsadmin}
-      secret_access_key: ${TELEMETRY_S3_SECRET_ACCESS_KEY:-rustfsadmin}
+      endpoint: ${OBS_S3_ENDPOINT:-rustfs:9000}
+      access_key_id: ${OBS_S3_ACCESS_KEY_ID:-rustfsadmin}
+      secret_access_key: ${OBS_S3_SECRET_ACCESS_KEY:-rustfsadmin}
       s3forcepathstyle: true
-      insecure: ${TELEMETRY_S3_INSECURE:-true}
-      bucketnames: ${TELEMETRY_BUCKET_PREFIX:-}loki-ruler
+      insecure: ${OBS_S3_INSECURE:-true}
+      bucketnames: ${OBS_BUCKET_PREFIX:-}loki-ruler

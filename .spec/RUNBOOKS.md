@@ -38,7 +38,7 @@ registration starts refusing past 10. All of it silent.
    The licence is read at startup.
 
 If the token is present but ignored, the usual cause is a missing or mismatched
-`LICENSE_PUBLIC_KEY`: a token is only as good as the key it verifies against, and
+`LICENSE_PUBLIC_KEYS` entry: a token is only as good as the key it verifies against, and
 the key id in the token footer has to be one of the keys configured. See
 `config.license.publicKeys`.
 

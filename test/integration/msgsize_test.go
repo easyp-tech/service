@@ -37,7 +37,7 @@ func serveOverTCP(t *testing.T, h *harness) (*sdk.Client, string) {
 	t.Helper()
 
 	srv, healthSrv := grpchelper.NewServer(
-		panicCounter{c: prometheus.NewCounter(prometheus.CounterOpts{ //nolint:exhaustruct
+		panicCounter{c: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "panics_total",
 			Help: "Panics recovered during the test.",
 		})},
@@ -47,7 +47,7 @@ func serveOverTCP(t *testing.T, h *harness) (*sdk.Client, string) {
 		insecure.NewCredentials(),
 		nil,
 		nil,
-		grpchelper.ServerOptions{}, //nolint:exhaustruct // Defaults are what production gets.
+		grpchelper.ServerOptions{},
 	)
 
 	api.New(srv, healthSrv, h.core, slog.New(slog.DiscardHandler))
@@ -79,7 +79,7 @@ func padding(n int) []*descriptorpb.FileDescriptorProto {
 
 	for total := 0; total < n; total += chunk {
 		name := blob
-		files = append(files, &descriptorpb.FileDescriptorProto{ //nolint:exhaustruct
+		files = append(files, &descriptorpb.FileDescriptorProto{
 			Name: &name,
 		})
 	}
@@ -101,7 +101,7 @@ func TestLargeRequestIsAccepted(t *testing.T) {
 	client, _ := serveOverTCP(t, h)
 
 	param := "ok"
-	req := &pluginpb.CodeGeneratorRequest{ //nolint:exhaustruct
+	req := &pluginpb.CodeGeneratorRequest{
 		Parameter: &param,
 		ProtoFile: padding(grpcDefaultRecvLimit + (1 << 20)),
 	}
@@ -127,7 +127,7 @@ func TestLargeResponseIsDelivered(t *testing.T) {
 	const want = grpcDefaultRecvLimit + (1 << 20)
 
 	param := "bytes=" + strconv.Itoa(want)
-	req := &pluginpb.CodeGeneratorRequest{Parameter: &param} //nolint:exhaustruct
+	req := &pluginpb.CodeGeneratorRequest{Parameter: &param}
 
 	resp, err := client.GenerateCode(t.Context(), "test/large-resp:"+version, req)
 	require.NoError(t, err, "a response above gRPC's default 4 MiB limit was refused by the client")
@@ -149,7 +149,7 @@ func TestClientLimitStillApplies(t *testing.T) {
 	_, addr := serveOverTCP(t, h)
 
 	param := "bytes=" + strconv.Itoa(grpcDefaultRecvLimit+(1<<20))
-	req := &pluginpb.CodeGeneratorRequest{Parameter: &param} //nolint:exhaustruct
+	req := &pluginpb.CodeGeneratorRequest{Parameter: &param}
 
 	limited, err := sdk.NewClient(addr, sdk.WithInsecure(),
 		sdk.WithMaxRecvMsgSize(grpcDefaultRecvLimit))

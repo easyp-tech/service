@@ -35,19 +35,19 @@ services:
     container_name: easyp-init-buckets
     entrypoint: >
       /bin/sh -c "
-      until /usr/bin/mc alias set store ${TELEMETRY_S3_URL:?TELEMETRY_S3_URL is required, e.g. https://storage.example.com} $$TELEMETRY_S3_ACCESS_KEY_ID $$TELEMETRY_S3_SECRET_ACCESS_KEY; do echo '...waiting for S3...'; sleep 1; done;
-      /usr/bin/mc mb --ignore-existing store/${TELEMETRY_BUCKET_PREFIX:-easyp-dev-telemetry-}tempo;
-      /usr/bin/mc mb --ignore-existing store/${TELEMETRY_BUCKET_PREFIX:-easyp-dev-telemetry-}mimir-blocks;
-      /usr/bin/mc mb --ignore-existing store/${TELEMETRY_BUCKET_PREFIX:-easyp-dev-telemetry-}mimir-ruler;
-      /usr/bin/mc mb --ignore-existing store/${TELEMETRY_BUCKET_PREFIX:-easyp-dev-telemetry-}mimir-alertmanager;
-      /usr/bin/mc mb --ignore-existing store/${TELEMETRY_BUCKET_PREFIX:-easyp-dev-telemetry-}loki-chunks;
-      /usr/bin/mc mb --ignore-existing store/${TELEMETRY_BUCKET_PREFIX:-easyp-dev-telemetry-}loki-ruler;
-      /usr/bin/mc mb --ignore-existing store/${TELEMETRY_BUCKET_PREFIX:-easyp-dev-telemetry-}pyroscope;
+      until /usr/bin/mc alias set store ${OBS_S3_URL:?OBS_S3_URL is required, e.g. https://storage.example.com} $$OBS_S3_ACCESS_KEY_ID $$OBS_S3_SECRET_ACCESS_KEY; do echo '...waiting for S3...'; sleep 1; done;
+      /usr/bin/mc mb --ignore-existing store/${OBS_BUCKET_PREFIX:-easyp-dev-telemetry-}tempo;
+      /usr/bin/mc mb --ignore-existing store/${OBS_BUCKET_PREFIX:-easyp-dev-telemetry-}mimir-blocks;
+      /usr/bin/mc mb --ignore-existing store/${OBS_BUCKET_PREFIX:-easyp-dev-telemetry-}mimir-ruler;
+      /usr/bin/mc mb --ignore-existing store/${OBS_BUCKET_PREFIX:-easyp-dev-telemetry-}mimir-alertmanager;
+      /usr/bin/mc mb --ignore-existing store/${OBS_BUCKET_PREFIX:-easyp-dev-telemetry-}loki-chunks;
+      /usr/bin/mc mb --ignore-existing store/${OBS_BUCKET_PREFIX:-easyp-dev-telemetry-}loki-ruler;
+      /usr/bin/mc mb --ignore-existing store/${OBS_BUCKET_PREFIX:-easyp-dev-telemetry-}pyroscope;
       exit 0;
       "
     environment:
-      TELEMETRY_S3_ACCESS_KEY_ID: "${TELEMETRY_S3_ACCESS_KEY_ID:?TELEMETRY_S3_ACCESS_KEY_ID is required}"
-      TELEMETRY_S3_SECRET_ACCESS_KEY: "${TELEMETRY_S3_SECRET_ACCESS_KEY:?TELEMETRY_S3_SECRET_ACCESS_KEY is required}"
+      OBS_S3_ACCESS_KEY_ID: "${OBS_S3_ACCESS_KEY_ID:?OBS_S3_ACCESS_KEY_ID is required}"
+      OBS_S3_SECRET_ACCESS_KEY: "${OBS_S3_SECRET_ACCESS_KEY:?OBS_S3_SECRET_ACCESS_KEY is required}"
     networks:
       - easyp_network
 
@@ -66,11 +66,11 @@ services:
       - "./observability/mimir/alertmanager-fallback.yaml:/etc/mimir/alertmanager-fallback.yaml:ro"
     command: ["-config.file=/etc/mimir/mimir.yaml", "-config.expand-env=true"]
     environment:
-      TELEMETRY_S3_ENDPOINT: "${TELEMETRY_S3_ENDPOINT:?TELEMETRY_S3_ENDPOINT is required, e.g. storage.example.com}"
-      TELEMETRY_S3_ACCESS_KEY_ID: "${TELEMETRY_S3_ACCESS_KEY_ID:?TELEMETRY_S3_ACCESS_KEY_ID is required}"
-      TELEMETRY_S3_SECRET_ACCESS_KEY: "${TELEMETRY_S3_SECRET_ACCESS_KEY:?TELEMETRY_S3_SECRET_ACCESS_KEY is required}"
-      TELEMETRY_S3_INSECURE: "${TELEMETRY_S3_INSECURE:-false}"
-      TELEMETRY_BUCKET_PREFIX: "${TELEMETRY_BUCKET_PREFIX:-easyp-dev-telemetry-}"
+      OBS_S3_ENDPOINT: "${OBS_S3_ENDPOINT:?OBS_S3_ENDPOINT is required, e.g. storage.example.com}"
+      OBS_S3_ACCESS_KEY_ID: "${OBS_S3_ACCESS_KEY_ID:?OBS_S3_ACCESS_KEY_ID is required}"
+      OBS_S3_SECRET_ACCESS_KEY: "${OBS_S3_SECRET_ACCESS_KEY:?OBS_S3_SECRET_ACCESS_KEY is required}"
+      OBS_S3_INSECURE: "${OBS_S3_INSECURE:-false}"
+      OBS_BUCKET_PREFIX: "${OBS_BUCKET_PREFIX:-easyp-dev-telemetry-}"
     networks:
       - easyp_network
 
@@ -85,11 +85,11 @@ services:
       - "./observability/loki/loki.yml:/etc/loki/loki.yml:ro"
     command: ["-config.file=/etc/loki/loki.yml", "-config.expand-env=true"]
     environment:
-      TELEMETRY_S3_ENDPOINT: "${TELEMETRY_S3_ENDPOINT:?TELEMETRY_S3_ENDPOINT is required, e.g. storage.example.com}"
-      TELEMETRY_S3_ACCESS_KEY_ID: "${TELEMETRY_S3_ACCESS_KEY_ID:?TELEMETRY_S3_ACCESS_KEY_ID is required}"
-      TELEMETRY_S3_SECRET_ACCESS_KEY: "${TELEMETRY_S3_SECRET_ACCESS_KEY:?TELEMETRY_S3_SECRET_ACCESS_KEY is required}"
-      TELEMETRY_S3_INSECURE: "${TELEMETRY_S3_INSECURE:-false}"
-      TELEMETRY_BUCKET_PREFIX: "${TELEMETRY_BUCKET_PREFIX:-easyp-dev-telemetry-}"
+      OBS_S3_ENDPOINT: "${OBS_S3_ENDPOINT:?OBS_S3_ENDPOINT is required, e.g. storage.example.com}"
+      OBS_S3_ACCESS_KEY_ID: "${OBS_S3_ACCESS_KEY_ID:?OBS_S3_ACCESS_KEY_ID is required}"
+      OBS_S3_SECRET_ACCESS_KEY: "${OBS_S3_SECRET_ACCESS_KEY:?OBS_S3_SECRET_ACCESS_KEY is required}"
+      OBS_S3_INSECURE: "${OBS_S3_INSECURE:-false}"
+      OBS_BUCKET_PREFIX: "${OBS_BUCKET_PREFIX:-easyp-dev-telemetry-}"
     networks:
       - easyp_network
 
@@ -104,11 +104,11 @@ services:
       - "./observability/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro"
     command: ["-config.file=/etc/tempo/tempo.yaml", "-config.expand-env=true"]
     environment:
-      TELEMETRY_S3_ENDPOINT: "${TELEMETRY_S3_ENDPOINT:?TELEMETRY_S3_ENDPOINT is required, e.g. storage.example.com}"
-      TELEMETRY_S3_ACCESS_KEY_ID: "${TELEMETRY_S3_ACCESS_KEY_ID:?TELEMETRY_S3_ACCESS_KEY_ID is required}"
-      TELEMETRY_S3_SECRET_ACCESS_KEY: "${TELEMETRY_S3_SECRET_ACCESS_KEY:?TELEMETRY_S3_SECRET_ACCESS_KEY is required}"
-      TELEMETRY_S3_INSECURE: "${TELEMETRY_S3_INSECURE:-false}"
-      TELEMETRY_BUCKET_PREFIX: "${TELEMETRY_BUCKET_PREFIX:-easyp-dev-telemetry-}"
+      OBS_S3_ENDPOINT: "${OBS_S3_ENDPOINT:?OBS_S3_ENDPOINT is required, e.g. storage.example.com}"
+      OBS_S3_ACCESS_KEY_ID: "${OBS_S3_ACCESS_KEY_ID:?OBS_S3_ACCESS_KEY_ID is required}"
+      OBS_S3_SECRET_ACCESS_KEY: "${OBS_S3_SECRET_ACCESS_KEY:?OBS_S3_SECRET_ACCESS_KEY is required}"
+      OBS_S3_INSECURE: "${OBS_S3_INSECURE:-false}"
+      OBS_BUCKET_PREFIX: "${OBS_BUCKET_PREFIX:-easyp-dev-telemetry-}"
     networks:
       - easyp_network
 
@@ -123,11 +123,11 @@ services:
       - "./observability/pyroscope/pyroscope.yaml:/etc/pyroscope/pyroscope.yaml:ro"
     command: ["-config.file=/etc/pyroscope/pyroscope.yaml", "-config.expand-env=true"]
     environment:
-      TELEMETRY_S3_ENDPOINT: "${TELEMETRY_S3_ENDPOINT:?TELEMETRY_S3_ENDPOINT is required, e.g. storage.example.com}"
-      TELEMETRY_S3_ACCESS_KEY_ID: "${TELEMETRY_S3_ACCESS_KEY_ID:?TELEMETRY_S3_ACCESS_KEY_ID is required}"
-      TELEMETRY_S3_SECRET_ACCESS_KEY: "${TELEMETRY_S3_SECRET_ACCESS_KEY:?TELEMETRY_S3_SECRET_ACCESS_KEY is required}"
-      TELEMETRY_S3_INSECURE: "${TELEMETRY_S3_INSECURE:-false}"
-      TELEMETRY_BUCKET_PREFIX: "${TELEMETRY_BUCKET_PREFIX:-easyp-dev-telemetry-}"
+      OBS_S3_ENDPOINT: "${OBS_S3_ENDPOINT:?OBS_S3_ENDPOINT is required, e.g. storage.example.com}"
+      OBS_S3_ACCESS_KEY_ID: "${OBS_S3_ACCESS_KEY_ID:?OBS_S3_ACCESS_KEY_ID is required}"
+      OBS_S3_SECRET_ACCESS_KEY: "${OBS_S3_SECRET_ACCESS_KEY:?OBS_S3_SECRET_ACCESS_KEY is required}"
+      OBS_S3_INSECURE: "${OBS_S3_INSECURE:-false}"
+      OBS_BUCKET_PREFIX: "${OBS_BUCKET_PREFIX:-easyp-dev-telemetry-}"
     networks:
       - easyp_network
 

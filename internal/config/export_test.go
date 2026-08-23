@@ -6,35 +6,22 @@ import (
 	"github.com/sethvargo/go-envconfig"
 )
 
-// LoadAndValidateWith is LoadAndValidate with the environment supplied by the
-// caller. Exported to the test package so the shipped configs can be checked
-// against a known environment rather than whatever the shell running the test
-// happens to export — otherwise a developer with REGISTRY_S3_BUCKET set would
-// get a different verdict from CI.
-func LoadAndValidateWith(
-	ctx context.Context,
-	path string,
-	lookuper envconfig.Lookuper,
-) (*Config, []string, error) {
-	cfg, warnings, _, err := loadAndValidate(ctx, path, lookuper)
-
-	return cfg, warnings, err
+// LoadWith is Load with the environment supplied by the caller. Exported to the
+// test package so the shipped configs can be checked against a known
+// environment rather than whatever the shell running the test happens to
+// export — otherwise a developer with REGISTRY_S3_BUCKET set would get a
+// different verdict from CI.
+func LoadWith(ctx context.Context, path string, lookuper envconfig.Lookuper) (Result, error) {
+	return load(ctx, path, lookuper)
 }
 
-// LoadWithOrigins is LoadAndValidateWith, and also reports which layer supplied
-// each setting.
-func LoadWithOrigins(
-	ctx context.Context,
-	path string,
-	lookuper envconfig.Lookuper,
-) (*Config, Origins, error) {
-	cfg, _, origins, err := loadAndValidate(ctx, path, lookuper)
-
-	return cfg, origins, err
+// LoadFromEnvWith is LoadFromEnv with the environment supplied by the caller.
+func LoadFromEnvWith(ctx context.Context, lookuper envconfig.Lookuper) (Result, error) {
+	return loadFromEnv(ctx, lookuper)
 }
 
-// EnvironmentOriginsWith is EnvironmentOrigins with the environment supplied by
-// the caller.
+// EnvironmentOriginsWith reports the origins of an environment-only resolution,
+// with the environment supplied by the caller.
 func EnvironmentOriginsWith(lookuper envconfig.Lookuper) (Origins, error) {
 	return environmentOrigins(lookuper)
 }
@@ -48,4 +35,19 @@ func ApplyEnvWith(ctx context.Context, cfg *Config, lookuper envconfig.Lookuper)
 // test can check that a set-but-empty variable is treated as absent.
 func EmptyIsUnset(inner envconfig.Lookuper) envconfig.Lookuper {
 	return emptyIsUnset{inner: inner}
+}
+
+// AliasLookuper wraps a lookuper the way the real environment is wrapped, so a
+// test can check that an alternative variable name is read, and read back which
+// names actually supplied a value.
+type AliasLookuper = aliasLookuper
+
+// AliasLookuperFor wraps inner in the alias resolution the real environment gets.
+func AliasLookuperFor(inner envconfig.Lookuper) *AliasLookuper {
+	return newAliasLookuper(inner)
+}
+
+// AliasesUsed reports the alternative names that supplied a value.
+func AliasesUsed(lookuper *AliasLookuper) map[string]string {
+	return lookuper.used
 }

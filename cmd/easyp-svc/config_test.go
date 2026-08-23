@@ -26,7 +26,7 @@ server:
   force_shutdown_after: 150s
   max_send_msg_size: 67108864
   trusted_proxies: ["172.28.0.0/16", "10.0.0.0/8"]
-db: {driver: postgres, postgres: "postgres://user:hunter2@host:5432/d?sslmode=disable"}
+db: {postgres: "postgres://user:hunter2@host:5432/d?sslmode=disable"}
 registry: {plugins_dir: /plugins, max_output_size: 67108864` + registryExtra + `}
 worker_pool:
   workers: 4
@@ -50,8 +50,11 @@ func printed(t *testing.T, path string, opts printOptions) string {
 
 	opts.cfgPath = path
 
-	cfg, origins, err := resolveForPrint(t.Context(), path)
+	res, err := resolveForPrint(t.Context(), path)
 	require.NoError(t, err)
+
+	cfg, origins := res.Config, res.Origins
+	opts.aliases = res.EnvAliases
 
 	defaults, err := config.Defaults(t.Context())
 	require.NoError(t, err)
@@ -83,13 +86,13 @@ func TestPrintRedactsSecrets(t *testing.T) {
 
 	path := writeConfigFixture(t, "", "")
 
-	out := printed(t, path, printOptions{}) //nolint:exhaustruct // defaults are the point
+	out := printed(t, path, printOptions{})
 
 	require.NotContains(t, out, "hunter2", "the database password must not be printed")
 	require.Contains(t, out, `postgres: "***"`)
 
 	// And the escape hatch works, because there are times you need the value.
-	revealed := printed(t, path, printOptions{showSecrets: true}) //nolint:exhaustruct
+	revealed := printed(t, path, printOptions{showSecrets: true})
 	require.Contains(t, revealed, "hunter2")
 }
 
@@ -100,7 +103,7 @@ func TestPrintRedactsSecrets(t *testing.T) {
 func TestPrintKeepsAnAbsentSecretVisible(t *testing.T) {
 	t.Parallel()
 
-	out := printed(t, writeConfigFixture(t, "", ""), printOptions{}) //nolint:exhaustruct
+	out := printed(t, writeConfigFixture(t, "", ""), printOptions{})
 
 	require.Contains(t, out, `license:`)
 	require.Contains(t, out, `key: ""`, "an unset licence must read as unset, not as hidden")
@@ -113,7 +116,7 @@ func TestPrintChangedHidesWhatTheDefaultsAlreadySay(t *testing.T) {
 
 	path := writeConfigFixture(t, ", cache_max_bytes: 5", "")
 
-	out := printed(t, path, printOptions{changed: true}) //nolint:exhaustruct
+	out := printed(t, path, printOptions{changed: true})
 
 	require.Contains(t, out, "cache_max_bytes: 5", "a value that differs from the default is the point")
 	require.NotContains(t, out, "buffer_size", "audit.buffer_size restates its default and says nothing")
@@ -128,7 +131,7 @@ func TestPrintChangedTreatsEmptyCollectionsAsUnset(t *testing.T) {
 
 	path := writeConfigFixture(t, "", "auth:\n  write_tokens: []\nlicense:\n  public_keys: {}\n")
 
-	out := printed(t, path, printOptions{changed: true}) //nolint:exhaustruct
+	out := printed(t, path, printOptions{changed: true})
 
 	require.NotContains(t, out, "write_tokens")
 	require.NotContains(t, out, "public_keys")
@@ -144,7 +147,7 @@ func TestPrintReportsOrigins(t *testing.T) {
 
 	path := writeConfigFixture(t, "", "")
 
-	out := printed(t, path, printOptions{origin: true}) //nolint:exhaustruct
+	out := printed(t, path, printOptions{origin: true})
 
 	requireLineMatching(t, out, "bucket:", "env REGISTRY_S3_BUCKET")
 	requireLineMatching(t, out, "workers:", "# file")
@@ -159,17 +162,22 @@ func TestPrintProducesParseableYAML(t *testing.T) {
 
 	path := writeConfigFixture(t, "", "")
 
-	out := printed(t, path, printOptions{}) //nolint:exhaustruct
+	// With secrets, because that is what a round trip means: the redacted form
+	// is not a configuration the service would start on, and since v0.13.0 it
+	// says so — a DSN of "***" fails the connection-string check rather than
+	// passing as an ordinary one, which is what it used to do.
+	out := printed(t, path, printOptions{showSecrets: true})
 
 	// Round-tripped through the loader itself rather than a bare YAML parse, so
 	// that the keys have to be the real ones and in the right sections.
 	roundTrip := filepath.Join(t.TempDir(), "printed.yml")
 	require.NoError(t, os.WriteFile(roundTrip, []byte(out), 0o600))
 
-	reloaded, warnings, err := config.LoadAndValidate(t.Context(), roundTrip)
+	res, err := config.Load(t.Context(), roundTrip)
 	require.NoError(t, err, "printed output must be a config file the service accepts")
-	require.Empty(t, warnings, "every key printed must be one the service recognises")
+	require.Empty(t, res.Diagnostics, "every key printed must be one the service recognises")
 
+	reloaded := res.Config
 	require.Equal(t, []string{"172.28.0.0/16", "10.0.0.0/8"}, reloaded.Server.TrustedProxies,
 		"a list must survive being printed and read back")
 	require.Equal(t, "8080", reloaded.Server.Port.GRPC)
@@ -188,4 +196,24 @@ func requireLineMatching(t *testing.T, out, key, want string) {
 	}
 
 	t.Fatalf("no line containing %q in:\n%s", key, out)
+}
+
+// TestRedactedOutputIsNotAConfiguration pins a defect the audits found: the
+// output of `config print --changed` without --show-secrets was accepted as a
+// configuration, because a DSN of "***" was only ever checked for being
+// non-empty. Someone saving that output as their config file got a service that
+// validated and then could not reach a database.
+func TestRedactedOutputIsNotAConfiguration(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfigFixture(t, "", "")
+	out := printed(t, path, printOptions{})
+
+	require.Contains(t, out, redactedValue, "the fixture's DSN is a secret and must be hidden")
+
+	redacted := filepath.Join(t.TempDir(), "redacted.yml")
+	require.NoError(t, os.WriteFile(redacted, []byte(out), 0o600))
+
+	_, err := config.Load(t.Context(), redacted)
+	require.ErrorContains(t, err, "db.postgres is not a usable connection string")
 }

@@ -7,7 +7,7 @@ Centralized protobuf/gRPC plugin execution service. Accepts `CodeGeneratorReques
 
 ## Architecture
 
-See [docs/architecture.md](docs/architecture.md) for full request flow and component diagrams.
+See [.spec/ARCHITECTURE.md](.spec/ARCHITECTURE.md) for full request flow and component diagrams.
 
 **Interceptor chain (order matters):** trace_logging → realip → prometheus → structured_logging → panic_recovery → validation → error_code_conversion → rate_limit → license → audit
 
@@ -74,7 +74,7 @@ deploy/                 # Everything that runs the service somewhere
 
 ## Build & Test
 
-See [docs/development.md](docs/development.md) for full setup.
+See [README.md](README.md#development) and [.spec/TESTING.md](.spec/TESTING.md) for full setup.
 
 ```bash
 task up                  # Full dev stack (postgres, grafana, loki, alloy, tempo, mimir, pyroscope, traefik)
@@ -108,7 +108,10 @@ go test ./...            # Standard tests
 - **Artifact unit:** the whole version directory packed as `tar.gz` (`internal/plugarchive`), stored at `{group}/{name}/{version}/plugin.tgz` — the entrypoint plus any sidecars, never a bare binary
 - **Binary storage:** `core.BinaryStorage` interface (read-only: Download/Open/Exists/Delete), S3 implementation in `internal/adapters/storage`; uploads happen out-of-band via `easyp-svc plugins push`
 - **Testing:** standard `go test` with `stretchr/testify` assertions (`assert`/`require`); mocks defined in test files
-- **Config priority:** CLI flags > env vars > YAML file. See [docs/configuration.md](docs/configuration.md)
+- **Config priority:** environment > YAML file > `default=` struct tag. The only
+  flags that take part are `--cfg`, which chooses the file, and `--log_level`,
+  which overrides `log.level`. An unrecognised YAML key refuses the start. See
+  [Configuration](README.md#configuration) and `internal/config/config.go`.
 - **Comments:** English only; every exported symbol must have a godoc comment starting with its name; no inline comments on `if`/`for`/`return` lines unless genuinely non-obvious. See [.spec/CODE_STYLE.md](.spec/CODE_STYLE.md) §11.
 
 ## Pitfalls & Gotchas

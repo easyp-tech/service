@@ -26,14 +26,16 @@ spec:
       protocol: TCP
       appProtocol: h2c
     - name: metrics
-      port: {{ .Values.ports.metrics }}
+      port: {{ .Values.ports.metric }}
       targetPort: metrics
       protocol: TCP
     - name: health
       port: {{ .Values.ports.health }}
       targetPort: health
       protocol: TCP
+    {{- if .Values.mcp.enabled }}
     - name: mcp
       port: {{ .Values.ports.mcp }}
       targetPort: mcp
       protocol: TCP
+    {{- end }}

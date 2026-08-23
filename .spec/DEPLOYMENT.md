@@ -269,11 +269,31 @@ scanning that follows.
 
 ## GoReleaser
 
-`.goreleaser.yaml` configures release builds:
-- Cross-compilation targets
-- Binary naming
-- Archive formats
-- Checksum generation
+`.goreleaser.yaml` is the release pipeline, triggered by a `vX.Y.Z` tag via
+`.github/workflows/release.yml` after the full test/lint/proto verification:
+
+- **CLI binaries** — `easyp-svc` for linux/darwin × amd64/arm64, tar.gz
+  archives with the LICENSE, `checksums.txt`; attached to the GitHub Release.
+  For operator machines running `auth new-token`, `plugins push`,
+  `config validate` without Docker.
+- **Docker images** — `ghcr.io/easyp-tech/service:{tag}` (+`-amd64`/`-arm64`,
+  `:latest` manifest). The image compiles its own binary in the Dockerfile;
+  both builds stamp the same version into `main.version`.
+  The docker build context is the hand-maintained `extra_files` list in
+  `.goreleaser.yaml` — **a new top-level Go package must be added there** or
+  the release build alone breaks.
+- **Helm chart** — packaged and pushed to `oci://ghcr.io/easyp-tech/charts`
+  by the `chart` job after the image is published. The release refuses to
+  start unless the chart's `appVersion` equals the tag, so a published chart
+  always names an image that exists.
+
+Install from the OCI registry:
+
+```bash
+helm install easyp oci://ghcr.io/easyp-tech/charts/easyp-service \
+  --version <chart version> \
+  --set secrets.existingSecret=easyp-env
+```
 
 ## Configuration
 
@@ -344,7 +364,7 @@ Clients need `sdk.WithMaxRecvMsgSize` only if the service is configured above
 | `EASYP_POSTGRES_PORT` | 5432 | PostgreSQL host port |
 | `EASYP_METRICS_PORT` | 8081 | Metrics host port |
 | `EASYP_HEALTH_PORT` | 8082 | Health host port |
-| `EASYP_GATEWAY_PORT` | 8083 | MCP/Gateway host port |
+| `EASYP_MCP_PORT` | 8083 | MCP host port (was `EASYP_GATEWAY_PORT` before v0.13.0) |
 | `EASYP_GRAFANA_PORT` | 3000 | Grafana host port |
 | `EASYP_TRAEFIK_PORT` | 80 | Traefik host port (HTTP) |
 | `EASYP_TRAEFIK_TLS_PORT` | 4443 | Traefik host port (HTTPS) — the only way to the gRPC API |
@@ -405,7 +425,7 @@ about it.
 | **The `goose_db_version` table** | Which migrations have run. Restoring data without it makes the next startup either re-run migrations or refuse to start. |
 | **The object storage bucket** | Plugin archives. The local cache is a cache — it is evicted — so the bucket is the only copy of the binaries. |
 | **`DB_POSTGRES_DSN`, `AUTH_WRITE_TOKENS`, S3 credentials** | Secrets are not in the database and are usually not in the cluster backup either. |
-| **`LICENSE_KEY` and `LICENSE_PUBLIC_KEY`** | Recoverable from the licence registry, but not by you at 3am. Without them the restored service runs in community mode: no audit, four workers, ten plugins. |
+| **`LICENSE_KEY` and `LICENSE_PUBLIC_KEYS`** | Recoverable from the licence registry, but not by you at 3am. Without them the restored service runs in community mode: no audit, four workers, ten plugins. |
 
 The database and the bucket have to be recoverable to *roughly* the same point.
 They are not transactional with each other, and the direction of the skew is what

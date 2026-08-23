@@ -13,8 +13,14 @@ jobs:
   verify:
     uses: ./.github/workflows/go.yml
 
+  # The API contract gets the same treatment as the code: proto lint and the
+  # breaking-change check gate the release, not just master pushes. A release
+  # is exactly the moment a contract mistake becomes permanent.
+  verify-proto:
+    uses: ./.github/workflows/easyp.yml
+
   release:
-    needs: verify
+    needs: [verify, verify-proto]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -51,10 +57,26 @@ jobs:
           fi
           echo "✅ Valid release tag: ${GITHUB_REF_NAME}"
 
+      # The chart's appVersion is the default image tag, so it has to name the
+      # release being cut: ahead, and a default install pulls a tag that does
+      # not exist; behind, and it installs last month's service. Checked before
+      # anything is published, while the mismatch is still free to fix.
+      - name: Chart appVersion matches the tag
+        run: |
+          app_version="$(grep -E '^appVersion:' deploy/charts/easyp-service/Chart.yaml | awk '{print $2}' | tr -d '"')"
+          if [[ "${app_version}" != "${GITHUB_REF_NAME}" ]]; then
+            echo "❌ Chart.yaml appVersion is ${app_version}, the tag is ${GITHUB_REF_NAME}; align them before releasing"
+            exit 1
+          fi
+          echo "✅ Chart appVersion matches: ${app_version}"
+
       - name: Create release
         uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
+          # A major-series pin, not `latest`: an unpinned tool is how the lint
+          # job broke, and a release pipeline is the worst place to find that
+          # out. Bump the series deliberately.
+          version: '~> v2'
           args: release --clean --timeout=90m
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -74,3 +96,23 @@ jobs:
           exit-code: '1'
           ignore-unfixed: true
           severity: HIGH,CRITICAL
+
+  # The chart rides the same tag as the image it installs: appVersion equality
+  # is enforced above, so a chart in the OCI registry always names an image
+  # that exists. Runs after the image is published — a chart pointing at a tag
+  # still mid-publish would fail its first install.
+  chart:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+
+      - name: Package and push the chart
+        run: |
+          helm package deploy/charts/easyp-service
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm push easyp-service-*.tgz oci://ghcr.io/easyp-tech/charts

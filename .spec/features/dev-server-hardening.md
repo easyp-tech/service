@@ -236,10 +236,14 @@ PromQL и в pyroscope.
 
 ## Блок D. Чарт
 
-`templates/configmap.yaml` проверен рендером и прогоном конфига через сам
-сервис, но ни разу не поднимался в кластере — dev живёт на compose. Либо
-принять это осознанно, либо один раз проверить на kind/k3s. Без этого «чарт
-работает» — утверждение, опирающееся на `helm template`, а не на запущенный под.
+**Выполнено 2026-08-23.** Чарт прогнан в реальном кластере (kind): install с
+`--wait` (probes, миграции, PVC, NetworkPolicy), upgrade, rollback в обе
+стороны, живой gRPC через port-forward — регистрация плагинов с write-токеном
+и постраничный листинг. Первый же реальный install окупился: upgrade, менявший
+только `AUTH_WRITE_TOKENS` в chart-managed secret, не перекатывал под — секрет
+не хешировался в pod template (в отличие от ConfigMap). Исправлено в чарте
+0.3.1 (`checksum/secret`). Ручной smoke-прогон против живого деплоя:
+`test/chartcheck` (build tag `chartcheck`, инструкция в шапке файла).
 
 ## Порядок
 
