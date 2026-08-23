@@ -13,8 +13,11 @@ spec:
     - Ingress
     - Egress
   ingress:
-    # gRPC is reachable only from the ingress controller. Everything else in the
-    # cluster gets no route to it, which is the point of the mutual-TLS leg.
+    # With networkPolicy.ingressNamespaceSelector set, gRPC is reachable only
+    # from that namespace. Left empty — the default — the `from:` list renders
+    # empty, which NetworkPolicy reads as "from anywhere in the cluster": the
+    # mutual-TLS leg is then the only thing gating the listener. Set the
+    # selector once you know which namespace your ingress controller runs in.
     - from:
         {{- if .Values.networkPolicy.ingressNamespaceSelector }}
         - namespaceSelector:

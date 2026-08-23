@@ -75,9 +75,10 @@ config:
       "2026-08": "<64 hex characters>"
 ```
 
-They render into `LICENSE_PUBLIC_KEYS`. The chart ships easyp.tech's own
-published key as the default, so an installation with a `LICENSE_KEY` needs no
-further configuration.
+They render into the `license.public_keys` section of the config file the
+service reads — not into an environment variable. The chart ships easyp.tech's
+own published key as the default, so an installation with a `LICENSE_KEY` needs
+no further configuration.
 
 More than one entry is allowed, which is how a signing key gets rotated without
 every deployment having to change key on the same day: issue under the new key
@@ -245,7 +246,7 @@ an ingress that terminates TLS in front of it.
 
 ## Alerting
 
-`prometheusRule.enabled` ships ten alerts. It defaults to off only because it
+`prometheusRule.enabled` ships eleven alerts. It defaults to off only because it
 needs the Prometheus Operator CRDs and would otherwise fail the install where
 they are absent — turn it on wherever you actually run this.
 

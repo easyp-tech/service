@@ -251,8 +251,8 @@ look for something writing hard right now rather than something growing slowly.
 3. If the build cache is not it, `du -xh --max-depth=2 / | sort -h | tail -20`.
    The `-x` matters: without it you walk into every container's overlay.
 4. A build cache that keeps coming back means something is building images on
-   this host. It should be pulling them from the registry instead — see
-   `.spec/DEPLOYMENT.md`.
+   this host. It should be pulling the published image instead: `docker compose
+   pull`, not a local build.
 
 ## EasypHostDiskFillingUp
 

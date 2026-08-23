@@ -17,8 +17,9 @@ Three things worth checking before you call it done:
    No LICENSE_KEY was rendered by the chart. In community mode the audit log is
    off and the service is capped at 4 workers and 10 registered plugins. This is
    the correct default, but if you paid for Enterprise and see no audit entries,
-   this is why. Enterprise needs BOTH LICENSE_KEY and LICENSE_PUBLIC_KEY in the
-   secret; a token without the key it is verified against is ignored.
+   this is why. Enterprise needs the token as LICENSE_KEY in the
+   secret AND the key that verifies it in config.license.publicKeys; a token
+   without its verification key is ignored.
 {{- else }}
 1. LICENSE — a key was supplied. Confirm it was accepted:
 
