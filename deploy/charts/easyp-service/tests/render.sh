@@ -144,6 +144,30 @@ if expect_render "no private key reaches the rendered output"; then
   fi
 fi
 
+# The MCP endpoint is opt-in. Off (the default), nothing may publish the port:
+# not the container, not the Service, not the config file — a port that is
+# closed in one place and open in another is worse than either.
+if expect_render "mcp off by default: no listener, no service port, no config section"; then
+  if grep -qE '^\s+- name: mcp$' <<<"$out"; then
+    fail "mcp off by default: the rendered output still names an mcp port"
+  elif grep -qE '^mcp:$' <<<"$(config_yml "$out")"; then
+    fail "mcp off by default: config.yml still carries an mcp section"
+  else
+    pass "mcp off by default: no listener, no service port, no config section"
+  fi
+fi
+
+if expect_render "mcp.enabled publishes the port and the config" \
+  --set mcp.enabled=true; then
+  if ! grep -qE '^\s+- name: mcp$' <<<"$out"; then
+    fail "mcp.enabled publishes the port and the config: no mcp port in the rendered output"
+  elif ! grep -qE '^  enabled: true$' <<<"$(config_yml "$out")"; then
+    fail "mcp.enabled publishes the port and the config: config.yml does not enable mcp"
+  else
+    pass "mcp.enabled publishes the port and the config"
+  fi
+fi
+
 expect_failure "a key that is not 64 hex characters is rejected" "64 hex characters" \
   --set "config.license.publicKeys.2026-08=deadbeef"
 

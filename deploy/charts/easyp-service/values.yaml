@@ -68,9 +68,21 @@ resources:
 # configuration is given; the chart always sets them explicitly.
 ports:
   grpc: 8080
-  metrics: 8081
+  # Singular, matching the service's own server.port.metric. It was `metrics`
+  # until v0.13.0 — one word with two spellings across three files.
+  metric: 8081
   health: 8082
   mcp: 8083
+
+# The MCP endpoint: a read-only HTTP surface AI tooling uses to read the plugin
+# catalog and the easyp.yaml schema. It exposes nothing the anonymous gRPC
+# reads do not, but it sits outside the gRPC interceptor chain — no TLS, no
+# rate limit, no audit — so serving it is a deployment's explicit decision.
+# Off: the container does not listen on ports.mcp and the Service does not
+# publish it. Turn it on inside a trusted network or behind an ingress that
+# terminates TLS.
+mcp:
+  enabled: false
 
 service:
   type: ClusterIP
@@ -251,9 +263,10 @@ extraEnv: []
 #   REGISTRY_S3_ACCESS_KEY_ID       required when config.registry.s3.bucket is set
 #   REGISTRY_S3_SECRET_ACCESS_KEY   required when config.registry.s3.bucket is set
 #   LICENSE_KEY                     optional; absent means community mode
-#   LICENSE_PUBLIC_KEY              optional; single-key alternative to
-#                                   config.license.publicKeys. One of the two is
-#                                   required for LICENSE_KEY to count.
+#
+#   The single-key LICENSE_PUBLIC_KEY was removed in v0.13.0. The trust anchor is
+#   config.license.publicKeys alone: an entry per key id, or one under "*" to
+#   verify any key id. Without a public key, LICENSE_KEY counts for nothing.
 #   AUTH_WRITE_TOKENS               optional; absent means no writes are allowed
 #
 # AUTH_WRITE_TOKENS holds sha256 digests, never the tokens: "ci=<64 hex>,me=<64 hex>".

@@ -29,12 +29,17 @@ data:
   config.yml: |
     # Rendered by the easyp-service chart. Edit values.yaml and upgrade — a
     # change made here is overwritten by the next `helm upgrade`.
+    log:
+      # Was --log_level on the container's argument list. As a setting it shows
+      # up in `easyp-svc config print` alongside everything else, which is where
+      # an operator looks to find out what the service is actually running with.
+      level: {{ .Values.config.logLevel | quote }}
     server:
       # The pod's own interface; the Service decides who reaches it.
       host: "0.0.0.0"
       port:
         grpc: "{{ .Values.ports.grpc | int }}"
-        metric: "{{ .Values.ports.metrics | int }}"
+        metric: "{{ .Values.ports.metric | int }}"
         health: "{{ .Values.ports.health | int }}"
         mcp: "{{ .Values.ports.mcp | int }}"
       force_shutdown_after: {{ printf "%ds" (int .Values.config.forceShutdownAfterSeconds) }}
@@ -112,6 +117,14 @@ data:
       partition_op_timeout: {{ .partitionOpTimeout | quote }}
     {{- end }}
 
+    {{- if .Values.mcp.enabled }}
+    # Read-only HTTP surface for AI tooling (plugin catalog, config schema).
+    # Rendered only when enabled: the service's own default is off, so an
+    # absent section and `enabled: false` mean the same thing.
+    mcp:
+      enabled: true
+    {{- end }}
+
     {{- if or .Values.config.telemetry.otlpEndpoint .Values.config.telemetry.pyroscopeEndpoint .Values.config.telemetry.serviceTier }}
     # Each key is omitted when unset, and the section with them. The endpoints
     # have no defaults precisely so that "no collector" can be expressed, and an
@@ -120,9 +133,6 @@ data:
     # apart, and an empty tag would only add a dimension with one value.
     telemetry:
       {{- with .Values.config.telemetry.otlpEndpoint }}
-      # Note the double prefix: the field is OTEL_EXPORTER_OTLP_ENDPOINT inside a
-      # section prefixed TELEMETRY_, so the plain OTel variable name is not what
-      # the service reads.
       otlp_endpoint: {{ . | quote }}
       {{- end }}
       {{- with .Values.config.telemetry.pyroscopeEndpoint }}

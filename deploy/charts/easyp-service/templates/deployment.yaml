@@ -44,6 +44,13 @@ spec:
         # template is what turns `helm upgrade --set config.…` into a rollout
         # rather than a silent no-op.
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.secrets.create }}
+        # Same reasoning for the chart-managed secret: a rotated write token or
+        # DSN otherwise waits for a restart nobody knows is needed. An
+        # existingSecret cannot be hashed from here — rotating one takes
+        # Reloader or `kubectl rollout restart`.
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -74,7 +81,6 @@ spec:
             # used to be here instead was forty environment variables written out
             # by hand in this template — see configmap.yaml.
             - --cfg=/etc/easyp/config.yml
-            - --log_level={{ .Values.config.logLevel }}
           securityContext:
             allowPrivilegeEscalation: false
             # Not read-only: the service unpacks plugin archives into
@@ -87,11 +93,13 @@ spec:
             - name: grpc
               containerPort: {{ .Values.ports.grpc }}
             - name: metrics
-              containerPort: {{ .Values.ports.metrics }}
+              containerPort: {{ .Values.ports.metric }}
             - name: health
               containerPort: {{ .Values.ports.health }}
+            {{- if .Values.mcp.enabled }}
             - name: mcp
               containerPort: {{ .Values.ports.mcp }}
+            {{- end }}
           env:
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}

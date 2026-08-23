@@ -29,6 +29,16 @@ helm install easyp ./charts/easyp-service \
   --set tls.enabled=false
 ```
 
+Released versions are published to the OCI registry alongside the image, so a
+checkout is not required:
+
+```bash
+helm install easyp oci://ghcr.io/easyp-tech/charts/easyp-service \
+  --version 0.3.1 \
+  --set secrets.existingSecret=easyp-env \
+  --set tls.enabled=false
+```
+
 That gets you a running service with no transport security and no writes
 enabled — enough to confirm it works, not enough to expose.
 
@@ -43,7 +53,6 @@ environment variable names**:
 | `REGISTRY_S3_ACCESS_KEY_ID` | when S3 is configured | must be set together with the secret key |
 | `REGISTRY_S3_SECRET_ACCESS_KEY` | when S3 is configured | |
 | `LICENSE_KEY` | no | absent ⇒ community mode |
-| `LICENSE_PUBLIC_KEY` | no | single-key alternative to `config.license.publicKeys`; without one of the two, `LICENSE_KEY` is ignored |
 | `AUTH_WRITE_TOKENS` | no | absent ⇒ all writes rejected |
 
 `AUTH_WRITE_TOKENS` holds sha256 digests, never tokens:
@@ -224,6 +233,16 @@ and open cluster-wide when it is not. Set it once you know which namespace your
 ingress controller runs in — the mutual-TLS leg is what actually protects the
 listener, but two locks are better than one.
 
+## MCP
+
+Off by default. `mcp.enabled: true` makes the container listen on `ports.mcp`
+(8083), publishes it on the Service, and enables it in the rendered config —
+all three together, so the port is never half-open. The endpoint is read-only
+HTTP for AI tooling (plugin catalog, `easyp.yaml` schema) and exposes nothing
+the anonymous gRPC reads do not, but it bypasses the gRPC interceptor chain:
+no TLS, no rate limit, no audit. Enable it inside a trusted network or behind
+an ingress that terminates TLS in front of it.
+
 ## Alerting
 
 `prometheusRule.enabled` ships ten alerts. It defaults to off only because it
@@ -285,9 +304,8 @@ Two things are easy to get wrong when setting them by hand:
 - Ports default to **23410–23413** in the service, not 8080–8083. The chart
   always sets them explicitly.
 - The OTLP endpoint key is `telemetry.otlp_endpoint`, and its variable is
-  `TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT`. The standard
-  `OTEL_EXPORTER_OTLP_ENDPOINT` is *not* read: the field sits inside a section
-  prefixed `TELEMETRY_`.
+  `TELEMETRY_OTLP_ENDPOINT`. The standard `OTEL_EXPORTER_OTLP_ENDPOINT` is
+  read as an alias, but the canonical name wins when both are set.
 
 Anything the chart does not model can still be set through `extraEnv`, which
 overrides the file.
