@@ -3,6 +3,22 @@
 Only releases that need a hand are listed. A version absent from this file
 upgrades by pulling the new image.
 
+## v0.13.0 → v0.13.1
+
+The service is unchanged; this release exists to ship **chart 0.3.2**.
+
+Chart 0.3.1 was published with its `runbookBaseUrl` pointing into `.spec/`,
+which was deleted days after the release — so every alert it renders links to a
+404, which is the page someone opens at 3am. A published chart cannot be
+corrected in place, so the fix needed a new version:
+
+```bash
+helm upgrade easyp oci://ghcr.io/easyp-tech/charts/easyp-service --version 0.3.2
+```
+
+Nothing else changed in the chart, so an upgrade with unchanged values only
+replaces the runbook links.
+
 ## v0.12.x → v0.13.0
 
 Six changes need action before the upgrade, and one of them is silent — read

@@ -37,7 +37,7 @@ version: 0.3.2
 # never existed and stopped at ImagePullBackOff; `helm template` renders a
 # wrong tag as happily as a right one. v0.13.0 is the release this chart ships
 # with — do not publish the chart before that tag exists.
-appVersion: "v0.13.0"
+appVersion: "v0.13.1"
 
 home: https://github.com/easyp-tech/service
 sources:
