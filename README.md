@@ -765,7 +765,8 @@ endpoint became opt-in, and an unfiltered plugin listing now returns one page
 rather than everything.
 
 Operational procedures for each alert are in
-[docs/RUNBOOKS.md](docs/RUNBOOKS.md).
+[docs/RUNBOOKS.md](docs/RUNBOOKS.md); what a backup has to contain and how to
+restore it is in [docs/BACKUP.md](docs/BACKUP.md).
 
 ## Troubleshooting
 
