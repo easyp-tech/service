@@ -199,6 +199,24 @@ message PluginsRequest {
   repeated string tags = 4 [(doc.v1.field) = {
     example: "stable"
   }];
+
+  // Maximum number of plugins to return in one response.
+  //
+  // Omitting it (or zero) selects the server's default page size (100).
+  // Values above the server's ceiling (1000) are cut down to it rather than
+  // rejected.
+  optional uint32 page_size = 5 [(doc.v1.field) = {
+    example: "100"
+  }];
+
+  // Continuation token from a previous response's next_page_token.
+  //
+  // Omit to read the first page. The token is opaque: it is only meaningful
+  // to the server that issued it, and only together with the same filters —
+  // changing the filters between pages makes the result undefined.
+  optional string page_token = 6 [(doc.v1.field) = {
+    example: ""
+  }];
 }
 
 // Response message for listing plugins.
@@ -212,6 +230,14 @@ message PluginsResponse {
 
   // Number of matching plugins in this response.
   int32 total = 2 [(doc.v1.field) = {
+    output_only: true
+  }];
+
+  // Token for the next page, empty when this response is the last page.
+  //
+  // Pass it back in PluginsRequest.page_token, with the same filters, to
+  // continue the listing.
+  string next_page_token = 3 [(doc.v1.field) = {
     output_only: true
   }];
 }

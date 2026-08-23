@@ -98,7 +98,7 @@ func (g fakeGate) MaxPlugins() int              { return -1 }
 // failingRegistry fails every call, which drives Core down its audit-on-error paths.
 type failingRegistry struct{ Registry }
 
-func (failingRegistry) List(_ context.Context, _ PluginFilter) ([]PluginInfo, error) {
+func (failingRegistry) List(_ context.Context, _ PluginFilter, _ PluginPage) ([]PluginInfo, error) {
 	return nil, errRegistryUnavailable
 }
 
@@ -159,7 +159,7 @@ func TestAuditIsGatedByLicense(t *testing.T) {
 			sink := &fakeSink{}
 			module := New(&countingMetrics{}, failingRegistry{}, tt.gate, sink, testLogger())
 
-			_, err := module.ListPlugins(t.Context(), PluginFilter{})
+			_, err := module.ListPlugins(t.Context(), PluginFilter{}, PluginPage{})
 			require.Error(t, err)
 
 			assert.Equal(t, tt.wantEntries, sink.count(),
@@ -176,7 +176,7 @@ func TestAuditErrorEntryCarriesErrorCode(t *testing.T) {
 	sink := &fakeSink{}
 	module := New(&countingMetrics{}, failingRegistry{}, enterpriseGate(), sink, testLogger())
 
-	_, err := module.ListPlugins(t.Context(), PluginFilter{})
+	_, err := module.ListPlugins(t.Context(), PluginFilter{}, PluginPage{})
 	require.Error(t, err)
 
 	require.Equal(t, 1, sink.count())
@@ -222,7 +222,7 @@ func TestAuditRecordsActor(t *testing.T) {
 			sink := &fakeSink{}
 			module := New(&countingMetrics{}, failingRegistry{}, enterpriseGate(), sink, testLogger())
 
-			_, err := module.ListPlugins(ctx, PluginFilter{})
+			_, err := module.ListPlugins(ctx, PluginFilter{}, PluginPage{})
 			require.Error(t, err)
 
 			require.Equal(t, 1, sink.count())

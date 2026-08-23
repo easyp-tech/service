@@ -23,7 +23,7 @@ func auditStore(t *testing.T) (*adapter_audit.Store, *database.SQL) {
 
 	dsn := requireDSN(t)
 
-	db, err := database.NewSQL(t.Context(), "postgres", database.SQLConfig{}, &connectors.Raw{Query: dsn}) //nolint:exhaustruct
+	db, err := database.NewSQL(t.Context(), "postgres", database.SQLConfig{}, &connectors.Raw{Query: dsn})
 	require.NoError(t, err)
 
 	t.Cleanup(func() { _ = db.Close() })
@@ -34,7 +34,7 @@ func auditStore(t *testing.T) (*adapter_audit.Store, *database.SQL) {
 func auditEntry(op string) core.AuditEntry {
 	id, _ := uuid.NewV4()
 
-	return core.AuditEntry{ //nolint:exhaustruct
+	return core.AuditEntry{
 		ID:            id,
 		OperationType: op,
 		Status:        core.AuditStatusSuccess,
@@ -85,7 +85,7 @@ func TestWorkerWritesThroughShutdown(t *testing.T) {
 
 	store, db := auditStore(t)
 
-	worker := adapter_audit.NewWorker(store, adapter_audit.Config{ //nolint:exhaustruct
+	worker := adapter_audit.NewWorker(store, adapter_audit.Config{
 		BufferSize:    100,
 		BatchSize:     100,
 		FlushInterval: 20 * time.Millisecond,

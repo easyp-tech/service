@@ -249,7 +249,7 @@ func verifyChecksum(binPath, expected string) error {
 }
 
 // List implements core.Registry.
-func (r *Registry) List(ctx context.Context, filter core.PluginFilter) ([]core.PluginInfo, error) {
+func (r *Registry) List(ctx context.Context, filter core.PluginFilter, page core.PluginPage) ([]core.PluginInfo, error) {
 	var plugins []plugin
 	query := "select id, group_name, name, version, tags, created_at from plugins where 1=1"
 	var args []any
@@ -281,7 +281,30 @@ func (r *Registry) List(ctx context.Context, filter core.PluginFilter) ([]core.P
 		if len(nonEmptyTags) > 0 {
 			query += fmt.Sprintf(" and tags @> $%d", argID)
 			args = append(args, pq.Array(nonEmptyTags))
+			argID++
 		}
+	}
+
+	// Keyset continuation: the row comparison resumes exactly after the last
+	// row of the previous page and is served by the same unique index that
+	// backs the ORDER BY, so a page deep in the listing costs the same as the
+	// first one — unlike OFFSET, which re-reads everything it skips.
+	if page.After != nil {
+		groupArg := argID
+		nameArg := groupArg + 1
+		versionArg := nameArg + 1
+		query += fmt.Sprintf(" and (group_name, name, version) > ($%d, $%d, $%d)", groupArg, nameArg, versionArg)
+		args = append(args, page.After.Group, page.After.Name, page.After.Version)
+		argID = versionArg + 1
+	}
+
+	// The order is the uniqueness key of the table, so it is total: without a
+	// tie-breaking total order, rows could repeat or vanish between pages.
+	query += " order by group_name, name, version"
+
+	if page.Size > 0 {
+		query += fmt.Sprintf(" limit $%d", argID)
+		args = append(args, page.Size)
 	}
 
 	err := r.db.NoTxContext(ctx, func(conn *sqlx.DB) error {
@@ -471,8 +494,7 @@ func (p *plugin) Generate(ctx context.Context, req *pluginpb.CodeGeneratorReques
 	}
 
 	if waitErr != nil {
-		var exitErr *exec.ExitError
-		if errors.As(waitErr, &exitErr) {
+		if _, ok := errors.AsType[*exec.ExitError](waitErr); ok {
 			return nil, fmt.Errorf("%w: plugin execution failed: %w, stderr: %s", core.ErrGenerationFailed, waitErr, string(stderrData))
 		}
 

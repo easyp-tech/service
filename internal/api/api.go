@@ -62,36 +62,13 @@ func (api *API) GenerateCode(ctx context.Context, request *generator.GenerateCod
 }
 
 func (api *API) Plugins(ctx context.Context, request *generator.PluginsRequest) (*generator.PluginsResponse, error) {
-	if request == nil {
-		request = &generator.PluginsRequest{}
+	response, err := listPlugins(ctx, api.app, request)
+	if errors.Is(err, errBadPageToken) {
+		return nil, status.Error(codes.InvalidArgument, err.Error()) //nolint:wrapcheck // the status must reach the client as built
 	}
 
-	filter := core.PluginFilter{
-		Group:   strings.TrimSpace(request.GetGroup()),
-		Name:    strings.TrimSpace(request.GetName()),
-		Version: strings.TrimSpace(request.GetVersion()),
-		Tags:    compactStrings(request.GetTags()),
-	}
-
-	plugins, err := api.app.ListPlugins(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("api.app.ListPlugins: %w", err)
-	}
-
-	response := &generator.PluginsResponse{
-		Plugins: make([]*generator.PluginInfo, 0, len(plugins)),
-		Total:   int32(len(plugins)), //nolint:gosec // len() result fits int32 in practice
-	}
-
-	for _, plugInfo := range plugins {
-		response.Plugins = append(response.Plugins, &generator.PluginInfo{
-			Id:        plugInfo.ID.String(),
-			Group:     plugInfo.Group,
-			Name:      plugInfo.Name,
-			Version:   plugInfo.Version,
-			Tags:      plugInfo.Tags,
-			CreatedAt: timestamppb.New(plugInfo.CreatedAt),
-		})
 	}
 
 	return response, nil

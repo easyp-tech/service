@@ -12,10 +12,10 @@ import (
 func listPluginsWith(t *testing.T, gate FeatureGate, sink AuditSink) []operationCount {
 	t.Helper()
 
-	metrics := &countingMetrics{} //nolint:exhaustruct // Zero value is the recorder.
+	metrics := &countingMetrics{}
 	module := New(metrics, failingRegistry{}, gate, sink, testLogger())
 
-	_, err := module.ListPlugins(t.Context(), PluginFilter{}) //nolint:exhaustruct // Empty filter.
+	_, err := module.ListPlugins(t.Context(), PluginFilter{}, PluginPage{})
 	require.Error(t, err)
 
 	return metrics.recorded()
@@ -24,7 +24,7 @@ func listPluginsWith(t *testing.T, gate FeatureGate, sink AuditSink) []operation
 func TestOperationCountedOnError(t *testing.T) {
 	t.Parallel()
 
-	got := listPluginsWith(t, enterpriseGate(), &fakeSink{}) //nolint:exhaustruct // Zero value is the recorder.
+	got := listPluginsWith(t, enterpriseGate(), &fakeSink{})
 
 	require.Equal(t, []operationCount{{operation: OperationListPlugins, status: AuditStatusError}}, got)
 }
@@ -32,10 +32,10 @@ func TestOperationCountedOnError(t *testing.T) {
 func TestOperationCountedOnSuccess(t *testing.T) {
 	t.Parallel()
 
-	metrics := &countingMetrics{}                                                        //nolint:exhaustruct // Zero value is the recorder.
-	module := New(metrics, emptyRegistry{}, enterpriseGate(), &fakeSink{}, testLogger()) //nolint:exhaustruct
+	metrics := &countingMetrics{}
+	module := New(metrics, emptyRegistry{}, enterpriseGate(), &fakeSink{}, testLogger())
 
-	_, err := module.ListPlugins(t.Context(), PluginFilter{}) //nolint:exhaustruct // Empty filter.
+	_, err := module.ListPlugins(t.Context(), PluginFilter{}, PluginPage{})
 	require.NoError(t, err)
 
 	require.Equal(t,
@@ -59,7 +59,7 @@ func TestOperationCountedWhenAuditIsOff(t *testing.T) {
 	t.Run("community licence denies audit", func(t *testing.T) {
 		t.Parallel()
 
-		sink := &fakeSink{} //nolint:exhaustruct // Zero value is the recorder.
+		sink := &fakeSink{}
 		got := listPluginsWith(t, communityGate(), sink)
 
 		require.Equal(t,
@@ -82,6 +82,6 @@ func TestOperationCountedWhenAuditIsOff(t *testing.T) {
 // emptyRegistry succeeds with nothing, which drives Core down its success path.
 type emptyRegistry struct{ Registry }
 
-func (emptyRegistry) List(_ context.Context, _ PluginFilter) ([]PluginInfo, error) {
+func (emptyRegistry) List(_ context.Context, _ PluginFilter, _ PluginPage) ([]PluginInfo, error) {
 	return nil, nil
 }

@@ -69,7 +69,7 @@ func (r *staticRegistry) Get(_ context.Context, _, _, _ string) (Plugin, error) 
 	return r.plugin, nil
 }
 
-func (r *staticRegistry) List(_ context.Context, _ PluginFilter) ([]PluginInfo, error) {
+func (r *staticRegistry) List(_ context.Context, _ PluginFilter, _ PluginPage) ([]PluginInfo, error) {
 	return nil, nil
 }
 
@@ -254,7 +254,7 @@ func TestMaxRetriesIsHonouredIncludingZero(t *testing.T) {
 			t.Parallel()
 
 			plugin := new(countingPlugin)
-			pool := newTestPool(t, plugin, WorkerPoolConfig{ //nolint:exhaustruct // defaults cover the rest
+			pool := newTestPool(t, plugin, WorkerPoolConfig{
 				Workers:                  1,
 				QueueSize:                1,
 				MaxConcurrentGenerations: 1,

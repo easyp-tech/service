@@ -14,18 +14,31 @@ Package: `generator.v1`
 | RPC | Request | Response | Description |
 |-----|---------|----------|-------------|
 | `GenerateCode` | `GenerateCodeRequest` | `GenerateCodeResponse` | Run plugin in Docker, return generated code |
-| `Plugins` | `PluginsRequest` | `PluginsResponse` | List available plugins with optional filtering |
+| `Plugins` | `PluginsRequest` | `PluginsResponse` | List available plugins with optional filtering, paginated |
 | `CreatePlugin` | `CreatePluginRequest` | `CreatePluginResponse` | Register a new plugin in the registry |
 | `UpdatePlugin` | `UpdatePluginRequest` | `UpdatePluginResponse` | Modify plugin config and tags |
 | `DeletePlugin` | `DeletePluginRequest` | `DeletePluginResponse` | Remove a plugin from the registry |
 
+`Plugins` pages its listing (AIP-158 shape): `page_size` caps one response
+(default 100, ceiling 1000 — out-of-range values are normalised, not
+rejected), `page_token` continues where the previous response's
+`next_page_token` stopped, and an empty `next_page_token` marks the last
+page. The token is opaque keyset state over the listing order
+`(group, name, version)`; a token the server did not issue is
+`INVALID_ARGUMENT`. The SDK's `ListPlugins` walks all pages itself and
+returns the complete list.
+
 ### MCP Tools
 
-Endpoint: `POST /mcp` (streamable HTTP transport)
+Endpoint: `POST /mcp` (streamable HTTP transport). **Opt-in**: served only
+when `mcp.enabled` is set (`MCP_ENABLED`); the listener is off by default and
+the Helm chart ships it disabled (`mcp.enabled` value). Read-only — it exposes
+nothing the anonymous gRPC reads do not — but it sits outside the gRPC
+interceptor chain, which is why it is a decision rather than a default.
 
 | Tool | Description |
 |------|-------------|
-| `plugins_list` | List available plugins (wraps `Plugins` RPC) |
+| `plugins_list` | List available plugins (wraps `Plugins` RPC, same pagination) |
 | `easyp_config_describe` | Describe easyp.yaml configuration schema |
 
 ## Error Mapping

@@ -43,7 +43,7 @@ func NewAuthInterceptor(
 	reg *prometheus.Registry,
 	namespace string,
 ) *AuthInterceptor {
-	failures := prometheus.NewCounterVec(prometheus.CounterOpts{ //nolint:exhaustruct // the rest keep their defaults
+	failures := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
 		Name:      "auth_failures_total",
 		Help:      "Total number of rejected authentication attempts.",

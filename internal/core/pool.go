@@ -363,8 +363,8 @@ func (p *WorkerPool) Get(ctx context.Context, pluginGroup, pluginName, pluginVer
 }
 
 // List проксирует запрос напрямую во внутренний Registry без очереди.
-func (p *WorkerPool) List(ctx context.Context, filter PluginFilter) ([]PluginInfo, error) {
-	return p.inner.List(ctx, filter)
+func (p *WorkerPool) List(ctx context.Context, filter PluginFilter, page PluginPage) ([]PluginInfo, error) {
+	return p.inner.List(ctx, filter, page)
 }
 
 // Create проксирует запрос напрямую во внутренний Registry без очереди.

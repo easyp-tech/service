@@ -113,15 +113,45 @@ func (c *Core) Generate(ctx context.Context, req GenerateCodeRequest) (*Generate
 	}, nil
 }
 
-// ListPlugins retrieves a list of plugins matching the filter.
-func (c *Core) ListPlugins(ctx context.Context, filter PluginFilter) ([]PluginInfo, error) {
+// Page size bounds for ListPlugins. The default keeps an unpaged call cheap;
+// the ceiling keeps one response bounded no matter what the caller asks for —
+// values outside the range are normalised rather than rejected, because the
+// caller has no way to know the server's limits.
+const (
+	DefaultPageSize = 100
+	MaxPageSize     = 1000
+)
+
+// ListPlugins retrieves one page of plugins matching the filter.
+func (c *Core) ListPlugins(ctx context.Context, filter PluginFilter, page PluginPage) (PluginList, error) {
 	start := time.Now()
 
-	plugins, err := c.registry.List(ctx, filter)
+	size := page.Size
+	if size <= 0 {
+		size = DefaultPageSize
+	}
+
+	if size > MaxPageSize {
+		size = MaxPageSize
+	}
+
+	// One row past the page answers "is there a next page" without a second
+	// query: a full probe means the extra row starts the next page.
+	probe := PluginPage{Size: size + 1, After: page.After}
+
+	plugins, err := c.registry.List(ctx, filter, probe)
 	if err != nil {
 		c.auditError(ctx, OperationListPlugins, "", start, err)
 
-		return nil, fmt.Errorf("c.registry.List: %w", err)
+		return PluginList{}, fmt.Errorf("c.registry.List: %w", err)
+	}
+
+	var next *PluginKey
+
+	if len(plugins) > size {
+		plugins = plugins[:size]
+		last := plugins[size-1]
+		next = &PluginKey{Group: last.Group, Name: last.Name, Version: last.Version}
 	}
 
 	metadata := map[string]any{
@@ -129,7 +159,7 @@ func (c *Core) ListPlugins(ctx context.Context, filter PluginFilter) ([]PluginIn
 	}
 	c.auditSuccess(ctx, OperationListPlugins, "", start, metadata)
 
-	return plugins, nil
+	return PluginList{Plugins: plugins, Next: next}, nil
 }
 
 func getGroup(pluginName string) (string, error) {
@@ -236,7 +266,9 @@ func (c *Core) CreatePlugin(ctx context.Context, req CreatePluginRequest) (*Plug
 	// built without a gate treats everything as allowed, and dereferencing here
 	// would panic on the one path that reaches it.
 	if limit := c.maxPlugins(); limit >= 0 {
-		plugins, err := c.registry.List(ctx, PluginFilter{})
+		// A zero-size page is unbounded: the licence check needs the true
+		// count, not the first page of it.
+		plugins, err := c.registry.List(ctx, PluginFilter{}, PluginPage{})
 		if err != nil {
 			c.auditError(ctx, OperationCreatePlugin, pluginName, start, err)
 
