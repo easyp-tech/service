@@ -1,9 +1,40 @@
 version: 2
 
-project_name: easyp-api-service
+project_name: easyp-svc
 
+# The CLI is also a client tool: auth new-token, plugins pack/push, config
+# validate all run on operator machines, not just in the container. The
+# binaries here are for those machines; the Docker image compiles its own copy
+# in the Dockerfile (buildx cross-compile, no QEMU) — both stamp the same
+# {{ .Version }} into main.version, so the two builds cannot disagree about
+# what they are.
 builds:
-  - skip: true
+  - main: ./cmd/easyp-svc
+    binary: easyp-svc
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    # Mirrors the Dockerfile's build line; if one changes, change both.
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      # ELv2 requires the terms to travel with the software.
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
 
 snapshot:
   version_template: SNAPSHOT-{{ .Commit }}
@@ -27,7 +58,7 @@ release:
     owner: easyp-tech
     name: service
   header: |
-    `easyp-api-service` is a free and open-source project built by volunteers.
+    `easyp-svc` is a free and open-source project built by volunteers.
 
 dockers:
   - image_templates:

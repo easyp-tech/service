@@ -7,6 +7,10 @@ on:
   pull_request:
     branches:
       - master
+  # So release.yml can run the same contract checks against the tagged commit
+  # before publishing anything — a release is where a proto mistake becomes
+  # permanent.
+  workflow_call:
 
 permissions:
   contents: read

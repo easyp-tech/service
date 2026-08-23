@@ -20,6 +20,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # A superseded commit's checks are cost without information: cancel them and
+  # run the newest. The ref keys the group, so different branches, tags and
+  # PRs never cancel each other.
+  group: go-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Build

@@ -1,0 +1,79 @@
+# Publishes an image from the tip of master.
+#
+# Why this exists: release.yml runs only on a version tag, and goreleaser
+# publishes `:latest` from there. So `:latest` has always meant "the last
+# release", never "current master", and nothing published master at all. That
+# gap produced a dead end for anyone following the README — the config files in
+# this repository are written as differences from the binary's defaults, so a
+# file and an image from different weeks disagree about which defaults exist,
+# and the error names a key whose default is documented.
+#
+# Three tags, three meanings, and they must not be confused:
+#
+#   vX.Y.Z      a release, immutable                  (release.yml)
+#   latest      the most recent release               (release.yml)
+#   edge        the tip of master, moves on every push (this file)
+#   sha-<short> one commit, immutable                  (this file)
+#
+# `edge` rather than reusing `latest`, because every `docker pull` idiom in the
+# world assumes `latest` is a release; and rather than `master`, because a tag
+# named after a branch invites people to pin to it as though it were stable.
+name: Edge image
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  # One build per branch: an older commit's image must never overwrite a newer
+  # one's `edge` tag, which is what a queued run would do.
+  group: edge-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=edge
+            type=sha,prefix=sha-,format=short
+
+      # The same spelling the sha image tag uses, so the version a running
+      # container reports is the tag that pulls that exact image.
+      - id: shortsha
+        run: echo "value=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      # Not goreleaser: it builds from a tag and would refuse here. The
+      # Dockerfile is the same one the release build uses.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          # Without it the binary self-reports `dev` in every log line and
+          # trace, and two different edge pulls become indistinguishable. The
+          # sha tag is the one identity an edge build has.
+          build-args: |
+            VERSION=${{ steps.shortsha.outputs.value }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
