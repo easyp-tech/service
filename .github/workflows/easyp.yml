@@ -30,6 +30,10 @@ jobs:
 
   breaking:
     name: Breaking Changes
+    # Not on tags: a release tag points at a commit master already carries, so
+    # comparing it against master proves nothing — and the action's own fetch
+    # fails on a tag checkout. The check that matters ran on the PR.
+    if: github.ref_type != 'tag'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
