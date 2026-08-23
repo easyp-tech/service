@@ -117,8 +117,8 @@ const (
 
 **Enterprise-only features:** Audit
 
-Multi-tenancy and response caching used to be listed here as constants with
-nothing behind them. They are in `.spec/ROADMAP.md` until they are code.
+Features are listed here once they are code. Constants with nothing behind them
+used to sit in this list and read as shipped capability.
 
 ### License Tiers
 

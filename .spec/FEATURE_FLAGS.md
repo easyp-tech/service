@@ -35,11 +35,11 @@ const (
 
 Audit is the only feature the tier actually gates. What separates the two tiers
 today is that plus the resource limits below — worth knowing before quoting
-anyone a price. Multi-tenancy and response caching are in `.spec/ROADMAP.md`.
+anyone a price.
 
 `LicenseInterceptor` maps gRPC methods to features and its map is empty, because
-no method is Enterprise-only. It stays wired for the roadmap items rather than
-being removed and rewritten.
+no method is Enterprise-only. It stays wired so that gating a method later is a
+map entry rather than a rewrite.
 
 ## Resource Limits
 

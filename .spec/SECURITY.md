@@ -43,8 +43,7 @@ the shape this takes:
   easyp-tech's own deployments enable it behind their edge proxy; the Helm
   chart ships it disabled.
 
-Identity beyond a shared token is deliberately out of scope; see
-[features/auth-roadmap.md](features/auth-roadmap.md).
+Identity beyond a shared token is deliberately out of scope.
 
 ## Plugin Isolation
 
@@ -88,10 +87,10 @@ write token (see *Access to the API*). The threat is therefore an insider or a
 stolen CI credential, not an anonymous caller — which is what keeps this off the
 critical path.
 
-**This assessment must be revisited if plugin registration is ever opened to
-users**, for example under multi-tenancy. At that point the plugin process needs
-real isolation: a separate uid, a mount namespace that excludes `/certs`, and a
-disk quota.
+**This assessment must be revisited if plugin registration is ever opened
+beyond the operators who hold a write token.** At that point the plugin process
+needs real isolation: a separate uid, a mount namespace that excludes `/certs`,
+and a disk quota.
 
 The related but likelier failure — a volume smaller than the cache limit, so the
 disk fills before eviction ever triggers — is refused at install time by the

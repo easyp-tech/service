@@ -837,8 +837,7 @@ and removing license notices.
 
 Community mode needs no license key and stays free under those terms. What
 Enterprise adds today is the audit log and the removal of the community limits
-(4 workers, 10 registered plugins); planned additions are in
-[.spec/ROADMAP.md](.spec/ROADMAP.md).
+(4 workers, 10 registered plugins).
 
 The client SDK and the API contract it is generated from are both Apache 2.0, so
 they can be imported into your own code without inheriting any of the above. The

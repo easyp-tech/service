@@ -15,9 +15,9 @@ Two separate mechanisms share this document:
   control mechanism and never gates the basic lock.
 
 There is no user model: the service has no users, organisations or sessions, and
-no tables for them. When identity arrives it comes from a dedicated service and
-this one only verifies what it issues — see
-[auth-roadmap.md](features/auth-roadmap.md).
+no tables for them. `Authenticator` is an interface with one implementation so
+that another scheme can land beside the static tokens without touching the
+interceptor.
 
 ## Write tokens
 
