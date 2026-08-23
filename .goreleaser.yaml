@@ -36,6 +36,12 @@ archives:
 checksum:
   name_template: checksums.txt
 
+# One SBOM per archive, attached to the release. Enterprise procurement asks
+# for this, and generating it from the built artifact rather than from go.mod
+# means it describes what actually shipped.
+sboms:
+  - artifacts: archive
+
 snapshot:
   version_template: SNAPSHOT-{{ .Commit }}
 
@@ -54,6 +60,11 @@ changelog:
 
 release:
   skip_upload: false
+  # A release can fail after publishing: the image scan runs against the pushed
+  # image, so a finding reds the job that already uploaded. Without this, the
+  # re-run dies on "asset already exists" and the assets have to be deleted by
+  # hand before the pipeline can finish — which is how v0.13.0 was recovered.
+  replace_existing_artifacts: true
   github:
     owner: easyp-tech
     name: service
@@ -113,6 +124,17 @@ dockers:
       # Needed by the COPY in Dockerfile: ELv2 requires the terms to travel
       # with the software.
       - LICENSE
+
+# Keyless: the identity in the signature is the workflow that produced the
+# image, which is checkable without anyone holding a private key.
+docker_signs:
+  - cmd: cosign
+    args:
+      - sign
+      - --yes
+      - "${artifact}@${digest}"
+    artifacts: all
+    output: true
 
 docker_manifests:
   - name_template: "ghcr.io/easyp-tech/service:{{ .Tag }}"

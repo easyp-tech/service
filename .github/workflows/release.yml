@@ -25,6 +25,9 @@ jobs:
     permissions:
       contents: write
       packages: write
+      # Keyless signing: cosign exchanges this token for a short-lived
+      # certificate, so nothing long-lived has to be stored as a secret.
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -69,6 +72,14 @@ jobs:
             exit 1
           fi
           echo "✅ Chart appVersion matches: ${app_version}"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # goreleaser shells out to syft for the SBOMs; without it on PATH the
+      # release fails at the cataloguing step, after the binaries are built.
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@v0
 
       - name: Create release
         uses: goreleaser/goreleaser-action@v6

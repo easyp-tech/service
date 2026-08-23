@@ -35,7 +35,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The point of `edge` is that someone following the README gets an image that
+  # works. Publishing from a red master defeats that: the tag would move to a
+  # commit whose tests, linter or vulnerability scan said no.
+  verify:
+    uses: ./.github/workflows/go.yml
+
   publish:
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
