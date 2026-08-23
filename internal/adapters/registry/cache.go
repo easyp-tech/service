@@ -337,6 +337,13 @@ func (c *pluginCache) versionDirs() ([]string, error) {
 			return nil
 		}
 
+		// Archives mid-download live here. They are transient and belong to no
+		// plugin version, so they are neither cache entries nor candidates for
+		// eviction — and descending into them would race the download.
+		if entry.Name() == tmpDirName {
+			return fs.SkipDir
+		}
+
 		rel, relErr := filepath.Rel(c.root, path)
 		if relErr != nil {
 			return relErr //nolint:wrapcheck // surfaced by the caller with the path attached

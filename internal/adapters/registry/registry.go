@@ -37,6 +37,12 @@ import (
 const (
 	numPipesReader = 2
 	stderrLimit    = 1 * 1024 * 1024
+
+	// tmpDirName is where archives are staged inside pluginsDir. The leading
+	// dot keeps it out of the "{group}/{name}/{version}" layout the cache walk
+	// and the plugin lookup both assume.
+	tmpDirName = ".tmp"
+	dirPerm    = 0o750
 )
 
 // Registry package errors.
@@ -68,8 +74,14 @@ type (
 
 	// Registry is a registry for EasyP plugin server.
 	Registry struct {
-		db            *database.SQL
-		pluginsDir    string
+		db         *database.SQL
+		pluginsDir string
+		// tmpDir holds archives mid-download. It sits inside pluginsDir so that
+		// the download and the unpacked result land on the same volume: the
+		// default os.TempDir() is the container's writable layer, charged
+		// against ephemeral-storage rather than the plugin volume, and an
+		// archive is a few hundred megabytes with several downloads in flight.
+		tmpDir        string
 		maxOutputSize int64
 		storage       core.BinaryStorage
 		downloads     singleflight.Group
@@ -147,6 +159,11 @@ func New(
 
 	guard := safe.NewGuard(cacheOpts.Registry, cacheOpts.Namespace)
 
+	tmpDir := filepath.Join(pluginsDir, tmpDirName)
+	if err := os.MkdirAll(tmpDir, dirPerm); err != nil {
+		return nil, fmt.Errorf("creating the archive staging directory: %w", err)
+	}
+
 	var cache *pluginCache
 
 	// Eviction only makes sense with object storage behind it: without one the
@@ -165,6 +182,7 @@ func New(
 	return &Registry{
 		db:            db,
 		pluginsDir:    pluginsDir,
+		tmpDir:        tmpDir,
 		maxOutputSize: maxOutputSize,
 		storage:       bStorage,
 		cache:         cache,
@@ -741,10 +759,32 @@ func (r *Registry) ensureBinary(ctx context.Context, plug *plugin) error {
 	return nil
 }
 
+// stagingDir returns the directory archives are downloaded into, creating it
+// if needed. New sets tmpDir, but the invariant matters more than the
+// constructor: an archive must never land in os.TempDir(), which on a
+// container is the writable layer rather than the plugin volume.
+func (r *Registry) stagingDir() (string, error) {
+	dir := r.tmpDir
+	if dir == "" {
+		dir = filepath.Join(r.pluginsDir, tmpDirName)
+	}
+
+	if err := os.MkdirAll(dir, dirPerm); err != nil {
+		return "", fmt.Errorf("creating the archive staging directory: %w", err)
+	}
+
+	return dir, nil
+}
+
 // fetchAndUnpack downloads the plugin archive, verifies its checksum, and
 // unpacks it into versionDir.
 func (r *Registry) fetchAndUnpack(ctx context.Context, key, versionDir, expectedSha256 string) error {
-	tmpArchive, err := os.CreateTemp("", "plugin-archive-*.tgz")
+	stagingDir, err := r.stagingDir()
+	if err != nil {
+		return err
+	}
+
+	tmpArchive, err := os.CreateTemp(stagingDir, "plugin-archive-*.tgz")
 	if err != nil {
 		return fmt.Errorf("os.CreateTemp: %w", err)
 	}

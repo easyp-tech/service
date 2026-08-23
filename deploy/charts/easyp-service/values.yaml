@@ -50,10 +50,12 @@ resources:
   requests:
     cpu: 500m
     memory: 1Gi
-    # Writable layer and logs only. The plugin cache is a volume of its own and
-    # is not charged here — but the scheduler knows nothing about a volume it
-    # was not told about, so with persistence disabled see
-    # persistence.ephemeralSizeLimit, which is what actually bounds the cache.
+    # Writable layer and logs only. Both the plugin cache and the archives
+    # staged mid-download live on the plugins volume, not here — the download
+    # used to land in /tmp on the writable layer, where a few hundred megabytes
+    # times the concurrent generations was an eviction rather than an overload.
+    # With persistence disabled see persistence.ephemeralSizeLimit, which is
+    # what actually bounds that volume.
     ephemeral-storage: 1Gi
   limits:
     # Four cores for sixteen concurrent plugin processes. On two they each ran

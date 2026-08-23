@@ -359,6 +359,38 @@ func TestEnsureBinary(t *testing.T) {
 	})
 }
 
+// TestArchivesStageOnThePluginVolume pins where a download lands.
+//
+// os.CreateTemp("") would put it in the container's writable layer, charged
+// against ephemeral-storage while the plugin volume it is about to be unpacked
+// onto sits empty. A 355 MB archive with several downloads in flight is enough
+// for the kubelet to evict the pod, which reads as a crash rather than as
+// overload.
+func TestArchivesStageOnThePluginVolume(t *testing.T) {
+	t.Parallel()
+
+	key := "grpc/go/v1.6.2/plugin.tgz"
+	archive := buildArchive(t, "#!/bin/sh\nexit 0\n", nil)
+
+	store := newFakeStorage()
+	store.put(key, archive)
+
+	pluginsDir := t.TempDir()
+	r := &Registry{pluginsDir: pluginsDir, storage: store}
+
+	versionDir := filepath.Join(pluginsDir, "grpc", "go", "v1.6.2")
+	require.NoError(t, r.fetchAndUnpack(context.Background(), key, versionDir, sha256Hex(archive)))
+
+	staging := filepath.Join(pluginsDir, tmpDirName)
+	info, err := os.Stat(staging)
+	require.NoError(t, err, "the staging directory must live inside the plugins volume")
+	require.True(t, info.IsDir())
+
+	left, err := os.ReadDir(staging)
+	require.NoError(t, err)
+	assert.Empty(t, left, "a finished download must leave nothing behind")
+}
+
 // put seeds the fake with an object.
 func (f *fakeStorage) put(key string, data []byte) {
 	f.mu.Lock()
