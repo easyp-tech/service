@@ -167,7 +167,9 @@ jobs:
 
       - name: Scan for secrets
         run: |
-          go run github.com/gitleaks/gitleaks/v8@latest detect \
+          # The module still declares the pre-rename path, so `go run` has to
+          # ask for it under that name.
+          go run github.com/zricethezav/gitleaks/v8@latest detect \
             --source . --redact --no-banner --exit-code 1
 
   lint:
