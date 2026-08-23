@@ -514,7 +514,7 @@ fi
 # every one carries a runbook_url. The anchors are derived from alert names and
 # the headings are written by hand, which is exactly the pair that drifts apart
 # without something comparing them.
-runbooks="$REPO/.spec/RUNBOOKS.md"
+runbooks="$REPO/docs/RUNBOOKS.md"
 missing=""
 
 while read -r alert; do

@@ -546,9 +546,10 @@ Because the verification key is configuration, whoever can edit `deploy/config/c
 point the service at a different signing authority — protect that file the way
 you protect the database password next to it.
 
-> **Not yet implemented:** the token's PASETO signature is *not* verified. Any
-> non-empty token is accepted at face value, and the service logs a warning
-> saying so on every refresh. See [.spec/AUTH.md](.spec/AUTH.md).
+Verification is offline and happens in-process: the PASETO v4.public signature
+is checked against the configured public key, and a token that fails — expired,
+signed by an unknown key, or malformed — leaves the deployment in community
+mode rather than stopping it.
 
 ## Contributing Plugins
 

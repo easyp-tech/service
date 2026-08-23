@@ -36,7 +36,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easyplicenceexpiringsoon"
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/docs/RUNBOOKS.md#easyplicenceexpiringsoon"
           summary: "EasyP licence expires in under 14 days"
           description: >-
             Renew it in the licence registry and roll out the new LICENSE_KEY.
@@ -49,7 +49,7 @@ groups:
         labels:
           severity: critical
         annotations:
-          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easyplicenceingrace"
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/docs/RUNBOOKS.md#easyplicenceingrace"
           summary: "EasyP licence has expired and is running on its grace period"
           description: >-
             Enterprise features are still on, but only until the grace period
@@ -64,7 +64,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easypgenerationsrejected"
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/docs/RUNBOOKS.md#easypgenerationsrejected"
           summary: "EasyP is refusing code generation requests"
           description: >-
             Clients are getting ResourceExhausted. Raise
@@ -76,7 +76,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easypgenerationqueuesaturated"
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/docs/RUNBOOKS.md#easypgenerationqueuesaturated"
           summary: "EasyP has had generations queued for ten minutes"
           description: >-
             Sustained queueing means the concurrency limit is the bottleneck.
@@ -96,7 +96,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easypplugincacheatlimit"
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/docs/RUNBOOKS.md#easypplugincacheatlimit"
           summary: "EasyP plugin cache is at its size limit"
           description: >-
             Raise registry.cache_max_bytes and the plugins volume together,
@@ -112,7 +112,7 @@ groups:
         labels:
           severity: critical
         annotations:
-          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easypauditeventslost"
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/docs/RUNBOOKS.md#easypauditeventslost"
           summary: "EasyP is dropping audit events"
           description: >-
             Audit is an Enterprise commitment, so any sustained loss here is a
@@ -128,7 +128,7 @@ groups:
         labels:
           severity: critical
         annotations:
-          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easypauditmaintenancestale"
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/docs/RUNBOOKS.md#easypauditmaintenancestale"
           summary: "EasyP has not maintained audit partitions for a day"
           description: >-
             Future partitions are not being created. Audit writes fail once
@@ -140,7 +140,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easypauditdefaultpartitionused"
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/docs/RUNBOOKS.md#easypauditdefaultpartitionused"
           summary: "EasyP audit rows have landed in the default partition"
           description: >-
             Maintenance did not create the month these rows belong to in time.
@@ -161,7 +161,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easypgenerationerrorrate"
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/docs/RUNBOOKS.md#easypgenerationerrorrate"
           summary: "More than 0.05 of EasyP generations are failing"
           description: "A plugin is broken, or its binary does not match the checksum recorded for it."
 
@@ -170,7 +170,7 @@ groups:
         labels:
           severity: critical
         annotations:
-          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easyppanics"
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/docs/RUNBOOKS.md#easyppanics"
           summary: "EasyP recovered from a panic"
           description: "A recovered panic is still a bug. Check the logs for the stack."
 
@@ -180,7 +180,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easypauthfailures"
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/docs/RUNBOOKS.md#easypauthfailures"
           summary: "EasyP is rejecting write credentials"
           description: >-
             Either a token was rotated without updating a caller, or somebody

@@ -12,7 +12,7 @@ contact_links:
       are willing to write it, a pull request lands faster than a request does.
 
   - name: Deployment and configuration
-    url: https://github.com/easyp-tech/service/blob/master/.spec/DEPLOYMENT.md
+    url: https://github.com/easyp-tech/service/blob/master/README.md#configuration
     about: >-
       How the stack is put together, what each setting does, and what
       `easyp-svc config print` will tell you before you ask anyone.

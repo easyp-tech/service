@@ -192,7 +192,7 @@ config:
     # afterwards the only copy of that month is in a backup taken while it still
     # existed. Backup retention has to *exceed* this rather than match it:
     # matching means the month leaves the database and the archive at about the
-    # same time, leaving it nowhere. See .spec/DEPLOYMENT.md.
+    # same time, leaving it nowhere.
     retentionMonths: 12
     preCreateMonths: 3
     partitionCheckInterval: 6h
@@ -391,7 +391,7 @@ prometheusRule:
   # own name. Point this at your own copy if you keep runbooks internally —
   # an alert that arrives at 3am with no procedure attached is where most of the
   # time goes.
-  runbookBaseUrl: https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md
+  runbookBaseUrl: https://github.com/easyp-tech/service/blob/master/docs/RUNBOOKS.md
   # How long before expiry to start warning. The token also carries its own
   # grace period, which runs after this; both exist so a renewal that slips
   # does not take a customer's pipeline down.

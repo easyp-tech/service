@@ -27,7 +27,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easyphostdisklow"
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/docs/RUNBOOKS.md#easyphostdisklow"
           summary: "Less than 15% of {{ $labels.mountpoint }} is free"
           description: >-
             A threshold, so it fires once the problem is already there. The
@@ -48,7 +48,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easyphostdiskfillingup"
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/docs/RUNBOOKS.md#easyphostdiskfillingup"
           summary: "{{ $labels.mountpoint }} runs out of space within four days at this rate"
           description: >-
             Nothing is broken yet. Find what is growing before it is urgent —
@@ -66,7 +66,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easyphostmemorylow"
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/docs/RUNBOOKS.md#easyphostmemorylow"
           summary: "Less than 10% of the machine's memory is available"
           description: >-
             The next allocation that cannot be met is resolved by the OOM
@@ -88,7 +88,7 @@ groups:
         labels:
           severity: critical
         annotations:
-          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easyptargetdown"
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/docs/RUNBOOKS.md#easyptargetdown"
           summary: "{{ $labels.job }} is not answering scrapes"
           description: >-
             The target still exists, so this is a process that stopped
@@ -112,7 +112,7 @@ groups:
         labels:
           severity: critical
         annotations:
-          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easypservicemissing"
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/docs/RUNBOOKS.md#easypservicemissing"
           summary: "A service tier has vanished from discovery entirely"
           description: >-
             No container carries the label this tier is found by. Either it is
@@ -132,7 +132,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          runbook_url: "https://github.com/easyp-tech/service/blob/master/.spec/RUNBOOKS.md#easypcertificateexpiringsoon"
+          runbook_url: "https://github.com/easyp-tech/service/blob/master/docs/RUNBOOKS.md#easypcertificateexpiringsoon"
           summary: "The edge certificate expires in under 21 days"
           description: >-
             ACME uses the HTTP-01 challenge, so renewal needs port 80 reachable

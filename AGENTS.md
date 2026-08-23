@@ -7,8 +7,6 @@ Centralized protobuf/gRPC plugin execution service. Accepts `CodeGeneratorReques
 
 ## Architecture
 
-See [.spec/ARCHITECTURE.md](.spec/ARCHITECTURE.md) for full request flow and component diagrams.
-
 **Interceptor chain (order matters):** trace_logging → realip → prometheus → structured_logging → panic_recovery → validation → error_code_conversion → rate_limit → license → audit
 
 | Pattern | Where | Purpose |
@@ -20,27 +18,12 @@ See [.spec/ARCHITECTURE.md](.spec/ARCHITECTURE.md) for full request flow and com
 | Repository pattern | `core.Registry` interface → `adapters/registry` | DB + Docker behind clean interface |
 | Functional options | SDK `WithXxx()` options | Configurable client construction |
 
-## What is `.spec/`
-
-`.spec/` is a project documentation directory optimized for AI agent (LLM) consumption. It contains:
-- Structured descriptions of architecture, packages, and domain model
-- Code conventions and testing patterns
-- Infrastructure and tooling descriptions
-- Agent rules (`agent-rules.md`) with mandatory coding standards
-
-Purpose: give the agent full project context without reading the entire source code.
-
 ## How to Use (for agents)
 
-1. **Start here** → read `.spec/README.md` for the documentation map and quick facts
-2. **Before modifying code** → read the relevant `.spec/` document:
-   - Changing API → read `ARCHITECTURE.md`, `API.md`, `CODE_STYLE.md`
-   - Adding domain types → read `DOMAIN.md`
-   - Working with DB → read `DATABASE.md`
-   - Adding plugins → read `DEPLOYMENT.md`, `SECURITY.md`
-3. **Always follow** rules from `agent-rules.md`
-4. **If docs appear outdated** → suggest regeneration via SDD docs-maintenance workflow
-5. **Complex reasoning & problem solving** → ALWAYS use the `sequentialthinking` MCP server before executing complex tasks, making architectural decisions, or debugging bugs.
+1. **Start here** → this file, then [README.md](README.md) for setup and configuration
+2. **Before modifying code** → read the package you are changing; the code carries
+   its reasoning in comments rather than in a parallel document that drifts
+3. **Operational procedures** → [docs/RUNBOOKS.md](docs/RUNBOOKS.md), one section per alert
 
 ## Project Map
 
@@ -74,7 +57,7 @@ deploy/                 # Everything that runs the service somewhere
 
 ## Build & Test
 
-See [README.md](README.md#development) and [.spec/TESTING.md](.spec/TESTING.md) for full setup.
+See [README.md](README.md#development) for full setup.
 
 ```bash
 task up                  # Full dev stack (postgres, grafana, loki, alloy, tempo, mimir, pyroscope, traefik)
@@ -112,7 +95,7 @@ go test ./...            # Standard tests
   flags that take part are `--cfg`, which chooses the file, and `--log_level`,
   which overrides `log.level`. An unrecognised YAML key refuses the start. See
   [Configuration](README.md#configuration) and `internal/config/config.go`.
-- **Comments:** English only; every exported symbol must have a godoc comment starting with its name; no inline comments on `if`/`for`/`return` lines unless genuinely non-obvious. See [.spec/CODE_STYLE.md](.spec/CODE_STYLE.md) §11.
+- **Comments:** English only; every exported symbol must have a godoc comment starting with its name; no inline comments on `if`/`for`/`return` lines unless genuinely non-obvious.
 
 ## Pitfalls & Gotchas
 
@@ -133,26 +116,9 @@ go test ./...            # Standard tests
 
 ## Documentation
 
-**Agent-optimized specs:** `.spec/` directory — start with [.spec/README.md](.spec/README.md) for full index.
-
-| Topic | Spec (agent) |
-|-------|-------------|
-| Architecture | [.spec/ARCHITECTURE.md](.spec/ARCHITECTURE.md) |
-| Packages | [.spec/PACKAGES.md](.spec/PACKAGES.md) |
-| Domain model | [.spec/DOMAIN.md](.spec/DOMAIN.md) |
-| Code style | [.spec/CODE_STYLE.md](.spec/CODE_STYLE.md) |
-| Tools & commands | [.spec/TOOLS.md](.spec/TOOLS.md) |
-| Testing | [.spec/TESTING.md](.spec/TESTING.md) |
-| Errors | [.spec/ERRORS.md](.spec/ERRORS.md) |
-| Auth & licensing | [.spec/AUTH.md](.spec/AUTH.md) |
-| Database | [.spec/DATABASE.md](.spec/DATABASE.md) |
-| API | [.spec/API.md](.spec/API.md) |
-| Deployment | [.spec/DEPLOYMENT.md](.spec/DEPLOYMENT.md) |
-| Observability | [.spec/OBSERVABILITY.md](.spec/OBSERVABILITY.md) |
-| Clients (SDK) | [.spec/CLIENTS.md](.spec/CLIENTS.md) |
-| Security | [.spec/SECURITY.md](.spec/SECURITY.md) |
-| Feature flags | [.spec/FEATURE_FLAGS.md](.spec/FEATURE_FLAGS.md) |
-| Background jobs | [.spec/BACKGROUND_JOBS.md](.spec/BACKGROUND_JOBS.md) |
+Runbooks for every alert live in [docs/RUNBOOKS.md](docs/RUNBOOKS.md). Setup,
+configuration and the deployment stack are in [README.md](README.md); everything
+else is documented next to the code it describes.
 
 ## Key Dependencies
 
@@ -176,7 +142,7 @@ go test ./...            # Standard tests
 | 8080 | gRPC API | gRPC (H2) |
 | 8081 | Metrics | HTTP (`/metrics`) |
 | 8082 | Health | HTTP (`/health`) |
-| 8083 | MCP | HTTP (`/mcp`) |
+| 8083 | MCP | HTTP (`/mcp`), served only when `mcp.enabled` |
 | 5432/5433 | PostgreSQL | TCP |
 
 ## Reasoning Process (Sequential Thinking)
@@ -185,32 +151,3 @@ For any task that goes beyond a trivial code edit (e.g., bug analysis, architect
 1. Initiate the tool to generate a hypothesis and a step-by-step reasoning plan.
 2. Dynamically adjust your thoughts, revise assumptions, or ask questions to the user as you progress.
 3. Arrive at a verified solution hypothesis before making any codebase changes.
-
-## Skills
-
-This project includes agent skills in `.agents/skills/`. Each skill provides domain-specific knowledge and workflows.
-
-| Skill | Path | When to Use |
-|-------|------|-------------|
-| **sdd** | `.agents/skills/sdd/SKILL.md` | New features, "implement X", "build X", spec-first approach. 6-phase pipeline with human approval gates. |
-| **protobuf-expert-skill** | `.agents/skills/protobuf-expert-skill/SKILL.md` | Writing/reviewing `.proto` files, configuring `easyp.yaml`, lint rules, code generation plugins, proto dependencies, breaking changes, debugging easyp errors. |
-| **protoc-gen-mcp-skill** | `.agents/skills/protoc-gen-mcp-skill/SKILL.md` | Building MCP servers from protobuf definitions, generating MCP tools from proto files, adding MCP annotations, `protoc-gen-mcp` code generation. |
-| **go-code-style** | `.agents/skills/go-code-style/SKILL.md` | Writing or reviewing Go code. Error wrapping, defer patterns, assignment style, naming conventions, import ordering. |
-| **go-testing** | `.agents/skills/go-testing/SKILL.md` | Writing or reviewing Go tests. Table-driven tests, t.Parallel, inline mocks, testify assertions, naming conventions. |
-| **goose-migration** | `.agents/skills/goose-migration/SKILL.md` | Adding database tables/columns, creating migration files, modifying schema, debugging goose migration errors. |
-| **epctl-commands** | `.agents/skills/epctl-commands/SKILL.md` | Adding CLI commands to epctl, creating subcommands, working with `cmd/epctl/` files, urfave/cli v3 patterns, output formatting. |
-| **auto-commit-push** | `.agents/skills/auto-commit-push/SKILL.md` | **MANDATORY**: Automatically commit and push changes to the current branch after every completed logical step. |
-
-### Spec-Driven Development
-
-**Pipeline:** Explore → Requirements → Design → Task Plan → Implementation → Review. Each phase requires explicit human approval before advancing.
-
-**How to start:** tell the agent "I want to add feature X" — the skill activates automatically via keyword matching.
-
-### Protobuf Expert
-
-Covers the full EasyP CLI toolkit: `easyp lint`, `easyp generate`, `easyp breaking`, `easyp mod`, `easyp init`. Includes lint rule selection, managed mode configuration, CI/CD integration, and migration from buf.build.
-
-### protoc-gen-mcp
-
-Generates type-safe Go MCP tool bindings (`*.mcp.go`) from annotated protobuf services. Proto is the source of truth — define service once in `.proto`, generate both `*.pb.go` and `*.mcp.go`, implement the handler interface, and serve.

@@ -16,7 +16,7 @@ lines that do not apply.
       the chart and the compose stack, and whether the default image tag is
       shaped like one that exists.
 - [ ] **Added or renamed an alert** — wrote the matching section in
-      `.spec/RUNBOOKS.md`. The heading is the anchor its `runbook_url` points
+      `docs/RUNBOOKS.md`. The heading is the anchor its `runbook_url` points
       at, so the test above fails without it.
 - [ ] **Changed a config default** — checked `easyp-svc config print --changed`
       still shows what a deployment actually overrides. The dev configs carry
