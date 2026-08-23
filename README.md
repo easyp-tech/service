@@ -756,6 +756,17 @@ task down
 task run-local
 ```
 
+## Upgrading
+
+Releases that need more than a new image are described in
+[docs/UPGRADING.md](docs/UPGRADING.md), newest first. **v0.13.0 needs it**: two
+environment variables were renamed, a licence setting was removed, the MCP
+endpoint became opt-in, and an unfiltered plugin listing now returns one page
+rather than everything.
+
+Operational procedures for each alert are in
+[docs/RUNBOOKS.md](docs/RUNBOOKS.md).
+
 ## Troubleshooting
 
 ### Service Issues
