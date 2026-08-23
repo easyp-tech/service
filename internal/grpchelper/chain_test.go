@@ -85,7 +85,7 @@ func TestReflectionIsNotRegistered(t *testing.T) {
 	t.Parallel()
 
 	srv, _ := grpchelper.NewServer(
-		panicMetrics{counter: prometheus.NewCounter(prometheus.CounterOpts{ //nolint:exhaustruct
+		panicMetrics{counter: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "panics_total",
 			Help: "Panics recovered during the test.",
 		})},
@@ -116,7 +116,7 @@ func callHealth(t *testing.T, extra []grpc.UnaryServerInterceptor) codes.Code {
 	t.Helper()
 
 	srv, healthSrv := grpchelper.NewServer(
-		panicMetrics{counter: prometheus.NewCounter(prometheus.CounterOpts{ //nolint:exhaustruct
+		panicMetrics{counter: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "panics_total",
 			Help: "Panics recovered during the test.",
 		})},
@@ -146,7 +146,7 @@ func callHealth(t *testing.T, extra []grpc.UnaryServerInterceptor) codes.Code {
 
 	t.Cleanup(func() { _ = conn.Close() })
 
-	_, err = healthpb.NewHealthClient(conn).Check(t.Context(), &healthpb.HealthCheckRequest{}) //nolint:exhaustruct
+	_, err = healthpb.NewHealthClient(conn).Check(t.Context(), &healthpb.HealthCheckRequest{})
 
 	return status.Code(err)
 }

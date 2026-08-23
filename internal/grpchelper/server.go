@@ -107,7 +107,7 @@ func NewServer(
 		grpc.MaxSendMsgSize(opts.MaxSendMsgSize),
 		grpc.MaxConcurrentStreams(opts.MaxConcurrentStreams),
 		grpc.KeepaliveParams(
-			keepalive.ServerParameters{ //nolint:exhaustruct
+			keepalive.ServerParameters{
 				Time:    keepaliveTime,
 				Timeout: keepaliveTimeout,
 			},

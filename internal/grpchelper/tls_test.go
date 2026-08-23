@@ -30,9 +30,9 @@ func writeSelfSigned(t *testing.T, dir, name string) (string, string) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 
-	tmpl := &x509.Certificate{ //nolint:exhaustruct // only the fields under test matter
+	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: name}, //nolint:exhaustruct // CN is enough here
+		Subject:      pkix.Name{CommonName: name},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(time.Hour),
 		IsCA:         true,
@@ -49,9 +49,9 @@ func writeSelfSigned(t *testing.T, dir, name string) (string, string) {
 	keyPath := filepath.Join(dir, name+".key")
 
 	require.NoError(t, os.WriteFile(certPath,
-		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600)) //nolint:exhaustruct
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600))
 	require.NoError(t, os.WriteFile(keyPath,
-		pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600)) //nolint:exhaustruct
+		pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600))
 
 	return certPath, keyPath
 }
@@ -69,7 +69,7 @@ func TestBuildServerCreds(t *testing.T) {
 	t.Run("disabled falls back to insecure", func(t *testing.T) {
 		t.Parallel()
 
-		creds, err := grpchelper.BuildServerCreds(config.TLSConfig{}, discardLogger()) //nolint:exhaustruct
+		creds, err := grpchelper.BuildServerCreds(config.TLSConfig{}, discardLogger())
 		require.NoError(t, err)
 		require.Equal(t, "insecure", creds.Info().SecurityProtocol)
 	})
@@ -80,7 +80,7 @@ func TestBuildServerCreds(t *testing.T) {
 		creds, err := grpchelper.BuildServerCreds(config.TLSConfig{
 			CertFile: certPath,
 			KeyFile:  keyPath,
-		}, discardLogger()) //nolint:exhaustruct
+		}, discardLogger())
 		require.NoError(t, err)
 		require.Equal(t, "tls", creds.Info().SecurityProtocol)
 	})
@@ -103,7 +103,7 @@ func TestBuildServerCreds(t *testing.T) {
 		_, err := grpchelper.BuildServerCreds(config.TLSConfig{
 			CertFile: filepath.Join(dir, "absent.crt"),
 			KeyFile:  filepath.Join(dir, "absent.key"),
-		}, discardLogger()) //nolint:exhaustruct
+		}, discardLogger())
 		require.Error(t, err)
 	})
 
@@ -166,7 +166,7 @@ func TestServerCredsRequireClientCert(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = clientConn.Close() }()
 
-	client := tls.Client(clientConn, &tls.Config{ //nolint:exhaustruct // the server identity is not what this test checks
+	client := tls.Client(clientConn, &tls.Config{
 		// The server identity is irrelevant: this test only asserts that the
 		// server refuses a client which presents no certificate.
 		InsecureSkipVerify: true,

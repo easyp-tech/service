@@ -19,7 +19,7 @@ func peerCtx(t *testing.T, addr string) context.Context {
 	resolved, err := net.ResolveTCPAddr("tcp", addr)
 	require.NoError(t, err)
 
-	return peer.NewContext(t.Context(), &peer.Peer{Addr: resolved}) //nolint:exhaustruct // Only Addr is read.
+	return peer.NewContext(t.Context(), &peer.Peer{Addr: resolved})
 }
 
 // The regression. Behind a proxy every connection arrives from the proxy's

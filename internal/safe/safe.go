@@ -56,7 +56,7 @@ type Guard struct {
 // pass and Register would dereference nothing. Taking the concrete type makes
 // the comparison mean what it says.
 func NewGuard(reg *prometheus.Registry, namespace string) *Guard {
-	counter := prometheus.NewCounter(prometheus.CounterOpts{ //nolint:exhaustruct // Namespace and Name identify it.
+	counter := prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace: namespace,
 		Name:      "panics_total",
 		Help:      "Total number of panics recovered, in gRPC handlers and in background goroutines.",
@@ -68,8 +68,7 @@ func NewGuard(reg *prometheus.Registry, namespace string) *Guard {
 
 	err := reg.Register(counter)
 	if err != nil {
-		var already prometheus.AlreadyRegisteredError
-		if errors.As(err, &already) {
+		if already, ok := errors.AsType[prometheus.AlreadyRegisteredError](err); ok {
 			if existing, ok := already.ExistingCollector.(prometheus.Counter); ok {
 				return &Guard{panics: existing}
 			}

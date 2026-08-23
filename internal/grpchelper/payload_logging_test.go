@@ -33,14 +33,14 @@ func runLoggedCall(t *testing.T) string {
 	log := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	ctx := monitor.WithContext(context.Background(), log)
 
-	req := &pluginpb.CodeGeneratorRequest{ //nolint:exhaustruct // Only the fields under test.
+	req := &pluginpb.CodeGeneratorRequest{
 		FileToGenerate: []string{"acme/internal/billing.proto"},
-		ProtoFile: []*descriptorpb.FileDescriptorProto{ //nolint:exhaustruct // Only the fields under test.
+		ProtoFile: []*descriptorpb.FileDescriptorProto{
 			{Name: new("acme/internal/billing.proto"), Package: new(callerPackage)},
 		},
 	}
-	resp := &pluginpb.CodeGeneratorResponse{ //nolint:exhaustruct // Only the fields under test.
-		File: []*pluginpb.CodeGeneratorResponse_File{ //nolint:exhaustruct // Only the fields under test.
+	resp := &pluginpb.CodeGeneratorResponse{
+		File: []*pluginpb.CodeGeneratorResponse_File{
 			{Name: new("billing.pb.go"), Content: new(generatedSource)},
 		},
 	}
@@ -48,7 +48,7 @@ func runLoggedCall(t *testing.T) string {
 	interceptor := logging.UnaryServerInterceptor(interceptorLogger(log), loggingOptions()...)
 
 	_, err := interceptor(ctx, req,
-		&grpc.UnaryServerInfo{ //nolint:exhaustruct // Only FullMethod is read.
+		&grpc.UnaryServerInfo{
 			FullMethod: "/easyp.generator.v1.ServiceAPI/GenerateCode",
 		},
 		func(context.Context, any) (any, error) { return resp, nil },

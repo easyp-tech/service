@@ -21,8 +21,6 @@ var (
 )
 
 // PostgresSSL is a type for setting connection ssl mode to PostgresDB.
-//
-//nolint:recvcheck // Mixed receivers are intended (pointer for Unmarshal, value for String)
 type PostgresSSL uint8
 
 // UnmarshalJSON implements json.Unmarshaler.

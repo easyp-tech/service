@@ -66,7 +66,7 @@ func (a *StaticTokenAuthenticator) Empty() bool {
 func (a *StaticTokenAuthenticator) Authenticate(_ context.Context, md metadata.MD) (Actor, error) {
 	presented, ok := bearerToken(md)
 	if !ok {
-		return Actor{}, ErrNoCredentials //nolint:exhaustruct // no actor on failure
+		return Actor{}, ErrNoCredentials
 	}
 
 	sum := sha256.Sum256([]byte(presented))
@@ -83,7 +83,7 @@ func (a *StaticTokenAuthenticator) Authenticate(_ context.Context, md metadata.M
 	}
 
 	if matched == "" {
-		return Actor{}, ErrUnknownToken //nolint:exhaustruct // no actor on failure
+		return Actor{}, ErrUnknownToken
 	}
 
 	return Actor{Name: matched, Kind: KindToken}, nil

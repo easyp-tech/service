@@ -37,7 +37,7 @@ func resolveCaller(t *testing.T, trusted []string, peerAddr string, headers map[
 	port, err := net.DefaultResolver.LookupPort(t.Context(), "tcp", portStr)
 	require.NoError(t, err)
 
-	ctx := peer.NewContext(t.Context(), &peer.Peer{ //nolint:exhaustruct // Only Addr is read.
+	ctx := peer.NewContext(t.Context(), &peer.Peer{
 		Addr: net.TCPAddrFromAddrPort(netip.AddrPortFrom(ip, uint16(port))),
 	})
 
@@ -58,9 +58,9 @@ func resolveCaller(t *testing.T, trusted []string, peerAddr string, headers map[
 	realIP := realip.UnaryServerInterceptorOpts(realIPOptions(prefixes)...)
 	callerIP := callerIPUnaryInterceptor()
 
-	_, err = realIP(ctx, nil, &grpc.UnaryServerInfo{}, //nolint:exhaustruct // Unread by these two.
+	_, err = realIP(ctx, nil, &grpc.UnaryServerInfo{},
 		func(ctx context.Context, req any) (any, error) {
-			return callerIP(ctx, req, &grpc.UnaryServerInfo{}, inner) //nolint:exhaustruct // Unread.
+			return callerIP(ctx, req, &grpc.UnaryServerInfo{}, inner)
 		})
 	require.NoError(t, err)
 
