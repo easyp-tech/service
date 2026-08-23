@@ -145,6 +145,21 @@ jobs:
       - name: Lint and render
         run: deploy/charts/easyp-service/tests/render.sh
 
+  # Two credentials have already reached this public repository through files
+  # nobody thought to gitignore. A pattern list catches the shapes; this catches
+  # the rest, and it reads history rather than only the tip.
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

@@ -70,3 +70,18 @@ deploy/observability/traefik/traefik.public.yml
 
 # Claude Code session data and worktrees
 .claude/
+
+# Secrets, by shape rather than by name. Every rule above names a path that had
+# already gone wrong once; these catch the next one. A live S3 key pair reached
+# a public repository through a file nobody thought to list, and git history
+# does not forget.
+*.pem
+*.key
+*.p12
+*.pfx
+.env
+.env.*
+!.env.example
+!*.env.example
+id_rsa*
+id_ed25519*
