@@ -669,12 +669,17 @@ easyp --cfg easyp.local.yaml generate
 
 ### Key Metrics
 
-- `grpc_server_handled_total` - gRPC request count
-- `pool_active_workers` - Active worker goroutines
-- `pool_queue_depth` - Jobs waiting in queue
-- `pool_rejected_total` - Jobs rejected (overloaded)
-- `pool_jobs_total` - Total jobs processed
-- `panics_total` - Recovered panics
+Every metric carries the `easyp` namespace, and the gRPC ones an `api`
+subsystem — the bare names below do not exist:
+
+- `easyp_api_grpc_server_handled_total` - gRPC request count
+- `easyp_pool_active_workers` - Active worker goroutines
+- `easyp_pool_queue_depth` - Jobs waiting in queue
+- `easyp_pool_rejected_total` - Jobs rejected (overloaded)
+- `easyp_pool_jobs_total` - Total jobs processed
+- `easyp_panics_total` - Recovered panics
+- `easyp_business_plugins_total` - Plugins registered
+- `easyp_license_valid` - 1 when the licence verifies
 
 ## Client Usage
 
@@ -686,18 +691,20 @@ import "github.com/easyp-tech/service/sdk"
 // Create client. The SDK defaults to TLS with the system trust store; add
 // sdk.WithTransportCredentials for a private CA, or sdk.WithInsecure() when
 // talking to a plaintext local service.
-client, err := sdk.New(
+client, err := sdk.NewClient(
     "localhost:8080",
     sdk.WithInsecure(),
-    sdk.WithRetry(3, time.Second),
-    sdk.WithHealthCheck(true),
+    sdk.WithMaxRetries(3),
+    sdk.WithRetryBaseDelay(time.Second),
+    sdk.WithHealthCheck(30*time.Second),
 )
+if err != nil {
+    return err
+}
+defer client.Close()
 
-// Generate code
-response, err := client.GenerateCode(ctx, &generator.GenerateCodeRequest{
-    CodeGeneratorRequest: codeGenRequest,
-    PluginName:          "protocolbuffers/go:v1.36.10",
-})
+// Generate code. codeGenRequest is a *pluginpb.CodeGeneratorRequest.
+response, err := client.GenerateCode(ctx, "protocolbuffers/go:v1.36.10", codeGenRequest)
 ```
 
 ### CLI Usage with easyp

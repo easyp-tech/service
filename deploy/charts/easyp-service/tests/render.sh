@@ -515,6 +515,20 @@ fi
 # the headings are written by hand, which is exactly the pair that drifts apart
 # without something comparing them.
 runbooks="$REPO/docs/RUNBOOKS.md"
+
+# The URL the chart actually ships has to name that same file. Checking anchors
+# in a path this script picks proves nothing about what a customer's alerts
+# link to: 0.3.1 went out pointing at .spec/RUNBOOKS.md, deleted days later,
+# and all 43 checks here still passed.
+base_url="$(grep -oE 'runbookBaseUrl: .*' "$CHART/values.yaml" | awk '{print $2}')"
+runbooks_rel="${runbooks#"$REPO/"}"
+
+if [[ "$base_url" != *"/$runbooks_rel" ]]; then
+  fail "runbookBaseUrl points at '$base_url', which does not end in '$runbooks_rel' — the alerts would link to a file that is not the one checked below"
+else
+  pass "runbookBaseUrl names the runbooks file this suite verifies"
+fi
+
 missing=""
 
 while read -r alert; do

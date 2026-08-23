@@ -1,21 +1,21 @@
 <!-- generated: 2026-05-24, template: agents-index.md -->
 # EasyP API Service
 
-Centralized protobuf/gRPC plugin execution service. Accepts `CodeGeneratorRequest` via gRPC, runs plugins in isolated Docker containers, returns `CodeGeneratorResponse`.
+Centralized protobuf/gRPC plugin execution service. Accepts `CodeGeneratorRequest` via gRPC, executes the named plugin as a local process, returns `CodeGeneratorResponse`.
 
-**Module:** `github.com/easyp-tech/service` | **Go:** 1.26+ | **License:** Apache 2.0
+**Module:** `github.com/easyp-tech/service` | **Go:** 1.26+ | **License:** Elastic 2.0 (`api/` and `sdk/` are Apache 2.0)
 
 ## Architecture
 
-**Interceptor chain (order matters):** trace_logging → realip → prometheus → structured_logging → panic_recovery → validation → error_code_conversion → rate_limit → license → audit
+**Interceptor chain (order matters):** trace_logging → realip → prometheus → structured_logging → panic_recovery → validation → error_code_conversion → rate_limit → concurrency_limit → auth → license. Audit is not an interceptor; `internal/core` emits it.
 
 | Pattern | Where | Purpose |
 |---------|-------|---------|
 | Decorator (tracing) | `telemetry.TracingCore`, `TracingRegistry`, `TracingPlugin` | Non-invasive OTel instrumentation |
-| Worker Pool | `core.WorkerPool` | Bounded concurrency for Docker plugin execution |
+| Worker Pool | `core.WorkerPool` | Bounded concurrency for plugin process execution |
 | Feature Gate | `license.FeatureGate` | Two-tier licensing without hard coupling |
 | Interceptor chain | `grpchelper.NewServer` + custom interceptors | Composable cross-cutting concerns |
-| Repository pattern | `core.Registry` interface → `adapters/registry` | DB + Docker behind clean interface |
+| Repository pattern | `core.Registry` interface → `adapters/registry` | Postgres, S3 and process execution behind one interface |
 | Functional options | SDK `WithXxx()` options | Configurable client construction |
 
 ## How to Use (for agents)
@@ -85,7 +85,7 @@ go test ./...            # Standard tests
 - **Database access** always through `database.SQL` wrapper, never raw `sqlx.DB`
 - **Domain errors** are sentinel: `core.ErrNotFound`, `core.ErrInvalidPluginName`, etc.
 - `api.ErrorToStatus()` maps domain errors → gRPC status codes
-- **Plugin name format:** `{group}/{name}:{version}` — validated by `^[a-z][a-z0-9-]*/[a-z][a-z0-9-]*:(v\d+\.\d+\.\d+|latest)$`
+- **Plugin name format:** `{group}/{name}:{version}` — validated by `^[a-z][a-z0-9-]*/[a-z][a-z0-9-]*:(v\d+\.\d+(\.\d+)?|latest)$` — the patch component is optional, because protobuf ships versions like `v33.1`
 - **Plugin execution:** local binary execution from `plugins/` directory (built by `easyp-svc plugins build`)
 - **Plugin registration:** via gRPC `CreatePlugin` API (automated by `easyp-svc plugins register`) — metadata only; with S3 enabled the service streams the already-pushed archive from storage, computes its sha256 and records it in the plugin config
 - **Artifact unit:** the whole version directory packed as `tar.gz` (`internal/plugarchive`), stored at `{group}/{name}/{version}/plugin.tgz` — the entrypoint plus any sidecars, never a bare binary
@@ -108,7 +108,7 @@ go test ./...            # Standard tests
 - **`easyp-svc plugins register [path]`** — registers built plugins via gRPC `CreatePlugin` (default path `plugins`); use `--cfg` for `registry.plugins_dir` as command prefix, `--dry-run`, `--fail-on-error` (default true)
 - **Port 5432 conflict** — if postgres already runs locally, minimal stack uses port 5433 (`EASYP_POSTGRES_PORT`)
 - **Plugin binaries must exist** — run `task build-plugins` before the service can generate code
-- **License:** `PasetoLicenseClient` verifies the token offline against `license.public_keys` (kid → hex) or the single `license.public_key`. No key configured means community mode; a key that does not decode stops startup. Anything else that goes wrong resolves to community, never to an error
+- **License:** `PasetoLicenseClient` verifies the token offline against `license.public_keys` (kid → hex; an entry under `"*"` verifies any key id). No key configured means community mode; a key that does not decode stops startup. Anything else that goes wrong resolves to community, never to an error
 - **`easyp generate` needs running service** — the generate command calls localhost:8080 gRPC
 - **Migration order matters** — files are sorted by numeric prefix; never reorder
 - **Audit channel capacity** — fixed at 1000; if exceeded, events are silently dropped (logged as warning)
