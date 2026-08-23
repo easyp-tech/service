@@ -199,7 +199,7 @@ func TestValidityWindow(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			client, err := NewPasetoLicenseClient(mint(t, key, test.spec), keys, "", discardLogger())
+			client, err := NewPasetoLicenseClient(mint(t, key, test.spec), keys, discardLogger())
 			require.NoError(t, err)
 			require.Equal(t, test.want, tierOf(t, client))
 		})
@@ -267,19 +267,19 @@ func TestKeySelection(t *testing.T) {
 			fallback: hexA,
 			want:     core.LicenseTierEnterprise,
 		},
-		"single key accepts a token with no footer": {
+		"the \"*\" key accepts a token with no footer": {
 			signWith: keyA,
 			spec:     tokenSpec{notBefore: -time.Hour, expiration: 30 * 24 * time.Hour},
 			fallback: hexA,
 			want:     core.LicenseTierEnterprise,
 		},
-		"single key still has to be the signer": {
+		"the \"*\" key still has to be the signer": {
 			signWith: keyB,
 			spec:     validSpec(),
 			fallback: hexA,
 			want:     core.LicenseTierCommunity,
 		},
-		"single key covers a key id missing from the map": {
+		"the \"*\" key covers a key id missing from the map": {
 			signWith: keyB,
 			spec:     tokenSpec{kid: "2027-01", notBefore: -time.Hour, expiration: 30 * 24 * time.Hour},
 			keys:     map[string]string{testKID: hexA},
@@ -294,7 +294,18 @@ func TestKeySelection(t *testing.T) {
 
 			token := mint(t, test.signWith, test.spec)
 
-			client, err := NewPasetoLicenseClient(token, test.keys, test.fallback, discardLogger())
+			keys := test.keys
+			if test.fallback != "" {
+				// The single-key setting is now an entry in the same map, under
+				// the reserved key id.
+				if keys == nil {
+					keys = map[string]string{}
+				}
+
+				keys[AnyKeyID] = test.fallback
+			}
+
+			client, err := NewPasetoLicenseClient(token, keys, discardLogger())
 			require.NoError(t, err)
 			require.Equal(t, test.want, tierOf(t, client))
 		})
@@ -352,7 +363,7 @@ func TestTokenContents(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			client, err := NewPasetoLicenseClient(mint(t, key, test.spec), keys, "", discardLogger())
+			client, err := NewPasetoLicenseClient(mint(t, key, test.spec), keys, discardLogger())
 			require.NoError(t, err)
 			require.Equal(t, test.want, tierOf(t, client))
 		})
@@ -377,7 +388,7 @@ func TestTamperedToken(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			client, err := NewPasetoLicenseClient(tampered, keys, "", discardLogger())
+			client, err := NewPasetoLicenseClient(tampered, keys, discardLogger())
 			require.NoError(t, err)
 			require.Equal(t, core.LicenseTierCommunity, tierOf(t, client))
 		})
@@ -392,7 +403,7 @@ func TestEnterpriseGrant(t *testing.T) {
 	key := paseto.NewV4AsymmetricSecretKey()
 	keys := map[string]string{testKID: key.Public().ExportHex()}
 
-	client, err := NewPasetoLicenseClient(mint(t, key, validSpec()), keys, "", discardLogger())
+	client, err := NewPasetoLicenseClient(mint(t, key, validSpec()), keys, discardLogger())
 	require.NoError(t, err)
 
 	claims, err := client.ValidateLicense(context.Background())
@@ -420,7 +431,7 @@ func TestNewPasetoLicenseClient(t *testing.T) {
 	t.Run("a key that is not hex is an error", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := NewPasetoLicenseClient("token", map[string]string{testKID: strings.Repeat("z", 64)}, "", discardLogger())
+		_, err := NewPasetoLicenseClient("token", map[string]string{testKID: strings.Repeat("z", 64)}, discardLogger())
 		require.Error(t, err)
 		require.Contains(t, err.Error(), testKID)
 	})
@@ -428,14 +439,14 @@ func TestNewPasetoLicenseClient(t *testing.T) {
 	t.Run("a key of the wrong length is an error", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := NewPasetoLicenseClient("token", map[string]string{testKID: valid[:32]}, "", discardLogger())
+		_, err := NewPasetoLicenseClient("token", map[string]string{testKID: valid[:32]}, discardLogger())
 		require.Error(t, err)
 	})
 
 	t.Run("a bad single key is an error", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := NewPasetoLicenseClient("token", nil, "nonsense", discardLogger())
+		_, err := NewPasetoLicenseClient("token", map[string]string{AnyKeyID: "nonsense"}, discardLogger())
 		require.Error(t, err)
 	})
 
@@ -445,7 +456,6 @@ func TestNewPasetoLicenseClient(t *testing.T) {
 		client, err := NewPasetoLicenseClient(
 			"\n"+mint(t, key, validSpec())+"\n",
 			map[string]string{testKID: "  " + valid + "\n"},
-			"",
 			discardLogger(),
 		)
 		require.NoError(t, err)
@@ -455,7 +465,7 @@ func TestNewPasetoLicenseClient(t *testing.T) {
 	t.Run("no token is community mode", func(t *testing.T) {
 		t.Parallel()
 
-		client, err := NewPasetoLicenseClient("", map[string]string{testKID: valid}, "", discardLogger())
+		client, err := NewPasetoLicenseClient("", map[string]string{testKID: valid}, discardLogger())
 		require.NoError(t, err)
 		require.Equal(t, core.LicenseTierCommunity, tierOf(t, client))
 	})
@@ -463,7 +473,7 @@ func TestNewPasetoLicenseClient(t *testing.T) {
 	t.Run("a token with no key to check it against is community mode", func(t *testing.T) {
 		t.Parallel()
 
-		client, err := NewPasetoLicenseClient(mint(t, key, validSpec()), nil, "", discardLogger())
+		client, err := NewPasetoLicenseClient(mint(t, key, validSpec()), nil, discardLogger())
 		require.NoError(t, err)
 		require.Equal(t, core.LicenseTierCommunity, tierOf(t, client))
 	})
@@ -482,7 +492,7 @@ func TestAnnounceOnlyOnChange(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	client, err := NewPasetoLicenseClient(mint(t, key, validSpec()), keys, "", logger)
+	client, err := NewPasetoLicenseClient(mint(t, key, validSpec()), keys, logger)
 	require.NoError(t, err)
 
 	for range 5 {
@@ -509,7 +519,6 @@ func TestRejectionIsReportedOnlyOnce(t *testing.T) {
 	client, err := NewPasetoLicenseClient(
 		mint(t, stranger, validSpec()),
 		map[string]string{testKID: key.Public().ExportHex()},
-		"",
 		logger,
 	)
 	require.NoError(t, err)
@@ -585,7 +594,6 @@ func TestRejectionNamesTheRightCause(t *testing.T) {
 			client, err := NewPasetoLicenseClient(
 				mint(t, signer, tt.spec()),
 				map[string]string{testKID: key.Public().ExportHex()},
-				"",
 				logger,
 			)
 			require.NoError(t, err)
@@ -615,7 +623,7 @@ func TestGraceIsAnnouncedOnTransition(t *testing.T) {
 	spec.expiration = time.Hour
 
 	now := time.Now()
-	client, err := NewPasetoLicenseClient(mint(t, key, spec), keys, "", logger,
+	client, err := NewPasetoLicenseClient(mint(t, key, spec), keys, logger,
 		withClock(func() time.Time { return now }))
 	require.NoError(t, err)
 

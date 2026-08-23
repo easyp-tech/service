@@ -15,6 +15,7 @@ import (
 
 	"github.com/easyp-tech/service/internal/config"
 	"github.com/easyp-tech/service/internal/core"
+	"github.com/easyp-tech/service/internal/license"
 )
 
 // licensePublicKeysEnv is spelled out rather than imported: this test is the
@@ -28,7 +29,7 @@ func TestResolveLicenseToken(t *testing.T) {
 	t.Run("nothing configured means community mode", func(t *testing.T) {
 		t.Parallel()
 
-		token, err := resolveLicenseToken(config.LicenseConfig{}) //nolint:exhaustruct
+		token, err := resolveLicenseToken(config.LicenseConfig{})
 		require.NoError(t, err)
 		require.Empty(t, token)
 	})
@@ -39,7 +40,7 @@ func TestResolveLicenseToken(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "licence")
 		require.NoError(t, os.WriteFile(path, []byte("from-file"), 0o600))
 
-		token, err := resolveLicenseToken(config.LicenseConfig{Key: "inline", File: path}) //nolint:exhaustruct
+		token, err := resolveLicenseToken(config.LicenseConfig{Key: "inline", File: path})
 		require.NoError(t, err)
 		require.Equal(t, "inline", token)
 	})
@@ -50,7 +51,7 @@ func TestResolveLicenseToken(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "licence")
 		require.NoError(t, os.WriteFile(path, []byte("  from-file\n"), 0o600))
 
-		token, err := resolveLicenseToken(config.LicenseConfig{File: path}) //nolint:exhaustruct
+		token, err := resolveLicenseToken(config.LicenseConfig{File: path})
 		require.NoError(t, err)
 		require.Equal(t, "from-file", token, "surrounding whitespace must be stripped")
 	})
@@ -58,7 +59,7 @@ func TestResolveLicenseToken(t *testing.T) {
 	t.Run("an unreadable file is an error, not a silent downgrade", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := resolveLicenseToken(config.LicenseConfig{ //nolint:exhaustruct
+		_, err := resolveLicenseToken(config.LicenseConfig{
 			File: filepath.Join(t.TempDir(), "absent"),
 		})
 		require.Error(t, err)
@@ -76,13 +77,13 @@ func TestTrimmedPublicKeys(t *testing.T) {
 	t.Run("nothing configured means no keys", func(t *testing.T) {
 		t.Parallel()
 
-		require.Nil(t, trimmedPublicKeys(config.LicenseConfig{})) //nolint:exhaustruct
+		require.Nil(t, trimmedPublicKeys(config.LicenseConfig{}))
 	})
 
 	t.Run("whitespace around ids and keys is stripped", func(t *testing.T) {
 		t.Parallel()
 
-		keys := trimmedPublicKeys(config.LicenseConfig{ //nolint:exhaustruct
+		keys := trimmedPublicKeys(config.LicenseConfig{
 			// The whitespace is the point: a key id wrapped across lines in YAML,
 			// or a list written with a space after the comma, must still match.
 			//nolint:gocritic // suspicious whitespace in the key is what is under test
@@ -94,7 +95,7 @@ func TestTrimmedPublicKeys(t *testing.T) {
 	t.Run("entries with an empty half are skipped", func(t *testing.T) {
 		t.Parallel()
 
-		keys := trimmedPublicKeys(config.LicenseConfig{ //nolint:exhaustruct
+		keys := trimmedPublicKeys(config.LicenseConfig{
 			PublicKeys: map[string]string{"": keyA, "2026-09": "  "},
 		})
 		require.Nil(t, keys, "nothing usable must read as no keys at all")
@@ -113,9 +114,9 @@ func TestLicensePublicKeysDecoding(t *testing.T) {
 	rendered := "2026-08:" + keyA + ",2026-09:" + keyB
 	want := map[string]string{"2026-08": keyA, "2026-09": keyB}
 
-	var cfg config.Config //nolint:exhaustruct
+	var cfg config.Config
 
-	err := envconfig.ProcessWith(t.Context(), &envconfig.Config{ //nolint:exhaustruct
+	err := envconfig.ProcessWith(t.Context(), &envconfig.Config{
 		Target:   &cfg,
 		Lookuper: envconfig.MapLookuper(map[string]string{licensePublicKeysEnv: rendered}),
 	})
@@ -134,11 +135,11 @@ func TestLicensePublicKeysOverrideEmptyYAMLMap(t *testing.T) {
 
 	key := strings.Repeat("c", 64)
 
-	cfg := config.Config{} //nolint:exhaustruct
+	cfg := config.Config{}
 	cfg.License.PublicKeys = map[string]string{}
 	cfg.Server.TrustedProxies = []string{}
 
-	err := envconfig.ProcessWith(t.Context(), &envconfig.Config{ //nolint:exhaustruct
+	err := envconfig.ProcessWith(t.Context(), &envconfig.Config{
 		Target:           &cfg,
 		DefaultOverwrite: true,
 		Lookuper:         envconfig.MapLookuper(map[string]string{licensePublicKeysEnv: "2026-08:" + key}),
@@ -202,7 +203,7 @@ func TestBuildLicenseClient(t *testing.T) {
 	t.Run("an arbitrary string is not a licence", func(t *testing.T) {
 		t.Parallel()
 
-		tier := tierFor(t, config.LicenseConfig{ //nolint:exhaustruct
+		tier := tierFor(t, config.LicenseConfig{
 			Key:        "any-old-string",
 			PublicKeys: map[string]string{"2026-08": publicKey},
 		})
@@ -212,7 +213,7 @@ func TestBuildLicenseClient(t *testing.T) {
 	t.Run("a token signed by someone else is not a licence", func(t *testing.T) {
 		t.Parallel()
 
-		tier := tierFor(t, config.LicenseConfig{ //nolint:exhaustruct
+		tier := tierFor(t, config.LicenseConfig{
 			Key:        mintLicence(t, other, "2026-08"),
 			PublicKeys: map[string]string{"2026-08": publicKey},
 		})
@@ -222,7 +223,7 @@ func TestBuildLicenseClient(t *testing.T) {
 	t.Run("a token signed by the configured key is a licence", func(t *testing.T) {
 		t.Parallel()
 
-		tier := tierFor(t, config.LicenseConfig{ //nolint:exhaustruct
+		tier := tierFor(t, config.LicenseConfig{
 			Key:        mintLicence(t, signing, "2026-08"),
 			PublicKeys: map[string]string{"2026-08": publicKey},
 		})
@@ -232,18 +233,20 @@ func TestBuildLicenseClient(t *testing.T) {
 	t.Run("a valid token with no key to check it against is community mode", func(t *testing.T) {
 		t.Parallel()
 
-		tier := tierFor(t, config.LicenseConfig{ //nolint:exhaustruct
+		tier := tierFor(t, config.LicenseConfig{
 			Key: mintLicence(t, signing, "2026-08"),
 		})
 		require.Equal(t, core.LicenseTierCommunity, tier)
 	})
 
-	t.Run("the single-key setting still works", func(t *testing.T) {
+	t.Run("the reserved key id covers any key id", func(t *testing.T) {
 		t.Parallel()
 
-		tier := tierFor(t, config.LicenseConfig{ //nolint:exhaustruct
-			Key:       mintLicence(t, signing, "2026-08"),
-			PublicKey: publicKey,
+		// What license.public_key used to express, now an entry in the one map
+		// that describes the trust anchor.
+		tier := tierFor(t, config.LicenseConfig{
+			Key:        mintLicence(t, signing, "2026-08"),
+			PublicKeys: map[string]string{license.AnyKeyID: publicKey},
 		})
 		require.Equal(t, core.LicenseTierEnterprise, tier)
 	})
@@ -251,7 +254,7 @@ func TestBuildLicenseClient(t *testing.T) {
 	t.Run("a mistyped key stops startup rather than quietly downgrading", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := buildLicenseClient(config.LicenseConfig{ //nolint:exhaustruct
+		_, err := buildLicenseClient(config.LicenseConfig{
 			Key:        mintLicence(t, signing, "2026-08"),
 			PublicKeys: map[string]string{"2026-08": "not-a-key"},
 		}, log)

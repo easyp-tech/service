@@ -90,12 +90,18 @@ func resolveS3Options(
 	opts := flagOpts
 
 	if cfgPath != "" {
-		cfg, _, err := config.LoadAndValidate(ctx, cfgPath)
+		res, err := config.Load(ctx, cfgPath)
+
+		// Shown rather than dropped. Pushing with a --cfg the server would
+		// refuse is precisely how the CLI and the server come to disagree about
+		// which bucket they use.
+		reportDiagnostics(os.Stderr, res.Diagnostics)
+
 		if err != nil {
-			return storage.S3Options{}, fmt.Errorf("config.LoadAndValidate: %w", err)
+			return storage.S3Options{}, configError(res.Diagnostics, err)
 		}
 
-		fillFromConfig(&opts, cfg.Registry.S3, pathStyleSet)
+		fillFromConfig(&opts, res.Config.Registry.S3, pathStyleSet)
 	}
 
 	if opts.Region == "" {

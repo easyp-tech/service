@@ -54,7 +54,7 @@ registry:
 #
 # With docker-compose.observability.yml layered on, set them in deploy/.env.dev
 # rather than here:
-#   TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT=easyp-alloy:4317
+#   TELEMETRY_OTLP_ENDPOINT=easyp-alloy:4317
 #   TELEMETRY_PYROSCOPE_ENDPOINT=http://easyp-pyroscope:4040
 # The environment overrides this file on every startup path, so one stack can
 # have telemetry and another none without either editing a committed config.
@@ -77,5 +77,10 @@ registry:
 # committed: "ci=<64 hex>,me=<64 hex>". Generate a pair with
 #   easyp-svc auth new-token --name ci
 # Only digests travel; the token itself belongs in your secret manager.
+# The MCP endpoint is opt-in (off by default): these are easyp-tech's own
+# deployments, where it sits behind the stack's edge and is meant to be open.
+mcp:
+  enabled: true
+
 auth:
   write_tokens: []

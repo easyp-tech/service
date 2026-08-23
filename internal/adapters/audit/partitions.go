@@ -73,7 +73,12 @@ func (c *PartitionConfig) setDefault() {
 		c.RetentionMonths = defaultRetentionMonths
 	}
 
-	if c.PreCreateMonths <= 0 {
+	// PreCreateMonths deliberately has no substitution: zero means "create no
+	// partitions ahead", which the loader carries through from a file that says
+	// so, and replacing it here would make config print report a value the
+	// service does not use. A negative one is not a setting, and the field's
+	// struct tag supplies the default for anyone who omits it.
+	if c.PreCreateMonths < 0 {
 		c.PreCreateMonths = defaultPreCreateMonths
 	}
 

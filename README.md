@@ -119,6 +119,8 @@ easyp-svc plugins push plugin-archives --packed \
 
 Uploads run `--parallel` at a time (8 by default). Object storage commonly rate-limits a single connection far below the link it arrives on, so throughput comes from streams rather than from any one of them: measure one stream, then set `--parallel` to about the ratio between your uplink and that figure. An interrupted run is resumed by re-running it — archives already in storage are skipped without being re-read.
 
+The S3 settings can also come from a config file: `plugins push --cfg` accepts a **full server configuration** and runs it through the same validation as `service start` — a fragment holding only `registry.s3` is refused. That is deliberate: a config the server would reject must not quietly keep working for push, or the two stop agreeing about which store they talk to. To push without a server config, pass the storage settings as flags, as above.
+
 ## Project Structure
 
 ```
@@ -211,7 +213,7 @@ task up-minimal
 task run-local
 
 # 4. Register plugins
-./register-plugins.sh localhost:8080
+task register-plugins
 
 # 5. Generate code
 easyp --cfg easyp.local.yaml generate
@@ -274,14 +276,20 @@ message GenerateCodeResponse {
 
 **Endpoint:** `http://localhost:8083/mcp` (streamable MCP over HTTP)
 
+**Opt-in.** The listener is off unless `mcp.enabled: true` (env `MCP_ENABLED`)
+is set: it serves plain HTTP outside the gRPC interceptor chain — no TLS, no
+rate limit, no audit — so a deployment decides whether that surface exists.
+It is read-only and exposes nothing the anonymous gRPC reads do not.
+easyp-tech's own configs under `deploy/config/` enable it; the Helm chart
+ships it off (`mcp.enabled` value).
+
 Implemented tools:
-- `plugins_list` — list available plugins with optional filters: `group`, `name`, `version`, `tags`
+- `plugins_list` — list available plugins with optional filters: `group`, `name`, `version`, `tags`, paginated (`pageSize`/`pageToken`)
 - `easyp_config_describe` — return structured `easyp.yaml` schema/docs/examples for full config or selected `path`
 
 Testing MCP:
-- Contract/integration tests (in-process HTTP MCP server): `go test ./internal/mcpserver -run TestMCPServer -count=1`
-- Live smoke check against running endpoint: `go run ./cmd/mcp-smoke --endpoint http://localhost:8083/mcp`
-- Task shortcuts: `task test-mcp`, `task smoke-mcp`
+- Handler tests: `go test ./internal/api -count=1` (`task test-mcp`)
+- Live smoke check against running endpoint: `go run ./cmd/mcp-smoke --endpoint http://localhost:8083/mcp` (`task smoke-mcp`)
 
 ## Plugin Naming Format
 
@@ -316,34 +324,71 @@ throughout `deploy/` leaves the file's value alone when the variable is not
 exported. This is what lets a secret — `DB_POSTGRES_DSN`, `AUTH_WRITE_TOKENS`,
 `LICENSE_KEY`, `REGISTRY_S3_SECRET_ACCESS_KEY` — stay out of a committed config.
 
-Two names do not follow the field they set: the section prefix is part of the
-variable, so `db.postgres` is `DB_POSTGRES_DSN` and `telemetry.otlp_endpoint` is
-`TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT` — the bare OTel SDK name is read by
-nothing.
+One name does not follow the field it sets: `db.postgres` is `DB_POSTGRES_DSN`.
+Everything else is the dotted key upper-cased, with `.` becoming `_`.
 
-```yaml
-# Server
-SERVER_HOST=0.0.0.0
-SERVER_PORT_GRPC=8080
-SERVER_PORT_METRIC=8081  
-SERVER_PORT_HEALTH=8082
-SERVER_PORT_MCP=8083
+`telemetry.otlp_endpoint` also accepts the standard `OTEL_EXPORTER_OTLP_ENDPOINT`
+when `TELEMETRY_OTLP_ENDPOINT` is unset; `config print --origin` names whichever
+one supplied the value.
 
-# Database
+An unrecognised key is an error, not a warning: the service refuses to start and
+`config validate` exits non-zero. It used to be a warning next to a successful
+start, which made "I configured this" and "I mistyped this" produce the same
+running service. The same goes for a key copied from the chart's `values.yaml` —
+those are camelCase and this file is snake_case, and the error says which key was
+meant.
+
+An unrecognised **environment variable** carrying a section prefix is reported as
+a warning, and named on startup.
+
+```bash
+# The variables an operator actually sets. For the rest — every setting has one —
+# ask the binary: `easyp-svc config print --origin`.
+LOG_LEVEL=info
+
 DB_POSTGRES_DSN="postgres://user:pass@localhost/db"
 
-# Registry
-REGISTRY_PLUGINS_DIR="./plugins"
-REGISTRY_MAX_OUTPUT_SIZE=67108864
+# Credentials for the mutating RPCs: "<name>=<64 hex>,<name>=<64 hex>".
+# Generate with `easyp-svc auth new-token`.
+AUTH_WRITE_TOKENS="ci=<64 hex>"
 
-# S3 binary storage (optional; enabled when bucket is set)
+# Licence. Absent means community mode.
+LICENSE_KEY=
+LICENSE_PUBLIC_KEYS="<kid>:<64 hex>"
+
+# Object storage; enabled by the bucket being set.
 REGISTRY_S3_ENDPOINT="http://rustfs:9000"
 REGISTRY_S3_BUCKET="easyp-plugins"
-REGISTRY_S3_REGION="us-east-1"
 REGISTRY_S3_ACCESS_KEY_ID="rustfsadmin"
 REGISTRY_S3_SECRET_ACCESS_KEY="rustfsadmin"
-REGISTRY_S3_FORCE_PATH_STYLE=true
+
+# Telemetry; empty means no exporter is built.
+TELEMETRY_OTLP_ENDPOINT="easyp-alloy:4317"
 ```
+
+### Checking a configuration
+
+Two commands answer the two questions a config file raises, and neither needs the
+service to be running:
+
+```bash
+# Would the service start on this? Exits non-zero if not.
+easyp-svc config validate --cfg deploy/config/config.yml
+
+# What will actually apply, and which layer supplied each value?
+easyp-svc config print --cfg deploy/config/config.yml --origin
+
+# What does this deployment change from the built-in defaults? The output is
+# exactly what the file needs to contain.
+easyp-svc config print --cfg deploy/config/config.yml --origin --changed
+```
+
+Secrets print as `***` unless `--show-secrets` is given. With no `--cfg`, both
+commands read the environment alone, which is the shape a Helm deployment had
+before the chart began rendering a file.
+
+The service prints the same summary itself, at `info`, on every start — so the
+question is answerable inside a container where these commands are not to hand.
 
 ### Configuration Files
 
@@ -367,7 +412,6 @@ server:
     health: 8082
     mcp: 8083
 db:
-  driver: "postgres"
   postgres: "postgres://easyp_svc:easyp_pass@localhost:5433/easyp_db?sslmode=disable"
 registry:
   plugins_dir: "./plugins"
@@ -481,9 +525,12 @@ LICENSE_PUBLIC_KEYS=<kid>:<hex> LICENSE_KEY=<paseto-token> task up
 ```
 
 Both are read at runtime. The token comes from `license.key`, then
-`license.file`, then `LICENSE_KEY`; the public key from `license.public_keys`,
-then `LICENSE_PUBLIC_KEYS`, then `license.public_key`, then
-`LICENSE_PUBLIC_KEY`. Without a public key no token is honoured.
+`license.file`, then `LICENSE_KEY`; the public keys from `license.public_keys`
+or `LICENSE_PUBLIC_KEYS`. Without a public key no token is honoured.
+
+`license.public_keys` is keyed by the key id in the token's footer. The reserved
+key id `"*"` verifies any token the other entries do not cover, which is what the
+removed `license.public_key` setting used to do.
 
 This service only verifies licences; it does not issue them. Issuing lives in the
 licence registry (`easyp-tech/licenses`), which holds the private signing key,
@@ -555,7 +602,7 @@ task build-plugins
 task up-minimal && task run-local
 
 # Register plugin
-./register-plugins.sh localhost:8080
+task register-plugins
 
 # Test with easyp generate
 easyp --cfg easyp.local.yaml generate
@@ -589,10 +636,13 @@ git commit -m "Add {group}/{plugin-name}:{version} plugin"
 
 ```bash
 # Local build
-go build -o bin/server ./cmd/main.go
+go build -o bin/easyp-svc ./cmd/easyp-svc
 
 # Run
-./bin/server -cfg deploy/config/config.local.yml -log_level debug
+./bin/easyp-svc service start --cfg deploy/config/config.local.yml
+
+# The level is a setting, so it needs no flag; --log_level still overrides it.
+LOG_LEVEL=debug ./bin/easyp-svc service start --cfg deploy/config/config.local.yml
 ```
 
 ### Generating Protobuf Code

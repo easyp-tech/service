@@ -205,16 +205,30 @@ func getServiceCommand() *cli.Command {
 						Value: "",
 					},
 					&cli.StringFlag{
-						Name:  "log_level",
-						Usage: "log level (debug, info, warn, error)",
-						Value: "debug",
+						Name: "log_level",
+						Usage: "log level (debug, info, warn, error); " +
+							"overrides log.level from the configuration",
+						// No default, so that "not given" stays distinguishable
+						// from "given". The level's default now lives with every
+						// other default, in the struct tag on log.level, and is
+						// info rather than the debug this flag used to assume.
+						Value: "",
 					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					cfgPath := cmd.String(flagCfg)
 					logLvl := cmd.String("log_level")
 
-					_, _ = fmt.Fprintf(os.Stdout, "Starting easyp-svc with config: %q, log level: %q\n", cfgPath, logLvl)
+					// Printed before the logger exists, so it stays plain text.
+					// It says only where the settings come from; what they
+					// resolved to is the "configuration resolved" record the
+					// service logs once it knows, which is the honest place for
+					// it — an unset --log_level is not a level of "".
+					if cfgPath == "" {
+						_, _ = fmt.Fprintln(os.Stdout, "Starting easyp-svc from the environment")
+					} else {
+						_, _ = fmt.Fprintf(os.Stdout, "Starting easyp-svc with config: %q\n", cfgPath)
+					}
 
 					return runServiceStart(ctx, cfgPath, logLvl)
 				},

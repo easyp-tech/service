@@ -59,7 +59,9 @@ type Config struct {
 	// MaxSaveRetries is how many extra attempts a failing batch gets.
 	MaxSaveRetries int
 	// EnqueueTimeout bounds how long Send waits for room in the queue before
-	// giving up on an entry. Zero selects defaultEnqueueTimeout.
+	// giving up on an entry. Zero means Send never waits: an entry that finds
+	// the queue full is dropped and counted immediately. Negative selects
+	// defaultEnqueueTimeout.
 	EnqueueTimeout time.Duration
 	// FlushTimeout bounds a single write to storage. Zero selects
 	// defaultFlushTimeout.
@@ -164,9 +166,11 @@ func NewWorker(
 	store core.AuditLog, cfg Config, logger *slog.Logger,
 	reg *prometheus.Registry, namespace string,
 ) *Worker {
-	// A zero timeout would make every context expire on creation, so an
-	// unset field has to mean "the default" rather than "no time at all".
-	if cfg.EnqueueTimeout <= 0 {
+	// EnqueueTimeout is left alone at zero. "Drop the entry rather than wait for
+	// room" is a legitimate choice for a deployment that would rather lose an
+	// audit record than slow a request down, it is reachable only by writing it
+	// down, and the field's struct tag gives everyone else 1s.
+	if cfg.EnqueueTimeout < 0 {
 		cfg.EnqueueTimeout = defaultEnqueueTimeout
 	}
 
@@ -208,6 +212,21 @@ func NewWorker(
 // Values survive WithoutCancel, so the trace and the actor still travel with
 // the entry.
 func (w *Worker) Send(ctx context.Context, entry core.AuditEntry) {
+	// A zero timeout cannot go through context.WithTimeout: its Done channel is
+	// closed from birth, and a select whose queue has room then has two ready
+	// cases and picks between them at random — the same coin flip described
+	// above, dropping entries the queue had space for.
+	if w.cfg.EnqueueTimeout == 0 {
+		select {
+		case w.entries <- entry:
+		default:
+			w.eventsLost.WithLabelValues(reasonEnqueueTimeout).Inc()
+			w.logger.Warn("audit queue full, entry dropped", "entry_id", entry.ID, "operation", entry.OperationType)
+		}
+
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), w.cfg.EnqueueTimeout)
 	defer cancel()
 

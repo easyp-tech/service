@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -18,6 +20,12 @@ const redactedValue = `"***"`
 
 // printOptions holds the resolved inputs of the config print command.
 type printOptions struct {
+	// aliases names the alternative environment variables that supplied a
+	// value, keyed by the canonical name. Carried here rather than passed
+	// separately because it belongs to the same question every other field
+	// here answers: how should this setting be printed.
+	aliases map[string]string
+
 	cfgPath string
 	// origin annotates each setting with the layer it came from. The question
 	// this command exists to answer is usually not "what is the value" but
@@ -36,73 +44,212 @@ type printOptions struct {
 // This answers the same question about a file on disk, which is what makes it
 // usable from CI and from a deploy script before the deploy.
 func runConfigValidate(ctx context.Context, cfgPath string) error {
+	var (
+		res    config.Result
+		err    error
+		source string
+	)
+
 	if cfgPath == "" {
-		cfg := config.Config{} //nolint:exhaustruct // filled from the environment
-
-		if err := config.ApplyEnv(ctx, &cfg); err != nil {
-			return fmt.Errorf("config.ApplyEnv: %w", err)
-		}
-
-		if err := cfg.Validate(); err != nil {
-			return fmt.Errorf("config validation: %w", err)
-		}
-
-		origins, err := config.EnvironmentOrigins()
-		if err != nil {
-			return fmt.Errorf("config.EnvironmentOrigins: %w", err)
-		}
-
-		_, _ = fmt.Fprintln(os.Stdout, "Configuration from the environment is valid.")
-		printOriginSummary(os.Stdout, origins)
-
-		return nil
+		res, err = config.LoadFromEnv(ctx)
+		source = "Configuration from the environment"
+	} else {
+		res, err = config.Load(ctx, cfgPath)
+		source = cfgPath
 	}
 
-	cfg, warnings, origins, err := config.LoadAndValidateWithOrigins(ctx, cfgPath)
-
-	// Printed before the error is returned: an unknown field is the likeliest
-	// explanation for a validation failure right after someone edited the file.
-	for _, warning := range warnings {
-		_, _ = fmt.Fprintf(os.Stderr, "warning: unrecognised field, ignored: %s\n", warning)
-	}
+	// Printed before the error is returned: a mistyped key is the likeliest
+	// explanation for a failure right after someone edited the file, and the
+	// diagnostic names the key while the error only says the load failed.
+	reportDiagnostics(os.Stderr, res.Diagnostics)
 
 	if err != nil {
-		return fmt.Errorf("config.LoadAndValidateWithOrigins: %w", err)
+		return configError(res.Diagnostics, err)
 	}
 
-	_, _ = fmt.Fprintf(os.Stdout, "%s is valid.\n", cfgPath)
-	printOriginSummary(os.Stdout, origins)
+	_, _ = fmt.Fprintf(os.Stdout, "%s is valid.\n", source)
+	printOriginSummary(os.Stdout, res.Origins)
 
-	// Not silent about it: a config whose S3 section is filled but whose
-	// credentials are absent is valid and still cannot read a plugin, and the
-	// person running this is the one who can still do something about it.
-	if cfg.Registry.S3.Enabled() && cfg.Registry.S3.AccessKeyID == "" {
-		_, _ = fmt.Fprintln(os.Stdout,
-			"note: object storage is configured with no credentials; "+
-				"the default AWS credential chain will be used")
+	for _, note := range configNotes(res.Config) {
+		_, _ = fmt.Fprintf(os.Stdout, "note: %s\n", note)
+	}
+
+	// Reported as notes rather than failures. This command is meant to be run in
+	// CI and on a laptop, where the server's certificates and licence file
+	// legitimately do not exist; the same check refuses the start on the machine
+	// that is actually starting.
+	for _, diag := range res.Config.CheckFiles() {
+		_, _ = fmt.Fprintf(os.Stdout, "note: %s\n", diag)
 	}
 
 	return nil
+}
+
+// reportDiagnostics prints everything the loader found wrong with the input.
+//
+// Every caller that resolves a configuration prints these. Two of them used to
+// discard them with `_` — `config print`, whose entire job is to say what will
+// actually apply, and `plugins push`, which is how the CLI and the server come
+// to disagree about which bucket they use.
+func reportDiagnostics(dst io.Writer, diags config.Diagnostics) {
+	for _, diag := range diags {
+		_, _ = fmt.Fprintf(dst, "%s: %s\n", diag.Severity, diag)
+	}
+}
+
+// configError keeps a rejected configuration from being described twice.
+//
+// The diagnostics have already been printed one per line, each naming its key,
+// its line and its likely correction. Returning them again inside the final
+// error re-prints the whole set as one escaped string, which is both longer and
+// harder to read than what the operator has already been shown.
+func configError(diags config.Diagnostics, err error) error {
+	if err == nil {
+		return nil
+	}
+
+	if diags.HasErrors() {
+		return errConfigRejected
+	}
+
+	return err
+}
+
+var errConfigRejected = errors.New("the configuration was rejected; see the diagnostics above")
+
+// configNotes are the things worth saying about a configuration that is
+// nonetheless valid.
+//
+// Shared by `config validate` and by the startup summary so that both paths say
+// them. The S3 note used to be printed only when a file was given, which left it
+// unsaid on exactly the environment-only path a Helm deployment takes.
+func configNotes(cfg *config.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+
+	var notes []string
+
+	// A config whose S3 section is filled but whose credentials are absent is
+	// valid and still cannot read a plugin, and the person reading this is the
+	// one who can still do something about it.
+	if cfg.Registry.S3.Enabled() && cfg.Registry.S3.AccessKeyID == "" {
+		notes = append(notes,
+			"object storage is configured with no credentials; the default AWS credential chain will be used")
+	}
+
+	return notes
+}
+
+// logConfigSummary records what the service actually resolved, at Info.
+//
+// This is the diagnosis that works where the service is running. `config print
+// --origin` answers the same questions better, but it is a command on a binary
+// the operator has to have, in a shell they have to be able to open, at a moment
+// after the thing has already gone wrong; a published image being restarted by
+// an orchestrator offers none of the three. The summary costs one record per
+// start and removes the class of failure where a setting was configured, ignored
+// and never mentioned again.
+//
+// Info rather than Debug because the chart runs at info: a summary the default
+// deployment cannot see is a summary written for the wrong reader. Secrets stay
+// redacted — this goes wherever the logs go.
+func logConfigSummary(ctx context.Context, log *slog.Logger, res config.Result, source string) {
+	if res.Config == nil {
+		return
+	}
+
+	counts := originCounts(res.Origins)
+
+	attrs := []any{
+		"source", source,
+		"settings", len(res.Origins),
+		"from_file", counts[config.OriginFile],
+		"from_environment", counts[config.OriginEnv],
+		"at_defaults", counts[config.OriginDefault],
+	}
+
+	if changed, err := renderChanged(ctx, res); err == nil {
+		attrs = append(attrs, "changed", changed)
+	}
+
+	log.Info("configuration resolved", attrs...)
+
+	for canonical, alias := range res.EnvAliases {
+		log.Info("setting supplied under an alternative variable name",
+			"variable", alias, "canonical", canonical)
+	}
+
+	for _, note := range configNotes(res.Config) {
+		log.Info(note)
+	}
+}
+
+// renderChanged produces the same text as `config print --origin --changed`:
+// every setting that differs from the built-in default, and which layer supplied
+// it. That is the shortest description of a deployment that is still complete,
+// and it is exactly what the file would have to contain.
+func renderChanged(ctx context.Context, res config.Result) (string, error) {
+	defaults, err := config.Defaults(ctx)
+	if err != nil {
+		return "", fmt.Errorf("config.Defaults: %w", err)
+	}
+
+	leaves, err := config.Leaves()
+	if err != nil {
+		return "", fmt.Errorf("config.Leaves: %w", err)
+	}
+
+	selected := make([]config.Leaf, 0, len(leaves))
+
+	for _, leaf := range leaves {
+		if !sameValue(leaf, res.Config, defaults) {
+			selected = append(selected, leaf)
+		}
+	}
+
+	opts := printOptions{
+		aliases: res.EnvAliases,
+		origin:  true,
+		changed: true,
+	}
+
+	var out strings.Builder
+
+	if err = writeConfig(&out, selected, res.Config, res.Origins, opts); err != nil {
+		return "", err
+	}
+
+	return out.String(), nil
+}
+
+func originCounts(origins config.Origins) map[config.Origin]int {
+	counts := map[config.Origin]int{}
+	for _, origin := range origins {
+		counts[origin]++
+	}
+
+	return counts
 }
 
 // printOriginSummary counts the settings each layer supplied. A deployment that
 // expects its secrets to arrive through the environment can see at a glance
 // whether they did.
 func printOriginSummary(dst io.Writer, origins config.Origins) {
-	counts := map[config.Origin]int{}
-	for _, origin := range origins {
-		counts[origin]++
-	}
+	counts := originCounts(origins)
 
 	_, _ = fmt.Fprintf(dst, "%d settings: %d from the file, %d from the environment, %d left at defaults.\n",
 		len(origins), counts[config.OriginFile], counts[config.OriginEnv], counts[config.OriginDefault])
 }
 
 func runConfigPrint(ctx context.Context, opts printOptions) error {
-	cfg, origins, err := resolveForPrint(ctx, opts.cfgPath)
+	res, err := resolveForPrint(ctx, opts.cfgPath)
 	if err != nil {
 		return err
 	}
+
+	cfg, origins := res.Config, res.Origins
+	opts.aliases = res.EnvAliases
 
 	defaults, err := config.Defaults(ctx)
 	if err != nil {
@@ -135,34 +282,34 @@ func runConfigPrint(ctx context.Context, opts printOptions) error {
 // Deliberately the very call the server makes rather than a reimplementation of
 // it: a printed configuration that resolved by its own rules would be worse than
 // none, because it would be believed.
-func resolveForPrint(ctx context.Context, cfgPath string) (*config.Config, config.Origins, error) {
+func resolveForPrint(ctx context.Context, cfgPath string) (config.Result, error) {
+	var (
+		res config.Result
+		err error
+	)
+
 	if cfgPath == "" {
-		cfg := config.Config{} //nolint:exhaustruct // filled from the environment
-
-		if err := config.ApplyEnv(ctx, &cfg); err != nil {
-			return nil, nil, fmt.Errorf("config.ApplyEnv: %w", err)
-		}
-
-		origins, err := config.EnvironmentOrigins()
-		if err != nil {
-			return nil, nil, fmt.Errorf("config.EnvironmentOrigins: %w", err)
-		}
-
-		return &cfg, origins, nil
+		res, err = config.LoadFromEnv(ctx)
+	} else {
+		res, err = config.Load(ctx, cfgPath)
 	}
 
-	// Validation failures are reported but not fatal: a configuration that will
-	// not start is exactly the one worth being able to look at.
-	cfg, _, origins, err := config.LoadAndValidateWithOrigins(ctx, cfgPath)
+	// Shown, not swallowed. This command answers "what will actually apply",
+	// and a mistyped key is the single most important thing standing between
+	// what the operator wrote and what applies.
+	reportDiagnostics(os.Stderr, res.Diagnostics)
+
+	// A failure is reported but not fatal here: a configuration that will not
+	// start is exactly the one worth being able to look at.
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "warning: this configuration would not start: %v\n", err)
 	}
 
-	if cfg == nil {
-		return nil, nil, fmt.Errorf("config.LoadAndValidateWithOrigins: %w", err)
+	if res.Config == nil {
+		return res, err
 	}
 
-	return cfg, origins, nil
+	return res, nil
 }
 
 // sameValue reports whether a setting still holds what its struct tag default
@@ -211,7 +358,7 @@ func writeConfig(
 		line := fmt.Sprintf("%s%s: %s", strings.Repeat("  ", len(parents)), key, rendered)
 
 		if opts.origin {
-			line = fmt.Sprintf("%-52s # %s", line, describeOrigin(leaf, origins))
+			line = fmt.Sprintf("%-52s # %s", line, describeOrigin(leaf, origins, opts.aliases))
 		}
 
 		_, _ = fmt.Fprintln(dst, line)
@@ -223,17 +370,25 @@ func writeConfig(
 // describeOrigin names the layer a setting came from, and for the environment
 // the variable itself — which is the part someone chasing an unexpected value
 // actually needs.
-func describeOrigin(leaf config.Leaf, origins config.Origins) string {
+func describeOrigin(leaf config.Leaf, origins config.Origins, aliases map[string]string) string {
 	origin, known := origins[leaf.Name()]
 	if !known {
 		return "unknown"
 	}
 
-	if origin == config.OriginEnv {
-		return "env " + leaf.EnvKey
+	if origin != config.OriginEnv {
+		return origin.String()
 	}
 
-	return origin.String()
+	// Named as it was actually read. A value that arrived under an alternative
+	// spelling and is reported under the canonical one sends the reader to a
+	// variable that is not set, which is the failure this command exists to
+	// prevent rather than commit.
+	if alias, viaAlias := aliases[leaf.EnvKey]; viaAlias {
+		return "env " + alias + " (alias for " + leaf.EnvKey + ")"
+	}
+
+	return "env " + leaf.EnvKey
 }
 
 // renderValue formats one setting as a single-line YAML scalar or flow

@@ -57,7 +57,7 @@ func (r *TracingRegistry) Get(ctx context.Context, pluginGroup, pluginName, plug
 
 // List creates a span "registry.List", proxies the call to the inner Registry,
 // and on error sets span status to Error with RecordError.
-func (r *TracingRegistry) List(ctx context.Context, filter core.PluginFilter) ([]core.PluginInfo, error) {
+func (r *TracingRegistry) List(ctx context.Context, filter core.PluginFilter, page core.PluginPage) ([]core.PluginInfo, error) {
 	ctx, span := r.tracer.Start(ctx, "registry.List",
 		trace.WithAttributes(
 			attribute.String("db.system", "postgresql"),
@@ -65,7 +65,7 @@ func (r *TracingRegistry) List(ctx context.Context, filter core.PluginFilter) ([
 		))
 	defer span.End()
 
-	result, err := r.inner.List(ctx, filter)
+	result, err := r.inner.List(ctx, filter, page)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())

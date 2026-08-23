@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/grafana/pyroscope-go"
@@ -44,6 +45,35 @@ func newResource(cfg Config) *resource.Resource {
 	return resource.NewWithAttributes(semconv.SchemaURL, attrs...)
 }
 
+// endpointIsURL distinguishes the two forms an OTLP endpoint arrives in. The
+// spec-standard OTEL_EXPORTER_OTLP_ENDPOINT (read through the env alias) holds
+// a URL like http://collector:4317, which WithEndpoint would treat as a bogus
+// hostname; WithEndpointURL parses it and derives TLS from the scheme. A bare
+// host:port keeps the explicit WithEndpoint+WithInsecure pair.
+func endpointIsURL(endpoint string) bool {
+	return strings.Contains(endpoint, "://")
+}
+
+// exporterOptions builds the dial options for both OTLP exporters from
+// whichever endpoint form was configured.
+func exporterOptions(endpoint string) ([]otlptracegrpc.Option, []otlpmetricgrpc.Option) {
+	if endpointIsURL(endpoint) {
+		return []otlptracegrpc.Option{otlptracegrpc.WithEndpointURL(endpoint)},
+			[]otlpmetricgrpc.Option{otlpmetricgrpc.WithEndpointURL(endpoint)}
+	}
+
+	traceOpts := []otlptracegrpc.Option{
+		otlptracegrpc.WithEndpoint(endpoint),
+		otlptracegrpc.WithInsecure(),
+	}
+	metricOpts := []otlpmetricgrpc.Option{
+		otlpmetricgrpc.WithEndpoint(endpoint),
+		otlpmetricgrpc.WithInsecure(),
+	}
+
+	return traceOpts, metricOpts
+}
+
 // Init initialises TracerProvider, MeterProvider and returns a composite
 // shutdown function together with a configured *slog.Logger.
 //
@@ -73,12 +103,11 @@ func Init(ctx context.Context, cfg Config, baseHandler slog.Handler) (
 	if cfg.OTLPEndpoint == "" {
 		slog.New(baseHandler).Info("no OTLP endpoint configured, traces and metrics will not be exported")
 	} else {
+		traceOpts, metricOpts := exporterOptions(cfg.OTLPEndpoint)
+
 		var traceErr error
 
-		traceExp, traceErr = otlptracegrpc.New(ctx,
-			otlptracegrpc.WithEndpoint(cfg.OTLPEndpoint),
-			otlptracegrpc.WithInsecure(),
-		)
+		traceExp, traceErr = otlptracegrpc.New(ctx, traceOpts...)
 		if traceErr != nil {
 			slog.New(baseHandler).Warn("failed to create OTLP trace exporter, continuing without trace export",
 				"error", traceErr)
@@ -88,10 +117,7 @@ func Init(ctx context.Context, cfg Config, baseHandler slog.Handler) (
 
 		var metricErr error
 
-		metricExp, metricErr = otlpmetricgrpc.New(ctx,
-			otlpmetricgrpc.WithEndpoint(cfg.OTLPEndpoint),
-			otlpmetricgrpc.WithInsecure(),
-		)
+		metricExp, metricErr = otlpmetricgrpc.New(ctx, metricOpts...)
 		if metricErr != nil {
 			slog.New(baseHandler).Warn("failed to create OTLP metric exporter, continuing without metric export",
 				"error", metricErr)
@@ -146,7 +172,7 @@ func Init(ctx context.Context, cfg Config, baseHandler slog.Handler) (
 			pyroTags = map[string]string{tierAttribute: cfg.ServiceTier}
 		}
 
-		profiler, pyroErr = pyroscope.Start(pyroscope.Config{ //nolint:exhaustruct // the rest are library defaults
+		profiler, pyroErr = pyroscope.Start(pyroscope.Config{
 			ApplicationName: cfg.ServiceName,
 			ServerAddress:   cfg.PyroscopeEndpoint,
 			Tags:            pyroTags,

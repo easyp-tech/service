@@ -43,7 +43,7 @@ func (o clientTLSOptions) sdkOption() (sdk.Option, error) {
 		return nil, ErrClientCertPairRequired
 	}
 
-	tlsCfg := &tls.Config{ //nolint:exhaustruct // the remaining fields keep their secure defaults
+	tlsCfg := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 	}
 

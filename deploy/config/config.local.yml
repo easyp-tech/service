@@ -48,12 +48,17 @@ registry:
 # forever and fills the log of a local run with connection errors.
 #
 # Bring up the observability stack and set them in the shell instead:
-#   TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317 \
+#   TELEMETRY_OTLP_ENDPOINT=localhost:4317 \
 #   TELEMETRY_PYROSCOPE_ENDPOINT=http://localhost:4040 task run-local
 
 # Local mode ships a fixed, publicly known token so `task run-local` works out of
 # the box. It is the digest of the literal string "local-dev-token" — never use
 # this anywhere reachable from a network.
+# The MCP endpoint is opt-in (off by default): these are easyp-tech's own
+# deployments, where it sits behind the stack's edge and is meant to be open.
+mcp:
+  enabled: true
+
 auth:
   write_tokens:
     - name: "local-dev"

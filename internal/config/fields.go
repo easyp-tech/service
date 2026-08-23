@@ -223,7 +223,7 @@ type envTag struct {
 func parseEnvTag(tag string) (envTag, error) {
 	parts := strings.Split(tag, ",")
 
-	parsed := envTag{key: strings.TrimSpace(parts[0])} //nolint:exhaustruct // the rest is filled from the options
+	parsed := envTag{key: strings.TrimSpace(parts[0])}
 
 	for i, opt := range parts[1:] {
 		opt = strings.TrimLeft(opt, " \t")
@@ -242,9 +242,60 @@ func parseEnvTag(tag string) (envTag, error) {
 			strings.HasPrefix(opt, "delimiter=") || strings.HasPrefix(opt, "separator="):
 			// Recognised by envconfig and of no interest here.
 		default:
-			return envTag{}, fmt.Errorf("unknown env tag option %q", opt) //nolint:exhaustruct // error path
+			return envTag{}, fmt.Errorf("unknown env tag option %q", opt)
 		}
 	}
 
 	return parsed, nil
+}
+
+// SectionPrefixes returns the environment variable prefix of every section of
+// Config, e.g. REGISTRY_ and REGISTRY_S3_.
+//
+// It is what makes an unrecognised variable reportable: a name carrying one of
+// these prefixes was aimed at this service, so failing to match a setting is a
+// mistake rather than an unrelated variable that happens to be exported.
+//
+// Computed once, like Leaves, and for the same reason.
+var SectionPrefixes = sync.OnceValues(computeSectionPrefixes) //nolint:gochecknoglobals // memoised pure function
+
+func computeSectionPrefixes() ([]string, error) {
+	var out []string
+
+	err := walkSections(reflect.TypeOf(Config{}), "", &out)
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+func walkSections(typ reflect.Type, envPrefix string, out *[]string) error {
+	for i := range typ.NumField() {
+		field := typ.Field(i)
+
+		if !field.IsExported() || !isSection(field.Type) {
+			continue
+		}
+
+		if _, skip := yamlFieldName(field); skip {
+			continue
+		}
+
+		tag, err := parseEnvTag(field.Tag.Get("env"))
+		if err != nil {
+			return fmt.Errorf("%s: %w", field.Name, err)
+		}
+
+		prefix := envPrefix + tag.prefix
+		if prefix != "" {
+			*out = append(*out, prefix)
+		}
+
+		if err = walkSections(field.Type, prefix, out); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

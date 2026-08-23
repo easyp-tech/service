@@ -24,8 +24,8 @@ func TestLicenseConfigValidate(t *testing.T) {
 		"one key": {
 			cfg: config.LicenseConfig{PublicKeys: map[string]string{"2026-08": validHexKey}},
 		},
-		"a single key": {
-			cfg: config.LicenseConfig{PublicKey: validHexKey},
+		"the reserved any-key-id entry": {
+			cfg: config.LicenseConfig{PublicKeys: map[string]string{"*": validHexKey}},
 		},
 		"surrounding whitespace is tolerated": {
 			cfg: config.LicenseConfig{PublicKeys: map[string]string{"2026-08": "  " + validHexKey + "\n"}},
@@ -38,9 +38,9 @@ func TestLicenseConfigValidate(t *testing.T) {
 			cfg:     config.LicenseConfig{PublicKeys: map[string]string{"2026-08": strings.Repeat("z", 64)}},
 			wantErr: "not valid hex",
 		},
-		"a bad single key": {
-			cfg:     config.LicenseConfig{PublicKey: "nonsense"},
-			wantErr: "license.public_key",
+		"a bad any-key-id entry": {
+			cfg:     config.LicenseConfig{PublicKeys: map[string]string{"*": "nonsense"}},
+			wantErr: "license.public_keys[*]",
 		},
 		// A key id carrying either separator would decode into a different map
 		// than the one written down, on the environment path.

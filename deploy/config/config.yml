@@ -81,6 +81,11 @@ telemetry:
 # therefore worthless as a secret: REPLACE IT before this config goes anywhere
 # a stranger can reach. The dev stack's configs ship no token at all for exactly
 # that reason — see config.community.dev.yml.
+# The MCP endpoint is opt-in (off by default): these are easyp-tech's own
+# deployments, where it sits behind the stack's edge and is meant to be open.
+mcp:
+  enabled: true
+
 auth:
   write_tokens:
     - name: "local-dev"

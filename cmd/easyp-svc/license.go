@@ -12,9 +12,9 @@ import (
 
 // The licence and storage settings used to be read from the environment here by
 // hand, because the --cfg path decoded YAML and skipped envconfig entirely. It
-// no longer does: config.LoadAndValidate overlays the environment onto the file
-// on both paths, so LICENSE_KEY, LICENSE_PUBLIC_KEY, LICENSE_PUBLIC_KEYS and the
-// REGISTRY_S3_* pair arrive in the config like every other field. What is left
+// no longer does: config.Load overlays the environment onto the file on both
+// paths, so LICENSE_KEY, LICENSE_PUBLIC_KEYS and the REGISTRY_S3_* pair arrive
+// in the config like every other field. What is left
 // below is only what envconfig cannot do: reading a token out of a file, and the
 // client-side flag fallback.
 
@@ -43,11 +43,8 @@ func resolveWriteToken(flagValue string) string {
 type licenseCredentials struct {
 	token string
 	// publicKeys maps key id to hex-encoded Ed25519 public key. The key id in
-	// the token footer selects one of these.
+	// the token footer selects one of these; license.AnyKeyID covers the rest.
 	publicKeys map[string]string
-	// publicKey is the single-key configuration, used for tokens whose key id
-	// names nothing in publicKeys.
-	publicKey string
 }
 
 // resolveLicense collects the licence token and the verification keys from the
@@ -62,7 +59,6 @@ func resolveLicense(cfg config.LicenseConfig) (licenseCredentials, error) {
 	return licenseCredentials{
 		token:      token,
 		publicKeys: trimmedPublicKeys(cfg),
-		publicKey:  strings.TrimSpace(cfg.PublicKey),
 	}, nil
 }
 
@@ -77,7 +73,7 @@ func buildLicenseClient(cfg config.LicenseConfig, log *slog.Logger) (*license.Pa
 		return nil, err
 	}
 
-	client, err := license.NewPasetoLicenseClient(creds.token, creds.publicKeys, creds.publicKey, log)
+	client, err := license.NewPasetoLicenseClient(creds.token, creds.publicKeys, log)
 	if err != nil {
 		return nil, fmt.Errorf("license.NewPasetoLicenseClient: %w", err)
 	}

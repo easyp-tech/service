@@ -65,9 +65,26 @@ func (m *grpcMetrics) PanicsTotal() prometheus.Counter { //nolint:ireturn // int
 
 // runServiceStart initializes and runs the complete service.
 func runServiceStart(ctx context.Context, cfgPath string, logLevelStr string) error {
-	slogLvl, levelErr := parseLogLevel(logLevelStr)
+	// A LevelVar rather than a fixed level, because of an ordering problem: the
+	// logger has to exist before the configuration is read, since reading it is
+	// one of the things worth logging, and the configuration is where the level
+	// now comes from. The variable is raised or lowered once the file has been
+	// read, before the summary is written.
+	levelVar := new(slog.LevelVar)
+	levelVar.Set(slog.LevelInfo)
 
-	log := buildLogger(slogLvl)
+	flagGiven := logLevelStr != ""
+
+	var levelErr error
+
+	if flagGiven {
+		var flagLevel slog.Level
+
+		flagLevel, levelErr = parseLogLevel(logLevelStr)
+		levelVar.Set(flagLevel)
+	}
+
+	log := buildLogger(levelVar)
 
 	// Reported rather than swallowed: an unreadable level and a deliberate one
 	// produce the same running service otherwise, and the operator who mistyped
@@ -82,10 +99,30 @@ func runServiceStart(ctx context.Context, cfgPath string, logLevelStr string) er
 		slog.String("app", serviceNamespace),
 	))
 
-	cfg, err := loadConfig(ctx, cfgPath, log)
+	res, err := loadConfig(ctx, cfgPath, log)
 	if err != nil {
 		return err
 	}
+
+	cfg := *res.Config
+
+	err = checkConfiguredFiles(cfg, log)
+	if err != nil {
+		return err
+	}
+
+	// The flag wins when it was given; otherwise the resolved log.level does,
+	// which is itself LOG_LEVEL over the file over the tag default. Applied
+	// before the summary, so that log.level: debug shows the debug records that
+	// follow it rather than starting one line too late.
+	if !flagGiven {
+		configured, err := parseLogLevel(cfg.Log.Level)
+		if err == nil {
+			levelVar.Set(configured)
+		}
+	}
+
+	logConfigSummary(ctx, log, res, configSource(cfgPath))
 
 	// Armed here rather than in main: the budget has to come from the config,
 	// and the config is only known once the command runs. The other
@@ -105,44 +142,80 @@ func runServiceStart(ctx context.Context, cfgPath string, logLevelStr string) er
 	return nil
 }
 
+// checkConfiguredFiles refuses a start that names a file it cannot read.
+//
+// Kept out of Validate, which does no I/O so that it stays a pure function of
+// the struct. A missing certificate is a certain crash a few seconds later; a
+// missing licence file is worse, because there is no crash at all — the
+// deployment runs as community and serves every request correctly.
+func checkConfiguredFiles(cfg config.Config, log *slog.Logger) error {
+	preflight := cfg.CheckFiles()
+	if !preflight.HasErrors() {
+		return nil
+	}
+
+	for _, diag := range preflight {
+		log.Error(diag.Message, "setting", diag.Path)
+	}
+
+	return preflight.Err() //nolint:wrapcheck // each diagnostic already names its setting and its reason
+}
+
+// configSource names where the settings came from, for the startup summary.
+func configSource(cfgPath string) string {
+	if cfgPath == "" {
+		return "environment"
+	}
+
+	return cfgPath
+}
+
 // loadConfig builds the configuration from wherever it comes from.
 //
 // Both branches end at the same place on purpose: settings resolve identically
 // whether the service was pointed at a file or handed an environment, and the
 // file path uses the very call "plugins push" uses, so the two cannot disagree
 // about which store or which database they are talking to.
-func loadConfig(ctx context.Context, cfgPath string, log *slog.Logger) (config.Config, error) {
-	cfg := config.Config{}
+func loadConfig(ctx context.Context, cfgPath string, log *slog.Logger) (config.Result, error) {
+	var (
+		res config.Result
+		err error
+	)
 
 	if cfgPath == "" {
-		err := config.ApplyEnv(ctx, &cfg)
-		if err != nil {
-			return cfg, fmt.Errorf("config.ApplyEnv: %w", err)
-		}
-
-		err = cfg.Validate()
-		if err != nil {
-			return cfg, fmt.Errorf("config validation: %w", err)
-		}
-
-		return cfg, nil
+		res, err = config.LoadFromEnv(ctx)
+	} else {
+		res, err = config.Load(ctx, cfgPath)
 	}
 
-	loaded, warnings, err := config.LoadAndValidate(ctx, cfgPath)
+	// Logged before the error is returned: a mistyped key is the likeliest
+	// explanation for a failure right after someone edited the file, and each
+	// diagnostic names the key, its line and what it was probably meant to be.
+	// One record per diagnostic rather than one blob, so a log search finds the
+	// key rather than the paragraph it was buried in.
+	for _, diag := range res.Diagnostics {
+		attrs := []any{"severity", diag.Severity.String(), "source", diag.Source}
 
-	// Reported before the error is returned: an unknown field is the likeliest
-	// explanation for a validation failure right after someone edited the file,
-	// and it is the one clue that would otherwise be thrown away.
-	for _, warning := range warnings {
-		log.Warn("config file contains fields this build does not recognise; they were ignored",
-			"detail", warning)
+		if diag.Path != "" {
+			attrs = append(attrs, "path", diag.Path)
+		}
+
+		if diag.Line > 0 {
+			attrs = append(attrs, "line", diag.Line)
+		}
+
+		if diag.Hint != "" {
+			attrs = append(attrs, "hint", diag.Hint)
+		}
+
+		log.Warn(diag.Message, attrs...)
 	}
 
 	if err != nil {
-		return cfg, fmt.Errorf("config.LoadAndValidate: %w", err)
+		return res, configError(res.Diagnostics, err)
 	}
 
-	return *loaded, nil
+	return res, nil
 }
 
 func run(ctx context.Context, cfg config.Config, reg *prometheus.Registry) error {
@@ -224,9 +297,11 @@ func startHealthServer(
 	cfg config.Config,
 	readiness *atomic.Pointer[health.Health],
 ) (func() error, error) {
-	healthPort, err := strconv.ParseUint(cfg.Server.Port.Health, 10, 16)
+	// Parsed through the same function Validate uses, so the range check lives
+	// in one place instead of four strconv calls that each accepted 0 and 99999.
+	healthPort, err := config.ParsePort("server.port.health", cfg.Server.Port.Health)
 	if err != nil {
-		return nil, fmt.Errorf("invalid health port: %w", err)
+		return nil, err //nolint:wrapcheck // already names the setting
 	}
 
 	mux := http.NewServeMux()
@@ -253,14 +328,14 @@ func startHealthServer(
 		checker.Handler().ServeHTTP(writer, req)
 	})
 
-	addr := net.JoinHostPort(cfg.Server.Host, strconv.FormatUint(healthPort, 10))
+	addr := net.JoinHostPort(cfg.Server.Host, strconv.FormatUint(uint64(healthPort), 10))
 
 	listener, err := new(net.ListenConfig).Listen(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("listen health: %w", err)
 	}
 
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: healthReadHeaderTimeout} //nolint:exhaustruct
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: healthReadHeaderTimeout}
 
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(listener) }()
@@ -329,7 +404,13 @@ func initInfrastructure(
 
 	dalMetrics := database.NewMetrics(reg, namespace, "repo", new(core.Registry))
 	sqlCfg := database.SQLConfig{Metrics: dalMetrics}
-	db, err := database.NewSQL(ctx, cfg.DB.Driver, sqlCfg, &connectors.Raw{Query: cfg.DB.Postgres})
+	// Named here rather than configured. It was a setting with one permitted
+	// value, no validation and a straight path into sql.Open, so the only thing
+	// an operator could do with it was break the service — which is what
+	// happened: an image that predated the sparse config files rejected every
+	// one of them for not stating a driver whose default it could not supply.
+	// goosemigrate hard-codes the same string.
+	db, err := database.NewSQL(ctx, "postgres", sqlCfg, &connectors.Raw{Query: cfg.DB.Postgres})
 	if err != nil {
 		return nil, nil, fmt.Errorf("database.NewSQL: %w", err)
 	}
@@ -407,6 +488,48 @@ func initAudit(
 	return worker, partitions, cleanup
 }
 
+// checkServiceTier reports a telemetry label that disagrees with the licence
+// this deployment actually resolved.
+//
+// The label exists so that a stack running community and enterprise side by side
+// can tell their traces apart. Nothing checked it against reality, so a
+// two-tier deployment whose licence had expired — or whose LICENSE_FILE path had
+// a typo — kept labelling everything "enterprise" while serving as community.
+// Every dashboard built on that label then answers the wrong question.
+//
+// Not fatal. A licence legitimately changes under a running deployment: it
+// expires, and the service is designed to degrade to community rather than stop.
+// Turning that degradation into an outage would be a worse failure than the one
+// being reported. The gauge is here so the disagreement can be alerted on — and
+// because a licence changes at runtime, it is a GaugeFunc over the live claims,
+// not a value computed once at startup: the expiry case it exists for happens
+// under a running deployment, after this function has long returned.
+func checkServiceTier(configured string, actualTier func() string, log *slog.Logger,
+	reg *prometheus.Registry, namespace string,
+) {
+	mismatch := prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Name:      "config_service_tier_mismatch",
+		Help: "1 when telemetry.service_tier disagrees with the licence tier this deployment resolved, " +
+			"which makes every tier-labelled metric and trace misleading.",
+	}, func() float64 {
+		// An empty label is a deployment that runs one tier and does not need
+		// the dimension. It asserts nothing, so it cannot disagree.
+		if configured == "" || configured == actualTier() {
+			return 0
+		}
+
+		return 1
+	})
+	reg.MustRegister(mismatch)
+
+	if configured != "" && configured != actualTier() {
+		log.Error("telemetry.service_tier disagrees with the licence this deployment resolved; "+
+			"traces and profiles are labelled with a tier the service is not serving",
+			"configured", configured, "licence", actualTier())
+	}
+}
+
 // cappedWorkers applies the licence's worker ceiling to the configured number.
 //
 // A ceiling, not a substitution. This used to assign the licence limit outright,
@@ -449,6 +572,8 @@ func initApp(
 	lm.StartRefreshWatcher(ctx)
 
 	gate := license.NewFeatureGate(lm)
+
+	checkServiceTier(cfg.Telemetry.ServiceTier, func() string { return lm.Claims().Tier }, log, reg, namespace)
 
 	rl, cl := buildLimiters(ctx, cfg, gate, log, reg, namespace)
 
@@ -580,17 +705,20 @@ func buildExtraInterceptors(
 	authInterceptor := api.NewAuthInterceptor(authenticator, log, reg, serviceNamespace)
 	licenseInterceptor := api.NewLicenseInterceptor(gate, log)
 
-	return []grpc.UnaryServerInterceptor{
-			ratelimit.UnaryServerInterceptor(rl),
-			cl.UnaryServerInterceptor(),
-			authInterceptor.UnaryServerInterceptor(),
-			licenseInterceptor.UnaryServerInterceptor(),
-		}, []grpc.StreamServerInterceptor{
-			ratelimit.StreamServerInterceptor(rl),
-			cl.StreamServerInterceptor(),
-			authInterceptor.StreamServerInterceptor(),
-			licenseInterceptor.StreamServerInterceptor(),
-		}
+	unary := []grpc.UnaryServerInterceptor{
+		ratelimit.UnaryServerInterceptor(rl),
+		cl.UnaryServerInterceptor(),
+		authInterceptor.UnaryServerInterceptor(),
+		licenseInterceptor.UnaryServerInterceptor(),
+	}
+	stream := []grpc.StreamServerInterceptor{
+		ratelimit.StreamServerInterceptor(rl),
+		cl.StreamServerInterceptor(),
+		authInterceptor.StreamServerInterceptor(),
+		licenseInterceptor.StreamServerInterceptor(),
+	}
+
+	return unary, stream
 }
 
 func serveApp(
@@ -602,22 +730,17 @@ func serveApp(
 	mcpHandler http.Handler,
 	jobs ...func(context.Context) error,
 ) error {
-	mcpMux := http.NewServeMux()
-	mcpMux.Handle("/mcp", mcpHandler)
-
-	grpcPort, err := strconv.ParseUint(cfg.Server.Port.GRPC, 10, 16)
+	// The errors below are returned unwrapped on purpose: config.ParsePort
+	// already produces a whole sentence naming the setting and the range, and a
+	// "serveApp:" prefix would only put a function name in front of it.
+	grpcPort, err := config.ParsePort("server.port.grpc", cfg.Server.Port.GRPC)
 	if err != nil {
-		return fmt.Errorf("invalid grpc port: %w", err)
+		return err //nolint:wrapcheck // already names the setting
 	}
 
-	metricPort, err := strconv.ParseUint(cfg.Server.Port.Metric, 10, 16)
+	metricPort, err := config.ParsePort("server.port.metric", cfg.Server.Port.Metric)
 	if err != nil {
-		return fmt.Errorf("invalid metric port: %w", err)
-	}
-
-	mcpPort, err := strconv.ParseUint(cfg.Server.Port.MCP, 10, 16)
-	if err != nil {
-		return fmt.Errorf("invalid mcp port: %w", err)
+		return err //nolint:wrapcheck // already names the setting
 	}
 
 	// Health is not among them: it is started before the migrations, back in
@@ -626,10 +749,24 @@ func serveApp(
 
 	services := make([]func(context.Context) error, 0, builtinServices+len(jobs))
 	services = append(services,
-		serve.Metrics(log.With("module", "metric"), cfg.Server.Host, uint16(metricPort), reg),
-		serve.GRPC(log.With("module", "gRPC"), cfg.Server.Host, uint16(grpcPort), grpcServer),
-		serve.HTTP(log.With("module", "mcp"), cfg.Server.Host, uint16(mcpPort), mcpMux),
+		serve.Metrics(log.With("module", "metric"), cfg.Server.Host, metricPort, reg),
+		serve.GRPC(log.With("module", "gRPC"), cfg.Server.Host, grpcPort, grpcServer),
 	)
+
+	// The MCP listener is opt-in: it lives outside the gRPC interceptor chain,
+	// so the deployment decides whether that surface exists at all.
+	if cfg.MCP.Enabled {
+		mcpPort, err := config.ParsePort("server.port.mcp", cfg.Server.Port.MCP)
+		if err != nil {
+			return err //nolint:wrapcheck // already names the setting
+		}
+
+		mcpMux := http.NewServeMux()
+		mcpMux.Handle("/mcp", mcpHandler)
+		services = append(services, serve.HTTP(log.With("module", "mcp"), cfg.Server.Host, mcpPort, mcpMux))
+	} else {
+		log.Info("MCP endpoint disabled; set mcp.enabled to serve it", "port", cfg.Server.Port.MCP)
+	}
 
 	// Background jobs are supervised alongside the servers so they are
 	// guaranteed to have stopped before run() closes the DB pool.
@@ -738,7 +875,7 @@ func parseLogLevel(s string) (slog.Level, error) {
 	return lvl, nil
 }
 
-func buildLogger(level slog.Level) *slog.Logger {
+func buildLogger(level slog.Leveler) *slog.Logger {
 	return slog.New(
 		slog.NewJSONHandler(
 			os.Stdout,

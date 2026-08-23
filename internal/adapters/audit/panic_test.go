@@ -54,10 +54,16 @@ func newWorker(t *testing.T, store core.AuditLog) *audit.Worker {
 	t.Helper()
 
 	w := audit.NewWorker(store, audit.Config{
-		BufferSize:           16,
-		BatchSize:            1,
-		FlushInterval:        20 * time.Millisecond,
-		MaxSaveRetries:       0,
+		BufferSize:     16,
+		BatchSize:      1,
+		FlushInterval:  20 * time.Millisecond,
+		MaxSaveRetries: 0,
+		// Stated rather than left zero: zero now means "drop the entry rather
+		// than wait for room", which is a real setting an operator can choose
+		// and no longer a stand-in for the default. A hand-built Config has to
+		// say what it wants.
+		EnqueueTimeout:       time.Second,
+		FlushTimeout:         time.Second,
 		ShutdownFlushTimeout: 500 * time.Millisecond,
 	}, slog.New(slog.DiscardHandler), prometheus.NewRegistry(), "easyp")
 
@@ -72,11 +78,11 @@ func newWorker(t *testing.T, store core.AuditLog) *audit.Worker {
 func TestPoisonedBatchDoesNotRepeatForever(t *testing.T) {
 	t.Parallel()
 
-	store := &panickingStore{panicsLeft: 1} //nolint:exhaustruct // Zero values are fine.
+	store := &panickingStore{panicsLeft: 1}
 	w := newWorker(t, store)
 
-	w.Send(t.Context(), core.AuditEntry{OperationType: "first"})  //nolint:exhaustruct // Only the type is read.
-	w.Send(t.Context(), core.AuditEntry{OperationType: "second"}) //nolint:exhaustruct // Only the type is read.
+	w.Send(t.Context(), core.AuditEntry{OperationType: "first"})
+	w.Send(t.Context(), core.AuditEntry{OperationType: "second"})
 
 	require.Eventually(t, func() bool {
 		return len(store.written()) > 0
@@ -102,14 +108,14 @@ func TestPoisonedBatchDoesNotRepeatForever(t *testing.T) {
 func TestWorkerKeepsDrainingAfterAPanic(t *testing.T) {
 	t.Parallel()
 
-	store := &panickingStore{panicsLeft: 3} //nolint:exhaustruct // Zero values are fine.
+	store := &panickingStore{panicsLeft: 3}
 	w := newWorker(t, store)
 
 	for range 3 {
-		w.Send(t.Context(), core.AuditEntry{OperationType: "bad"}) //nolint:exhaustruct // Only the type is read.
+		w.Send(t.Context(), core.AuditEntry{OperationType: "bad"})
 	}
 
-	w.Send(t.Context(), core.AuditEntry{OperationType: "good"}) //nolint:exhaustruct // Only the type is read.
+	w.Send(t.Context(), core.AuditEntry{OperationType: "good"})
 
 	require.Eventually(t, func() bool {
 		for _, batch := range store.written() {

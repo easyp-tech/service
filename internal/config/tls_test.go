@@ -12,12 +12,11 @@ import (
 // baseConfig returns a config that passes validation, so each case below can
 // change exactly one thing.
 func baseConfig() config.Config {
-	cfg := config.Config{} //nolint:exhaustruct // only the validated fields matter
+	cfg := config.Config{}
 	cfg.Server.Port.GRPC = "8080"
 	cfg.Server.Port.Metric = "8081"
 	cfg.Server.Port.Health = "8082"
 	cfg.Server.Port.MCP = "8083"
-	cfg.DB.Driver = "postgres"
 	// An empty DSN is rejected: lib/pq would fall back to the libpq environment
 	// and connect somewhere plausible rather than refusing.
 	cfg.DB.Postgres = "postgres://user:pass@localhost:5432/db?sslmode=disable"
@@ -40,6 +39,17 @@ func baseConfig() config.Config {
 	// Only checked once S3 is enabled, but set here so a case that turns S3 on
 	// reaches the rule it is actually about.
 	cfg.Registry.PluginsDir = "/plugins"
+	// The fields below all carry struct-tag defaults, so a loaded config always
+	// has them; this literal is built by hand and would otherwise present zeros
+	// that no file could produce. Each is one the runtime used to silently
+	// replace, which is why zero is now refused rather than carried.
+	cfg.License.CacheTTL = 5 * time.Minute
+	cfg.Server.MaxRecvMsgSize = 1
+	cfg.Server.MaxConcurrentStreams = 1
+	cfg.Audit.FlushTimeout = time.Second
+	cfg.Audit.PartitionCheckInterval = time.Hour
+	cfg.Audit.PartitionOpTimeout = 30 * time.Second
+	cfg.Log.Level = "info"
 
 	return cfg
 }
@@ -47,11 +57,11 @@ func baseConfig() config.Config {
 func TestTLSConfigPredicates(t *testing.T) {
 	t.Parallel()
 
-	empty := config.TLSConfig{} //nolint:exhaustruct
+	empty := config.TLSConfig{}
 	require.False(t, empty.Enabled())
 	require.False(t, empty.MutualTLS())
 
-	serverOnly := config.TLSConfig{CertFile: "a.crt", KeyFile: "a.key"} //nolint:exhaustruct
+	serverOnly := config.TLSConfig{CertFile: "a.crt", KeyFile: "a.key"}
 	require.True(t, serverOnly.Enabled())
 	require.False(t, serverOnly.MutualTLS())
 

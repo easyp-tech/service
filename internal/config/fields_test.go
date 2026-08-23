@@ -85,7 +85,7 @@ func TestLeavesMatchTheDeployedNames(t *testing.T) {
 		{"registry.s3.region", "REGISTRY_S3_REGION", "us-east-1", true, false},
 		// Deliberately without a default: a fallback would make "no collector"
 		// impossible to express. See TestTelemetryHasNoDefault.
-		{"telemetry.otlp_endpoint", "TELEMETRY_OTEL_EXPORTER_OTLP_ENDPOINT", "", false, false},
+		{"telemetry.otlp_endpoint", "TELEMETRY_OTLP_ENDPOINT", "", false, false},
 		// The three credentials, and the identifier that is deliberately not one.
 		{"db.postgres", "DB_POSTGRES_DSN", "", false, true},
 		{"registry.s3.secret_access_key", "REGISTRY_S3_SECRET_ACCESS_KEY", "", false, true},
@@ -144,7 +144,7 @@ func TestLeafValueAddressesTheRightField(t *testing.T) {
 	leaves, err := config.Leaves()
 	require.NoError(t, err)
 
-	cfg := config.Config{} //nolint:exhaustruct // two fields under test
+	cfg := config.Config{}
 	cfg.Registry.S3.Bucket = "plugins"
 	cfg.WorkerPool.MaxRetries = 7
 

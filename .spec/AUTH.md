@@ -136,13 +136,13 @@ license:
   key: ""          # inline PASETO token; takes priority over file
   file: ""         # path to a file holding the token
   public_keys:     # key id -> hex-encoded Ed25519 verification key
-    "2026-08": ""
-  public_key: ""   # single verification key, used when the key id matches nothing above
+    "2026-08": ""  # an entry under "*" verifies a token whose key id matches nothing else
   cache_ttl: 5m    # how long to cache license claims
 ```
 
 Environment: `LICENSE_KEY`, `LICENSE_FILE`, `LICENSE_PUBLIC_KEYS`,
-`LICENSE_PUBLIC_KEY`, `LICENSE_CACHE_TTL`.
+`LICENSE_CACHE_TTL`. (`license.public_key` / `LICENSE_PUBLIC_KEY` was a second,
+single-key setting until v0.13.0; its role is the `"*"` entry above.)
 
 `LICENSE_PUBLIC_KEYS` is encoded `<kid>:<hex>,<kid>:<hex>`. This is what the Helm
 chart renders from `config.license.publicKeys`; a key id may therefore contain
@@ -155,7 +155,6 @@ of precedence:
 
 - token: `license.key` → contents of `license.file` → `LICENSE_KEY`
 - keys: `license.public_keys` → `LICENSE_PUBLIC_KEYS`
-- single key: `license.public_key` → `LICENSE_PUBLIC_KEY`
 
 All are read at runtime. A deployment with no public key cannot honour any token
 and stays in community mode.
