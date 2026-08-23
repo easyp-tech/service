@@ -35,10 +35,11 @@ func (c *Config) CheckFiles() Diagnostics {
 			continue
 		}
 
-		if err := readable(file.path); err != nil {
+		err := readable(file.path)
+		if err != nil {
 			out = append(out, Diagnostic{
 				Severity: SeverityError,
-				Source:   "file",
+				Source:   SourceFile,
 				Path:     file.name,
 				Message:  fmt.Sprintf("%s cannot be read: %v", file.path, err),
 			})
@@ -52,7 +53,7 @@ func (c *Config) CheckFiles() Diagnostics {
 // readable by this user fails at exactly the same moment as one that is missing,
 // and a check that only stats would pass and let it happen anyway.
 func readable(path string) error {
-	handle, err := os.Open(path) //nolint:gosec // the path is the operator's own configuration
+	handle, err := os.Open(path)
 	if err != nil {
 		return err //nolint:wrapcheck // the os error already names the path and the reason
 	}

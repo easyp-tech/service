@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -54,9 +55,7 @@ func TestLogLevelIsASettingWithLayers(t *testing.T) {
 			t.Parallel()
 
 			env := map[string]string{"DB_POSTGRES_DSN": "postgres://u:p@h:5432/d?sslmode=disable"}
-			for key, value := range tc.env {
-				env[key] = value
-			}
+			maps.Copy(env, tc.env)
 
 			path := filepath.Join(t.TempDir(), "config.yml")
 			require.NoError(t, os.WriteFile(path, []byte(tc.file), 0o600))

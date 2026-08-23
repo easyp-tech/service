@@ -194,13 +194,13 @@ type RegistryConfig struct {
 // the caller and is worth seeing in a printed configuration — redacting it would
 // hide which key a deployment is using while protecting nothing.
 type S3Config struct {
-	Endpoint        string `env:"ENDPOINT"         yaml:"endpoint"`
-	Bucket          string `env:"BUCKET"           yaml:"bucket"`
+	Endpoint        string `env:"ENDPOINT"                 yaml:"endpoint"`
+	Bucket          string `env:"BUCKET"                   yaml:"bucket"`
 	Region          string `env:"REGION,default=us-east-1" yaml:"region"`
-	Prefix          string `env:"PREFIX"           yaml:"prefix"`
-	AccessKeyID     string `env:"ACCESS_KEY_ID"    yaml:"access_key_id"`
-	SecretAccessKey string `env:"SECRET_ACCESS_KEY" secret:"true" yaml:"secret_access_key"`
-	ForcePathStyle  bool   `env:"FORCE_PATH_STYLE" yaml:"force_path_style"`
+	Prefix          string `env:"PREFIX"                   yaml:"prefix"`
+	AccessKeyID     string `env:"ACCESS_KEY_ID"            yaml:"access_key_id"`
+	SecretAccessKey string `env:"SECRET_ACCESS_KEY"        secret:"true"           yaml:"secret_access_key"`
+	ForcePathStyle  bool   `env:"FORCE_PATH_STYLE"         yaml:"force_path_style"`
 }
 
 // Enabled returns true if S3 storage is configured.
@@ -315,7 +315,7 @@ const hexEd25519KeyLength = 64
 func (c LicenseConfig) Validate() error {
 	for kid, hexKey := range c.PublicKeys {
 		if kid == "" {
-			return fmt.Errorf("license.public_keys: key id must not be empty")
+			return errors.New("license.public_keys: key id must not be empty")
 		}
 
 		// The separators of the environment encoding, "<kid>:<hex>,<kid>:<hex>":
@@ -325,7 +325,8 @@ func (c LicenseConfig) Validate() error {
 			return fmt.Errorf("license.public_keys: key id %q must not contain ',' or ':'", kid)
 		}
 
-		if err := validateHexKey(fmt.Sprintf("license.public_keys[%s]", kid), hexKey); err != nil {
+		err := validateHexKey(fmt.Sprintf("license.public_keys[%s]", kid), hexKey)
+		if err != nil {
 			return err
 		}
 	}
@@ -340,8 +341,9 @@ func validateHexKey(name, hexKey string) error {
 		return fmt.Errorf("%s: expected %d hex characters, got %d", name, hexEd25519KeyLength, len(trimmed))
 	}
 
-	if _, err := hex.DecodeString(trimmed); err != nil {
-		return fmt.Errorf("%s: not valid hex: %w", name, err)
+	_, decodeErr := hex.DecodeString(trimmed)
+	if decodeErr != nil {
+		return fmt.Errorf("%s: not valid hex: %w", name, decodeErr)
 	}
 
 	return nil
@@ -392,9 +394,10 @@ func (c AuditConfig) RetentionEnabled() bool {
 
 // Validate performs structural validation of the configuration.
 // Called by the server at startup and by LoadAndValidate.
+
 func (c *Config) Validate() error {
 	if c.Server.Port.GRPC == "" {
-		return fmt.Errorf("server.port.grpc is required")
+		return errors.New("server.port.grpc is required")
 	}
 
 	// The remaining ports are parsed long after startup begins — metric and mcp
@@ -417,26 +420,28 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	if err := c.validatePorts(); err != nil {
+	err := c.validatePorts()
+	if err != nil {
 		return err
 	}
 
 	// A certificate without its key (or the reverse) is a half-applied change
 	// that would otherwise silently fall back to plaintext.
 	if (c.Server.TLS.CertFile != "") != (c.Server.TLS.KeyFile != "") {
-		return fmt.Errorf("server.tls.cert_file and server.tls.key_file must be set together")
+		return errors.New("server.tls.cert_file and server.tls.key_file must be set together")
 	}
 
 	if c.Server.TLS.ClientCAFile != "" && !c.Server.TLS.Enabled() {
-		return fmt.Errorf("server.tls.client_ca_file requires server.tls.cert_file and server.tls.key_file")
+		return errors.New("server.tls.client_ca_file requires server.tls.cert_file and server.tls.key_file")
 	}
 
 	// Rejected at startup rather than skipped. A CIDR with a typo in it would
 	// otherwise leave the list effectively empty, which is exactly the
 	// misconfiguration this setting exists to prevent — and it would look like
 	// it had been configured.
-	if _, err := c.Server.TrustedProxyPrefixes(); err != nil {
-		return err
+	_, prefixErr := c.Server.TrustedProxyPrefixes()
+	if prefixErr != nil {
+		return prefixErr
 	}
 
 	// Zero is not "no limit", it is a limit of nothing: every generation runs to
@@ -468,13 +473,149 @@ func (c *Config) Validate() error {
 	// back to the libpq defaults, so on a host with PGHOST and PGDATABASE set the
 	// service connects somewhere plausible and runs its migrations there.
 	if c.DB.Postgres == "" {
-		return fmt.Errorf("db.postgres is required: an empty DSN silently falls back to the libpq environment")
+		return errors.New("db.postgres is required: an empty DSN silently falls back to the libpq environment")
 	}
 
-	if err := validateDSN(c.DB.Postgres); err != nil {
+	err = validateDSN(c.DB.Postgres)
+	if err != nil {
 		return err
 	}
 
+	err = c.validateWorkerPool()
+	if err != nil {
+		return err
+	}
+
+	// Killing the process before a generation it accepted can finish turns every
+	// rolling deploy into severed requests.
+	if c.Server.ForceShutdownAfter <= c.WorkerPool.GenerationTimeout {
+		return fmt.Errorf(
+			"server.force_shutdown_after (%s) must exceed worker_pool.generation_timeout (%s)",
+			c.Server.ForceShutdownAfter, c.WorkerPool.GenerationTimeout,
+		)
+	}
+
+	err = c.validateRateLimit()
+	if err != nil {
+		return err
+	}
+
+	err = c.validateAudit()
+	if err != nil {
+		return err
+	}
+
+	err = c.Auth.Validate()
+	if err != nil {
+		return err
+	}
+
+	err = c.License.Validate()
+	if err != nil {
+		return err
+	}
+
+	if c.Registry.S3.Enabled() {
+		if c.Registry.PluginsDir == "" {
+			return errors.New("registry.plugins_dir is required as local cache directory when S3 is enabled")
+		}
+		hasKey := c.Registry.S3.AccessKeyID != ""
+		hasSecret := c.Registry.S3.SecretAccessKey != ""
+		if hasKey != hasSecret {
+			return errors.New("registry.s3.access_key_id and registry.s3.secret_access_key must be set together")
+		}
+	}
+
+	err = c.validateS3Completeness()
+	if err != nil {
+		return err
+	}
+
+	err = c.validateCacheSize()
+	if err != nil {
+		return err
+	}
+
+	err = c.validateTelemetry()
+	if err != nil {
+		return err
+	}
+
+	err = c.validateLogLevel()
+	if err != nil {
+		return err
+	}
+
+	return c.validateRuntimeZeros()
+}
+
+// validateAudit checks the audit worker's numbers and the relationship between
+// its retention and pre-creation windows.
+func (c *Config) validateAudit() error {
+	if c.Audit.BufferSize <= 0 {
+		return fmt.Errorf("audit.buffer_size must be positive, got %d", c.Audit.BufferSize)
+	}
+
+	if c.Audit.BatchSize <= 0 {
+		return fmt.Errorf("audit.batch_size must be positive, got %d", c.Audit.BatchSize)
+	}
+
+	if c.Audit.FlushInterval <= 0 {
+		return fmt.Errorf("audit.flush_interval must be positive, got %s", c.Audit.FlushInterval)
+	}
+
+	if c.Audit.MaxSaveRetries < 0 {
+		return fmt.Errorf("audit.max_save_retries must not be negative, got %d", c.Audit.MaxSaveRetries)
+	}
+
+	if c.Audit.RetentionMonths < 0 {
+		return fmt.Errorf("audit.retention_months must not be negative, got %d", c.Audit.RetentionMonths)
+	}
+
+	if c.Audit.PreCreateMonths < 0 {
+		return fmt.Errorf("audit.pre_create_months must not be negative, got %d", c.Audit.PreCreateMonths)
+	}
+
+	// Creating partitions further ahead than they are kept means the maintainer
+	// makes a partition on one pass and drops it on the next. Retention of zero
+	// keeps everything, so nothing is ahead of it.
+	if c.Audit.RetentionEnabled() && c.Audit.PreCreateMonths > c.Audit.RetentionMonths {
+		return fmt.Errorf(
+			"audit.pre_create_months (%d) must not exceed audit.retention_months (%d), "+
+				"otherwise partitions are created and then dropped by the same maintainer",
+			c.Audit.PreCreateMonths, c.Audit.RetentionMonths,
+		)
+	}
+
+	return nil
+}
+
+// validateRateLimit checks the limiter's numbers. Same reason as
+// validateWorkerPool: Validate reads better as a list of areas than as one
+// long chain of ifs.
+func (c *Config) validateRateLimit() error {
+	if c.RateLimit.RequestsPerSecond <= 0 {
+		return fmt.Errorf("rate_limit.requests_per_second must be positive, got %f", c.RateLimit.RequestsPerSecond)
+	}
+
+	if c.RateLimit.Burst <= 0 {
+		return fmt.Errorf("rate_limit.burst must be positive, got %d", c.RateLimit.Burst)
+	}
+
+	// The cleanup loop feeds this straight to time.NewTicker, which panics on a
+	// non-positive interval — from a background goroutine, so it takes the
+	// process down after startup has already reported success rather than
+	// failing the configuration.
+	if c.RateLimit.CleanupInterval <= 0 {
+		return fmt.Errorf("rate_limit.cleanup_interval must be positive, got %s", c.RateLimit.CleanupInterval)
+	}
+
+	return nil
+}
+
+// validateWorkerPool checks the pool's own numbers. Split out of Validate,
+// which had grown past the point where a reader could hold it in their head.
+func (c *Config) validateWorkerPool() error {
 	if c.WorkerPool.Workers <= 0 {
 		return fmt.Errorf("worker_pool.workers must be positive, got %d", c.WorkerPool.Workers)
 	}
@@ -514,102 +655,7 @@ func (c *Config) Validate() error {
 		)
 	}
 
-	// Killing the process before a generation it accepted can finish turns every
-	// rolling deploy into severed requests.
-	if c.Server.ForceShutdownAfter <= c.WorkerPool.GenerationTimeout {
-		return fmt.Errorf(
-			"server.force_shutdown_after (%s) must exceed worker_pool.generation_timeout (%s)",
-			c.Server.ForceShutdownAfter, c.WorkerPool.GenerationTimeout,
-		)
-	}
-
-	if c.RateLimit.RequestsPerSecond <= 0 {
-		return fmt.Errorf("rate_limit.requests_per_second must be positive, got %f", c.RateLimit.RequestsPerSecond)
-	}
-
-	if c.RateLimit.Burst <= 0 {
-		return fmt.Errorf("rate_limit.burst must be positive, got %d", c.RateLimit.Burst)
-	}
-
-	// The cleanup loop feeds this straight to time.NewTicker, which panics on a
-	// non-positive interval — from a background goroutine, so it takes the
-	// process down after startup has already reported success rather than
-	// failing the configuration.
-	if c.RateLimit.CleanupInterval <= 0 {
-		return fmt.Errorf("rate_limit.cleanup_interval must be positive, got %s", c.RateLimit.CleanupInterval)
-	}
-
-	if c.Audit.BufferSize <= 0 {
-		return fmt.Errorf("audit.buffer_size must be positive, got %d", c.Audit.BufferSize)
-	}
-
-	if c.Audit.BatchSize <= 0 {
-		return fmt.Errorf("audit.batch_size must be positive, got %d", c.Audit.BatchSize)
-	}
-
-	if c.Audit.FlushInterval <= 0 {
-		return fmt.Errorf("audit.flush_interval must be positive, got %s", c.Audit.FlushInterval)
-	}
-
-	if c.Audit.MaxSaveRetries < 0 {
-		return fmt.Errorf("audit.max_save_retries must not be negative, got %d", c.Audit.MaxSaveRetries)
-	}
-
-	if c.Audit.RetentionMonths < 0 {
-		return fmt.Errorf("audit.retention_months must not be negative, got %d", c.Audit.RetentionMonths)
-	}
-
-	if c.Audit.PreCreateMonths < 0 {
-		return fmt.Errorf("audit.pre_create_months must not be negative, got %d", c.Audit.PreCreateMonths)
-	}
-
-	// Creating partitions further ahead than they are kept means the maintainer
-	// makes a partition on one pass and drops it on the next. Retention of zero
-	// keeps everything, so nothing is ahead of it.
-	if c.Audit.RetentionEnabled() && c.Audit.PreCreateMonths > c.Audit.RetentionMonths {
-		return fmt.Errorf(
-			"audit.pre_create_months (%d) must not exceed audit.retention_months (%d), "+
-				"otherwise partitions are created and then dropped by the same maintainer",
-			c.Audit.PreCreateMonths, c.Audit.RetentionMonths,
-		)
-	}
-
-	if err := c.Auth.Validate(); err != nil {
-		return err
-	}
-
-	if err := c.License.Validate(); err != nil {
-		return err
-	}
-
-	if c.Registry.S3.Enabled() {
-		if c.Registry.PluginsDir == "" {
-			return fmt.Errorf("registry.plugins_dir is required as local cache directory when S3 is enabled")
-		}
-		hasKey := c.Registry.S3.AccessKeyID != ""
-		hasSecret := c.Registry.S3.SecretAccessKey != ""
-		if hasKey != hasSecret {
-			return fmt.Errorf("registry.s3.access_key_id and registry.s3.secret_access_key must be set together")
-		}
-	}
-
-	if err := c.validateS3Completeness(); err != nil {
-		return err
-	}
-
-	if err := c.validateCacheSize(); err != nil {
-		return err
-	}
-
-	if err := c.validateTelemetry(); err != nil {
-		return err
-	}
-
-	if err := c.validateLogLevel(); err != nil {
-		return err
-	}
-
-	return c.validateRuntimeZeros()
+	return nil
 }
 
 // maxConfigFileSize bounds the config file. A YAML larger than this is not a
@@ -736,9 +782,9 @@ const (
 func (o Origin) String() string {
 	switch o {
 	case OriginEnv:
-		return "env"
+		return SourceEnv
 	case OriginFile:
-		return "file"
+		return SourceFile
 	case OriginDefault:
 		return "default"
 	default:
@@ -889,7 +935,8 @@ func load(ctx context.Context, path string, lookuper envconfig.Lookuper) (Result
 	// the file suppress the very defaults the merge needs to fall back on.
 	cfg := Config{}
 
-	if err = applyEnv(ctx, &cfg, lookuper); err != nil {
+	err = applyEnv(ctx, &cfg, lookuper)
+	if err != nil {
 		return res, err
 	}
 
@@ -901,11 +948,13 @@ func load(ctx context.Context, path string, lookuper envconfig.Lookuper) (Result
 	res.Config = &cfg
 	res.Origins = origins
 
-	if err = res.Diagnostics.Err(); err != nil {
+	err = res.Diagnostics.Err()
+	if err != nil {
 		return res, fmt.Errorf("config file %s: %w", path, err)
 	}
 
-	if err = cfg.Validate(); err != nil {
+	err = cfg.Validate()
+	if err != nil {
 		return res, fmt.Errorf("config validation: %w", err)
 	}
 
@@ -918,8 +967,9 @@ func loadFromEnv(ctx context.Context, lookuper envconfig.Lookuper) (Result, erro
 
 	cfg := Config{}
 
-	if err := applyEnv(ctx, &cfg, lookuper); err != nil {
-		return res, err
+	applyErr := applyEnv(ctx, &cfg, lookuper)
+	if applyErr != nil {
+		return res, applyErr
 	}
 
 	origins, err := environmentOrigins(lookuper)
@@ -930,11 +980,13 @@ func loadFromEnv(ctx context.Context, lookuper envconfig.Lookuper) (Result, erro
 	res.Config = &cfg
 	res.Origins = origins
 
-	if err = res.Diagnostics.Err(); err != nil {
+	err = res.Diagnostics.Err()
+	if err != nil {
 		return res, err
 	}
 
-	if err = cfg.Validate(); err != nil {
+	err = cfg.Validate()
+	if err != nil {
 		return res, fmt.Errorf("config validation: %w", err)
 	}
 
@@ -971,10 +1023,11 @@ func parseDocument(data []byte) (*yaml.Node, Diagnostics, error) {
 	// settings after the --- would vanish all the same, so it gets the same
 	// diagnostic rather than a silent pass.
 	var extra yaml.Node
-	if extraErr := dec.Decode(&extra); hasSecondDocument(&extra, extraErr) {
+	extraErr := dec.Decode(&extra)
+	if hasSecondDocument(&extra, extraErr) {
 		diags = append(diags, Diagnostic{
 			Severity: SeverityError,
-			Source:   "file",
+			Source:   SourceFile,
 			Line:     extra.Line,
 			Message:  "the file holds more than one YAML document; only the first one would be read",
 		})
@@ -1026,7 +1079,8 @@ func decodeDocument(root *yaml.Node) (Config, map[string]any, Diagnostics, error
 
 	var diags Diagnostics
 
-	if err := root.Decode(&fromFile); err != nil {
+	err := root.Decode(&fromFile)
+	if err != nil {
 		var typeErr *yaml.TypeError
 		if !errors.As(err, &typeErr) {
 			return fromFile, nil, nil, fmt.Errorf("parsing config YAML: %w", err)
@@ -1041,9 +1095,9 @@ func decodeDocument(root *yaml.Node) (Config, map[string]any, Diagnostics, error
 	var doc map[string]any
 
 	if resolveAlias(root.Content[0]).Kind == yaml.MappingNode {
-		if err := root.Decode(&doc); err != nil {
-			var typeErr *yaml.TypeError
-			if !errors.As(err, &typeErr) {
+		err = root.Decode(&doc)
+		if err != nil {
+			if _, ok := errors.AsType[*yaml.TypeError](err); !ok {
 				return fromFile, nil, nil, fmt.Errorf("parsing config YAML: %w", err)
 			}
 		}
@@ -1054,7 +1108,7 @@ func decodeDocument(root *yaml.Node) (Config, map[string]any, Diagnostics, error
 
 // yamlErrorLine matches the "line N: " prefix yaml.v3 puts on each entry of a
 // TypeError, so the number becomes a field rather than staying buried in prose.
-var yamlErrorLine = regexp.MustCompile(`^line (\d+): `) //nolint:gochecknoglobals // compiled once
+var yamlErrorLine = regexp.MustCompile(`^line (\d+): `)
 
 func typeErrorDiagnostics(typeErr *yaml.TypeError) Diagnostics {
 	diags := make(Diagnostics, 0, len(typeErr.Errors))
@@ -1062,7 +1116,7 @@ func typeErrorDiagnostics(typeErr *yaml.TypeError) Diagnostics {
 	for _, message := range typeErr.Errors {
 		diag := Diagnostic{
 			Severity: SeverityError,
-			Source:   "file",
+			Source:   SourceFile,
 			Message:  message,
 		}
 

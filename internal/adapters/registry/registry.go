@@ -160,7 +160,8 @@ func New(
 	guard := safe.NewGuard(cacheOpts.Registry, cacheOpts.Namespace)
 
 	tmpDir := filepath.Join(pluginsDir, tmpDirName)
-	if err := os.MkdirAll(tmpDir, dirPerm); err != nil {
+	err := os.MkdirAll(tmpDir, dirPerm)
+	if err != nil {
 		return nil, fmt.Errorf("creating the archive staging directory: %w", err)
 	}
 
@@ -769,7 +770,8 @@ func (r *Registry) stagingDir() (string, error) {
 		dir = filepath.Join(r.pluginsDir, tmpDirName)
 	}
 
-	if err := os.MkdirAll(dir, dirPerm); err != nil {
+	err := os.MkdirAll(dir, dirPerm)
+	if err != nil {
 		return "", fmt.Errorf("creating the archive staging directory: %w", err)
 	}
 

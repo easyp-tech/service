@@ -100,7 +100,7 @@ var ErrUntaggedField = errors.New("config: field is missing a tag")
 func computeLeaves() ([]Leaf, error) {
 	var out []Leaf
 
-	err := walkFields(reflect.TypeOf(Config{}), nil, "", nil, &out)
+	err := walkFields(reflect.TypeFor[Config](), nil, "", nil, &out)
 	if err != nil {
 		return nil, err
 	}
@@ -110,16 +110,16 @@ func computeLeaves() ([]Leaf, error) {
 
 //nolint:gochecknoglobals // reflect type handles, computed once
 var (
-	decoderType         = reflect.TypeOf((*envconfig.Decoder)(nil)).Elem()
-	decoderCtxType      = reflect.TypeOf((*envconfig.DecoderCtx)(nil)).Elem()
-	textUnmarshalerType = reflect.TypeOf((*encoding.TextUnmarshaler)(nil)).Elem()
+	decoderType         = reflect.TypeFor[envconfig.Decoder]()
+	decoderCtxType      = reflect.TypeFor[envconfig.DecoderCtx]()
+	textUnmarshalerType = reflect.TypeFor[encoding.TextUnmarshaler]()
 )
 
 // walkFields appends a Leaf for every setting in typ, descending into the
 // nested sections and accumulating both names as it goes.
 func walkFields(typ reflect.Type, yamlPath []string, envPrefix string, index []int, out *[]Leaf) error {
-	for i := range typ.NumField() {
-		field := typ.Field(i)
+	for fieldNum := range typ.NumField() {
+		field := typ.Field(fieldNum)
 
 		if !field.IsExported() {
 			continue
@@ -139,7 +139,7 @@ func walkFields(typ reflect.Type, yamlPath []string, envPrefix string, index []i
 		// share the backing array between siblings, and a later branch would
 		// overwrite the path an earlier leaf is still holding.
 		childPath := append(append([]string{}, yamlPath...), yamlName)
-		childIndex := append(append([]int{}, index...), i)
+		childIndex := append(append([]int{}, index...), fieldNum)
 
 		if isSection(field.Type) {
 			err = walkFields(field.Type, childPath, envPrefix+tag.prefix, childIndex, out)
@@ -225,14 +225,14 @@ func parseEnvTag(tag string) (envTag, error) {
 
 	parsed := envTag{key: strings.TrimSpace(parts[0])}
 
-	for i, opt := range parts[1:] {
+	for optNum, opt := range parts[1:] {
 		opt = strings.TrimLeft(opt, " \t")
 
 		switch {
 		case strings.HasPrefix(opt, "prefix="):
 			parsed.prefix = strings.TrimPrefix(opt, "prefix=")
 		case strings.HasPrefix(opt, "default="):
-			rest := strings.TrimLeft(strings.Join(parts[i+1:], ","), " \t")
+			rest := strings.TrimLeft(strings.Join(parts[optNum+1:], ","), " \t")
 			parsed.def = strings.TrimPrefix(rest, "default=")
 			parsed.hasDefault = true
 
@@ -262,7 +262,7 @@ var SectionPrefixes = sync.OnceValues(computeSectionPrefixes) //nolint:gocheckno
 func computeSectionPrefixes() ([]string, error) {
 	var out []string
 
-	err := walkSections(reflect.TypeOf(Config{}), "", &out)
+	err := walkSections(reflect.TypeFor[Config](), "", &out)
 	if err != nil {
 		return nil, err
 	}
@@ -271,9 +271,7 @@ func computeSectionPrefixes() ([]string, error) {
 }
 
 func walkSections(typ reflect.Type, envPrefix string, out *[]string) error {
-	for i := range typ.NumField() {
-		field := typ.Field(i)
-
+	for field := range typ.Fields() {
 		if !field.IsExported() || !isSection(field.Type) {
 			continue
 		}
@@ -292,7 +290,8 @@ func walkSections(typ reflect.Type, envPrefix string, out *[]string) error {
 			*out = append(*out, prefix)
 		}
 
-		if err = walkSections(field.Type, prefix, out); err != nil {
+		err = walkSections(field.Type, prefix, out)
+		if err != nil {
 			return err
 		}
 	}

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"slices"
+
 	"github.com/sethvargo/go-envconfig"
 )
 
@@ -22,10 +24,8 @@ var envAliases = map[string][]string{ //nolint:gochecknoglobals // static naming
 
 func isAlias(name string) bool {
 	for _, alternatives := range envAliases {
-		for _, alternative := range alternatives {
-			if alternative == name {
-				return true
-			}
+		if slices.Contains(alternatives, name) {
+			return true
 		}
 	}
 

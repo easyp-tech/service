@@ -4,9 +4,9 @@ import "time"
 
 // Config содержит параметры rate limiting.
 type Config struct {
-	RequestsPerSecond float64       `yaml:"requests_per_second" env:"REQUESTS_PER_SECOND"`
-	Burst             int           `yaml:"burst" env:"BURST"`
-	CleanupInterval   time.Duration `yaml:"cleanup_interval" env:"CLEANUP_INTERVAL"`
+	RequestsPerSecond float64       `env:"REQUESTS_PER_SECOND" yaml:"requests_per_second"`
+	Burst             int           `env:"BURST"               yaml:"burst"`
+	CleanupInterval   time.Duration `env:"CLEANUP_INTERVAL"    yaml:"cleanup_interval"`
 }
 
 // DefaultConfig возвращает конфигурацию по умолчанию.

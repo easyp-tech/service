@@ -68,7 +68,7 @@ func defaultConfig() *config {
 
 // Option configures the client.
 type Option interface {
-	apply(*config)
+	apply(cfg *config)
 }
 
 type optionFunc func(*config)
@@ -88,13 +88,13 @@ func WithInsecure() Option {
 // WithMaxRecvMsgSize sets the largest response the client will accept, in
 // bytes. Raise it when the service is configured to allow plugin output larger
 // than DefaultMaxRecvMsgSize; a value of zero or less restores the default.
-func WithMaxRecvMsgSize(n int) Option {
+func WithMaxRecvMsgSize(size int) Option {
 	return optionFunc(func(c *config) {
-		if n <= 0 {
-			n = DefaultMaxRecvMsgSize
+		if size <= 0 {
+			size = DefaultMaxRecvMsgSize
 		}
 
-		c.maxRecvMsgSize = n
+		c.maxRecvMsgSize = size
 	})
 }
 

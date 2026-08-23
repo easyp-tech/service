@@ -183,16 +183,46 @@ linters:
           - funlen
           - mnd
         path: cmd/mcp-smoke/
+      # Configuration validation reports what is wrong with a specific setting:
+      # the message carries the key, the value the operator wrote and what was
+      # expected. A sentinel per setting would be a hundred exported errors
+      # nobody matches on — callers print these, they do not branch on them.
+      - linters:
+          - err113
+        path: internal/config/
+      # Same for the SDK's option constructors and the limiter's defaults: the
+      # literals in a defaults table ARE the documentation of the defaults, and
+      # naming each one moves the value one hop away from where it is read.
+      - linters:
+          - mnd
+        path: (sdk/config\.go|internal/ratelimiter/config\.go)
+      # Validate and parseEnvTag are long lists of independent checks, not
+      # nested logic: cyclomatic complexity counts each `if` the same, so the
+      # number says "many settings" rather than "hard to follow". Splitting
+      # further would scatter one subject across several functions.
+      - linters:
+          - cyclop
+          - funlen
+        path: internal/config/(config|fields)\.go
+      # environmentLookuper returns envconfig's own interface because that is
+      # what envconfig.ProcessWith takes; the concrete type is unexported and
+      # deliberately so.
+      - linters:
+          - ireturn
+        path: internal/config/config\.go
+      # Option is an interface on purpose — it keeps the config struct
+      # unexported, so a caller cannot build one field-by-field and skip the
+      # invariants. Returning it is the pattern, not an accident.
+      - linters:
+          - ireturn
+        path: sdk/config\.go
+    # Vestigial boilerplate lived here: bin, config, debian, docs, scripts,
+    # tests. None of those directories exist, but the entries are regexes
+    # matched against the whole path, so `config` silently excluded
+    # internal/config/** — the package with the heaviest churn and the one
+    # whose bugs an operator hits on first install. It had never been linted.
     paths:
-      - bin
-      - config
-      - debian
       - docs
-      - scripts
-      - tests
-      - third_party$
-      - builtin$
-      - examples$
 formatters:
   enable:
     - gci
@@ -208,13 +238,6 @@ formatters:
       custom-order: true
   exclusions:
     generated: lax
+    # Same story as above: only a real directory is named here.
     paths:
-      - bin
-      - config
-      - debian
       - docs
-      - scripts
-      - tests
-      - third_party$
-      - builtin$
-      - examples$

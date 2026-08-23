@@ -63,7 +63,7 @@ func (t *TokenList) EnvDecode(val string) error {
 
 	parsed := make(TokenList, 0, strings.Count(trimmed, ",")+1)
 
-	for _, pair := range strings.Split(trimmed, ",") {
+	for pair := range strings.SplitSeq(trimmed, ",") {
 		name, digest, found := strings.Cut(strings.TrimSpace(pair), "=")
 		if !found {
 			return fmt.Errorf("%w: got %q", ErrTokenMalformedEnv, pair)
@@ -97,8 +97,9 @@ func (c AuthConfig) Validate() error {
 			return fmt.Errorf("%w, got %d (%s)", ErrTokenHashMalformed, len(token.SHA256), token.Name)
 		}
 
-		if _, err := hex.DecodeString(token.SHA256); err != nil {
-			return fmt.Errorf("%w (%s): %w", ErrTokenHashMalformed, token.Name, err)
+		_, decodeErr := hex.DecodeString(token.SHA256)
+		if decodeErr != nil {
+			return fmt.Errorf("%w (%s): %w", ErrTokenHashMalformed, token.Name, decodeErr)
 		}
 
 		if _, duplicate := seen[token.Name]; duplicate {

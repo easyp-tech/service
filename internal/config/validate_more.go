@@ -1,13 +1,16 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strconv"
 	"strings"
-
-	"github.com/lib/pq"
 )
+
+// ErrInvalidDSN marks a connection string the driver could not use at all.
+var ErrInvalidDSN = errors.New("invalid database DSN")
 
 // ParsePort turns a configured port into the number a listener needs, refusing
 // what a listener would refuse.
@@ -84,14 +87,23 @@ func validateDSN(dsn string) error {
 	trimmed := strings.TrimSpace(dsn)
 
 	if strings.HasPrefix(trimmed, "postgres://") || strings.HasPrefix(trimmed, "postgresql://") {
-		if _, err := pq.ParseURL(trimmed); err != nil {
-			return fmt.Errorf("db.postgres is not a usable connection string: %w", err)
+		// url.Parse rather than pq.ParseURL, which is deprecated now that the
+		// driver accepts a URL directly. The check is the same shape either
+		// way: a URL the driver could not use at all, not a semantic review of
+		// its parameters.
+		parsed, parseErr := url.Parse(trimmed)
+		if parseErr != nil {
+			return fmt.Errorf("db.postgres is not a usable connection string: %w", parseErr)
+		}
+
+		if parsed.Host == "" {
+			return fmt.Errorf("%w: db.postgres names no host", ErrInvalidDSN)
 		}
 
 		return nil
 	}
 
-	for _, field := range strings.Fields(trimmed) {
+	for field := range strings.FieldsSeq(trimmed) {
 		if key, _, found := strings.Cut(field, "="); found && key != "" {
 			return nil
 		}
@@ -254,7 +266,8 @@ func (c *Config) validateRuntimeZeros() error {
 func (c *Config) validateLogLevel() error {
 	var level slog.Level
 
-	if err := level.UnmarshalText([]byte(c.Log.Level)); err != nil {
+	err := level.UnmarshalText([]byte(c.Log.Level))
+	if err != nil {
 		return fmt.Errorf("log.level must be one of debug, info, warn, error, got %q", c.Log.Level)
 	}
 

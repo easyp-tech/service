@@ -55,7 +55,7 @@ func UnknownEnv(environ []string) (Diagnostics, error) {
 
 		diag := Diagnostic{
 			Severity: SeverityWarning,
-			Source:   "env",
+			Source:   SourceEnv,
 			Path:     name,
 			Message:  "environment variable matches no setting and was ignored",
 		}

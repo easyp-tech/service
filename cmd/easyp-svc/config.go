@@ -169,7 +169,8 @@ func logConfigSummary(ctx context.Context, log *slog.Logger, res config.Result, 
 		"at_defaults", counts[config.OriginDefault],
 	}
 
-	if changed, err := renderChanged(ctx, res); err == nil {
+	changed, changedErr := renderChanged(ctx, res)
+	if changedErr == nil {
 		attrs = append(attrs, "changed", changed)
 	}
 
@@ -216,7 +217,8 @@ func renderChanged(ctx context.Context, res config.Result) (string, error) {
 
 	var out strings.Builder
 
-	if err = writeConfig(&out, selected, res.Config, res.Origins, opts); err != nil {
+	err = writeConfig(&out, selected, res.Config, res.Origins, opts)
+	if err != nil {
 		return "", err
 	}
 
@@ -306,6 +308,7 @@ func resolveForPrint(ctx context.Context, cfgPath string) (config.Result, error)
 	}
 
 	if res.Config == nil {
+		//nolint:wrapcheck // config.Load's error already names the setting and the reason
 		return res, err
 	}
 
@@ -404,7 +407,9 @@ func renderValue(leaf config.Leaf, cfg *config.Config, showSecrets bool) (string
 	}
 
 	var node yaml.Node
-	if err := node.Encode(value.Interface()); err != nil {
+
+	err := node.Encode(value.Interface())
+	if err != nil {
 		return "", fmt.Errorf("encoding %s: %w", leaf.Name(), err)
 	}
 

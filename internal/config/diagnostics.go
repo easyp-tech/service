@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -40,11 +41,17 @@ func (s Severity) String() string {
 // types rather than YAML keys, with the line numbers buried in prose. An
 // operator who mistypes a key is entitled to be told which key, on which line,
 // and what the key they meant is called.
+// Layers a diagnostic can come from.
+const (
+	SourceFile = "file"
+	SourceEnv  = "env"
+)
+
 type Diagnostic struct {
 	Severity Severity
 
-	// Source is "file" or "env": which layer the problem is in. The same
-	// mistake has a different fix depending on where it was made.
+	// Source is SourceFile or SourceEnv: which layer the problem is in. The
+	// same mistake has a different fix depending on where it was made.
 	Source string
 
 	// Path names the setting: a dotted YAML path for the file layer
@@ -183,13 +190,7 @@ func computeSchema() (*documentSchema, error) {
 }
 
 func contains(haystack []string, needle string) bool {
-	for _, item := range haystack {
-		if item == needle {
-			return true
-		}
-	}
-
-	return false
+	return slices.Contains(haystack, needle)
 }
 
 // documentDiagnostics reports every key in the file that names no setting.
@@ -262,7 +263,7 @@ func walkDocument(node *yaml.Node, path []string, schema *documentSchema, out *D
 		if reason, retired := retiredKeys[name]; retired {
 			*out = append(*out, Diagnostic{
 				Severity: SeverityError,
-				Source:   "file",
+				Source:   SourceFile,
 				Path:     name,
 				Line:     key.Line,
 				Message:  reason,
@@ -287,7 +288,7 @@ func walkDocument(node *yaml.Node, path []string, schema *documentSchema, out *D
 
 		*out = append(*out, Diagnostic{
 			Severity: SeverityError,
-			Source:   "file",
+			Source:   SourceFile,
 			Path:     name,
 			Line:     key.Line,
 			Message:  "unknown key",
@@ -407,20 +408,20 @@ func editDistance(left, right string) int {
 	previous := make([]int, len(right)+1)
 	current := make([]int, len(right)+1)
 
-	for j := range previous {
-		previous[j] = j
+	for col := range previous {
+		previous[col] = col
 	}
 
-	for i := 1; i <= len(left); i++ {
-		current[0] = i
+	for row := 1; row <= len(left); row++ {
+		current[0] = row
 
-		for j := 1; j <= len(right); j++ {
+		for col := 1; col <= len(right); col++ {
 			cost := 1
-			if left[i-1] == right[j-1] {
+			if left[row-1] == right[col-1] {
 				cost = 0
 			}
 
-			current[j] = min(previous[j]+1, min(current[j-1]+1, previous[j-1]+cost))
+			current[col] = min(previous[col]+1, min(current[col-1]+1, previous[col-1]+cost))
 		}
 
 		previous, current = current, previous
