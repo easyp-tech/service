@@ -12,9 +12,15 @@ networks:
     # pool would change under the config the first time the network was recreated.
     # The service would then stop believing traefik's forwarding headers and go
     # back to rate-limiting every caller as one — silently.
+    #
+    # ip_range matches docker-compose.dev.yml: dynamic addresses come from
+    # 172.28.1.0/24 so that 172.28.0.0/24 stays available for the fixed ones a
+    # container asks for by name. The two files share a network, so they have to
+    # agree on its shape.
     ipam:
       config:
         - subnet: 172.28.0.0/16
+          ip_range: 172.28.1.0/24
 
 volumes:
   postgres-data:

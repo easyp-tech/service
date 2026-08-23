@@ -12,9 +12,17 @@ networks:
     # A subnet from Docker's pool would change when the network was recreated and
     # the service would quietly stop believing traefik's forwarding headers,
     # collapsing every caller into one rate-limit bucket.
+    #
+    # ip_range keeps the static addresses below out of the dynamic pool. Without
+    # it Docker hands 172.28.0.10 to whoever starts while traefik is down — on
+    # the dev host grafana held traefik's address for a week, and the next
+    # deploy could not start the proxy at all ("Address already in use", with
+    # nothing listening on 80 or 443 to explain it). Statics live in
+    # 172.28.0.0/24, everything dynamic comes from the range.
     ipam:
       config:
         - subnet: 172.28.0.0/16
+          ip_range: 172.28.1.0/24
 
 volumes:
   postgres-data:
