@@ -75,8 +75,8 @@ tasks:
         msg: "deploy/.env.dev not found. Copy deploy/.env.dev.example to deploy/.env.dev — it carries the development licence."
       # The overlay requires these through `${VAR:?}`, so a missing one fails
       # somewhere inside compose rather than here. Named up front instead.
-      - sh: "grep -q '^TELEMETRY_S3_ACCESS_KEY_ID=.' deploy/.env.dev"
-        msg: "deploy/.env.dev has no TELEMETRY_S3_* keys. The observability overlay stores metrics, logs, traces and profiles in object storage and will not start without them."
+      - sh: "grep -q '^OBS_S3_ACCESS_KEY_ID=.' deploy/.env.dev"
+        msg: "deploy/.env.dev has no OBS_S3_* keys. The observability overlay stores metrics, logs, traces and profiles in object storage and will not start without them. They were TELEMETRY_S3_* before v0.13.0."
     cmds:
       - task: certs
       - "{{.COMPOSE_DEV_FULL}} --env-file deploy/.env.dev up --remove-orphans --detach"

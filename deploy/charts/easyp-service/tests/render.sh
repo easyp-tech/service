@@ -428,6 +428,35 @@ echo "== network policy =="
 # the defaults produce a policy at all, and that the ports the service genuinely
 # needs are in it — a NetworkPolicy missing 5432 is a pod that cannot reach its
 # database, which presents as a hang rather than an error.
+# cert-manager is the path a real cluster takes to TLS, and it was rendered by
+# nothing here: the whole template could have been broken and every check
+# still passed. The secret the Certificate writes has to be the one the
+# deployment mounts, or the pod waits on a volume nobody fills.
+if expect_render "cert-manager issues the certificates the pod mounts" \
+  --set certManager.enabled=true \
+  --set certManager.issuerRef.name=test-issuer \
+  --set tls.enabled=true; then
+  if ! grep -q "kind: Certificate" <<<"$out"; then
+    fail "cert-manager issues the certificates the pod mounts: no Certificate rendered"
+  else
+    secrets="$(grep -E "^  secretName: " <<<"$out" | awk '{print $2}' | sort -u)"
+    mounted="$(grep -E "^ +secretName: " <<<"$out" | awk '{print $2}' | sort -u)"
+    unfilled=""
+
+    for name in $mounted; do
+      grep -qx "$name" <<<"$secrets" || unfilled="$unfilled $name"
+    done
+
+    if [[ -n "$unfilled" ]]; then
+      fail "cert-manager issues the certificates the pod mounts: nothing issues$unfilled"
+    else
+      pass "cert-manager issues the certificates the pod mounts"
+    fi
+  fi
+fi
+
+echo
+
 if expect_render "the defaults ship a network policy"; then
   if grep -q "kind: NetworkPolicy" <<<"$out"; then
     missing=""
