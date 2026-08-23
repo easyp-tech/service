@@ -156,9 +156,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # The CLI, not gitleaks-action: the action requires a paid licence on
+      # organisation repositories, and refusing to run is worse than the scan
+      # taking a few seconds longer. --redact so a finding does not print the
+      # credential into a public build log.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Scan for secrets
+        run: |
+          go run github.com/gitleaks/gitleaks/v8@latest detect \
+            --source . --redact --no-banner --exit-code 1
 
   lint:
     name: Lint

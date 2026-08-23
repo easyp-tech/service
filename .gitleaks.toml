@@ -1,0 +1,31 @@
+# gitleaks configuration.
+#
+# The scan runs over history, so it finds what has already happened as well as
+# what is about to happen. Everything listed below is a finding that has been
+# looked at and understood; anything not listed fails the build.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Reviewed findings"
+
+paths = [
+  # Ed25519 *public* halves and test vectors. A verification key is meant to be
+  # published: it proves a token was signed, it cannot sign one. The chart test
+  # additionally asserts that no 128-character private half ever renders.
+  '''internal/config/load_test\.go''',
+  '''internal/config/license_test\.go''',
+  # Matches both the current path and the pre-v0.11 one, before the chart
+  # moved under deploy/.
+  '''(deploy/)?charts/easyp-service/tests/render\.sh''',
+]
+
+commits = [
+  # 2026-08-05: a live S3 key pair was committed to this public repository and
+  # removed the next day. Removal does not unpublish it — GitHub keeps the
+  # commit reachable by SHA — so the fix is rotation at the provider, which is
+  # tracked outside this file. Recorded here so the scan keeps failing on the
+  # next leak rather than on this one forever.
+  "56d2d2c3c4168c2f4a4d6a0fdf212b8dac94cb0e",
+]
