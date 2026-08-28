@@ -763,6 +763,88 @@ task down
 task run-local
 ```
 
+## Known limitations
+
+Things this service does not do, written down because a version number invites
+people to assume otherwise. None of these is a bug report; they are the shape of
+the thing as it stands.
+
+### Plugins are not sandboxed
+
+A plugin is a binary the service runs as a local child process. Not a container.
+The service bounds its **time** (`worker_pool.generation_timeout`), its
+**concurrency** (`worker_pool.max_concurrent_generations`), the **size of its
+output** (`registry.max_output_size`), its **environment** (only what the
+plugin's own config declares — the service's database and object-storage
+credentials are not inherited), and **where its executable may live** (inside
+`registry.plugins_dir`).
+
+It does not bound memory, CPU, filesystem access beyond the service account's
+own, or **network access**: a plugin reaches whatever the pod reaches.
+
+So registering a plugin is as privileged as running code on the host. Treat the
+write token accordingly, and treat a shared registry as a set of people who all
+trust each other.
+
+### There is no user model
+
+One list of write tokens (`auth.write_tokens`), stored as digests. No tenants,
+no roles, no per-plugin ownership. The audit trail records a token's *label* and
+the caller's IP, so two engineers sharing a CI token are indistinguishable in it.
+
+`GenerateCode` and `Plugins` are anonymous, and there is no setting that makes
+them otherwise. Anything that can reach the port can execute registered plugins,
+bounded only by `rate_limit`.
+
+### It does not run in more than one replica
+
+The database side is safe: migrations take a Postgres session lock and audit
+partition maintenance takes an advisory lock, so several processes cannot
+collide there.
+
+The plugin cache cannot. Unpacking finishes with a remove followed by a rename —
+two steps, not atomic — and the only thing serialising it is an in-process
+lock. Two pods on one `ReadWriteMany` volume race: one can delete a directory
+the other is reading, and a rename onto a directory recreated in between fails.
+Each pod also keeps its own in-memory accounting of the same shared bytes, so
+`registry.cache_max_bytes` is applied once per pod to one volume.
+
+The chart's defaults are honest about this — one replica, `ReadWriteOnce`,
+`Recreate`. It *permits* `replicaCount > 1` with a `ReadWriteMany` volume, and
+that combination is **not supported**: it will appear to work and corrupt the
+cache under concurrent misses for the same plugin. Scale by making the single
+pod bigger — `maxConcurrentGenerations` and CPU — not by adding pods.
+
+### There is no down-migration path
+
+Migrations run forward automatically at startup. The down-migrations are written
+and tested, and nothing can run them: there is no `migrate` subcommand.
+
+Rolling back to an older image is permitted rather than blocked — an older
+binary starts against a newer database and applies nothing. Its limit is time:
+it has no maintainer for partitions introduced by a migration it does not know,
+so once the pre-created months run out, audit rows land in the default
+partition, which then blocks creating those months on the way forward. Treat a
+rollback as bounded by `audit.pre_create_months` (three by default). See
+[docs/BACKUP.md](docs/BACKUP.md).
+
+### The licence trust anchor is your own configuration
+
+Licence verification is real — PASETO v4 public-key signatures, issuer and
+audience checked, expiry with the grace period the token carries. The public
+half is supplied by `license.public_keys`, which is part of the deployment's
+configuration. Whoever can edit those values decides which authority may issue
+licences for that installation.
+
+### The Go client carries the MCP libraries
+
+`sdk` depends on `api`, and the generated MCP tool registration lives in the
+same Go package as the wire types — protoc-gen-mcp writes into the proto's own
+package and offers no way to put it elsewhere. So an SDK consumer links the MCP
+SDK, a JSON-schema library and OAuth2 whether or not they use any of it. Moving
+that registration into a library both this service and `easyp` can depend on is
+planned, and is a change to `api`'s dependencies rather than to its API.
+
 ## Upgrading
 
 Releases that need more than a new image are described in
