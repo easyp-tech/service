@@ -108,10 +108,16 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # pg_dump and psql are what the restore drill actually exercises. The test
+      # fails rather than skips when they are missing under CI: a skipped drill
+      # reports success for a procedure that never ran.
+      - name: postgresql-client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
       - name: Test
         env:
           EASYP_TEST_DSN: postgres://postgres:postgres@localhost:5432/easyp?sslmode=disable
-        run: go test -tags integration -timeout 10m ./test/...
+        run: go test -tags integration -timeout 10m ./test/... ./internal/database/...
 
   vuln:
     name: Vulnerabilities
