@@ -122,6 +122,21 @@ jobs:
 
       - uses: azure/setup-helm@v4
 
+      # Charts are immutable by convention and mutable in fact: an OCI tag can be
+      # overwritten. appVersion equality is enforced above, and nothing enforced
+      # that the chart's own version had moved — so a release that forgot to
+      # bump it would replace, in place, the chart customers already had. The
+      # comment in Chart.yaml names this hazard; this is what catches it.
+      - name: The chart version is not already published
+        run: |
+          chart_version="$(grep -E '^version:' deploy/charts/easyp-service/Chart.yaml | awk '{print $2}' | tr -d '\"')"
+          echo "chart version: ${chart_version}"
+          if helm show chart "oci://ghcr.io/easyp-tech/charts/easyp-service" --version "${chart_version}" >/dev/null 2>&1; then
+            echo "::error::chart ${chart_version} is already published; bump version: in Chart.yaml"
+            exit 1
+          fi
+          echo "✅ ${chart_version} is unpublished"
+
       - name: Package and push the chart
         run: |
           helm package deploy/charts/easyp-service
