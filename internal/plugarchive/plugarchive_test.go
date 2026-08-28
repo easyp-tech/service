@@ -171,3 +171,85 @@ func TestUnpackSkipsSpecialEntries(t *testing.T) {
 	_, err = os.Lstat(filepath.Join(destDir, "pipe"))
 	assert.True(t, os.IsNotExist(err))
 }
+
+// TestUnpackRefusesEscapingSymlink covers where a symlink *points*, which is a
+// separate question from where it is written.
+//
+// safeJoin has always sanitised the entry name, so an archive could not write
+// outside the destination. It said nothing about link targets, so an archive
+// could ship the required `plugin` entrypoint as a link to /bin/sh: the file
+// lands inside plugins_dir, every containment check the registry makes is
+// satisfied, and Unpack's entrypoint check passes too — it only chmods regular
+// files and skips a symlink without comment. Executing the plugin then runs the
+// shell.
+func TestUnpackRefusesEscapingSymlink(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"absolute path outside":  "/bin/sh",
+		"traversal outside":      "../../../../bin/sh",
+		"traversal via subdir":   "../../etc/passwd",
+		"absolute path anywhere": "/etc/passwd",
+	}
+
+	for name, linkname := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			archive := writeArchive(t, []*tar.Header{
+				{Name: EntrypointName, Typeflag: tar.TypeSymlink, Linkname: linkname, Mode: 0o777},
+			}, nil)
+
+			dest := filepath.Join(t.TempDir(), "v1.0.0")
+			err := Unpack(archive, dest)
+
+			require.ErrorIs(t, err, ErrUnsafePath)
+			assert.NoDirExists(t, dest)
+		})
+	}
+}
+
+// TestUnpackAllowsInternalSymlink is the other half: a link that stays inside
+// the archive is legitimate and must keep working. Plugins ship them — a
+// versioned binary with a stable name beside it, for one.
+func TestUnpackAllowsInternalSymlink(t *testing.T) {
+	t.Parallel()
+
+	archive := writeArchive(t, []*tar.Header{
+		{Name: "real-binary", Typeflag: tar.TypeReg, Mode: 0o755, Size: 2},
+		{Name: EntrypointName, Typeflag: tar.TypeSymlink, Linkname: "real-binary", Mode: 0o777},
+	}, map[string][]byte{"real-binary": []byte("hi")})
+
+	dest := filepath.Join(t.TempDir(), "v1.0.0")
+	require.NoError(t, Unpack(archive, dest))
+
+	link, err := os.Readlink(filepath.Join(dest, EntrypointName))
+	require.NoError(t, err)
+	assert.Equal(t, "real-binary", link)
+
+	// And it resolves to the file that travelled with it.
+	body, err := os.ReadFile(filepath.Join(dest, EntrypointName))
+	require.NoError(t, err)
+	assert.Equal(t, "hi", string(body))
+}
+
+// TestUnpackAllowsSymlinkIntoSubdirectory guards the containment arithmetic
+// itself: a link one directory deep pointing back up to a sibling stays inside
+// the archive and must be allowed, even though its target string starts with
+// "..".
+func TestUnpackAllowsSymlinkIntoSubdirectory(t *testing.T) {
+	t.Parallel()
+
+	archive := writeArchive(t, []*tar.Header{
+		{Name: EntrypointName, Typeflag: tar.TypeReg, Mode: 0o755, Size: 2},
+		{Name: "lib/", Typeflag: tar.TypeDir, Mode: 0o755},
+		{Name: "lib/link", Typeflag: tar.TypeSymlink, Linkname: "../plugin", Mode: 0o777},
+	}, map[string][]byte{EntrypointName: []byte("hi")})
+
+	dest := filepath.Join(t.TempDir(), "v1.0.0")
+	require.NoError(t, Unpack(archive, dest))
+
+	link, err := os.Readlink(filepath.Join(dest, "lib", "link"))
+	require.NoError(t, err)
+	assert.Equal(t, "../plugin", link)
+}

@@ -134,9 +134,12 @@ func packEntry(tarWriter *tar.Writer, dirPath string, path string, info os.FileI
 // directory which is then renamed over destDir. The archive must contain the
 // `plugin` entrypoint at its root; it is made executable.
 //
-// Entry names containing absolute paths or ".." are rejected. Symlink
-// entries are created verbatim, but regular files are never written through
-// existing symlinks (each parent directory is created as a real directory).
+// Entry names containing absolute paths or ".." are rejected, and so are
+// symlinks pointing anywhere outside the directory being unpacked into —
+// otherwise an archive could ship `plugin` as a link to /bin/sh and satisfy
+// every containment check the registry makes. Regular files are never written
+// through existing symlinks (each parent directory is created as a real
+// directory).
 func Unpack(archivePath string, destDir string) error {
 	parent := filepath.Dir(destDir)
 	err := os.MkdirAll(parent, dirPermissions)
@@ -215,7 +218,7 @@ func extractTo(archivePath string, destDir string) error {
 			return err
 		}
 
-		err = extractEntry(tarReader, header, target)
+		err = extractEntry(tarReader, header, destDir, target)
 		if err != nil {
 			return err
 		}
@@ -223,7 +226,7 @@ func extractTo(archivePath string, destDir string) error {
 }
 
 // extractEntry materializes a single tar entry at target.
-func extractEntry(tarReader *tar.Reader, header *tar.Header, target string) error {
+func extractEntry(tarReader *tar.Reader, header *tar.Header, root, target string) error {
 	switch header.Typeflag {
 	case tar.TypeDir:
 		err := os.MkdirAll(target, header.FileInfo().Mode().Perm()|ownerAccess)
@@ -233,7 +236,7 @@ func extractEntry(tarReader *tar.Reader, header *tar.Header, target string) erro
 	case tar.TypeReg:
 		return extractRegular(tarReader, header, target)
 	case tar.TypeSymlink:
-		return extractSymlink(header, target)
+		return extractSymlink(root, header, target)
 	default:
 		// Skip devices, fifos, hard links and other special entries: plugin
 		// artifacts never need them and materializing them is a risk.
@@ -273,8 +276,27 @@ func extractRegular(tarReader *tar.Reader, header *tar.Header, target string) er
 }
 
 // extractSymlink recreates a symlink entry verbatim.
-func extractSymlink(header *tar.Header, target string) error {
-	err := os.MkdirAll(filepath.Dir(target), dirPermissions)
+// extractSymlink materialises a symlink entry, refusing one that points outside
+// the directory being unpacked into.
+//
+// safeJoin already sanitises where a link is *written*; this is the other half —
+// where it *points*. Without it an archive could ship `plugin` as a symlink to
+// /bin/sh: it lands at a path inside plugins_dir, so every containment check
+// upstream is satisfied, and Unpack's own entrypoint check passes too (it only
+// chmods when the entry is a regular file, and skips a symlink without
+// comment). Executing it then runs the shell with the plugin's arguments.
+//
+// Checked lexically against the unpack root rather than with EvalSymlinks: the
+// archive is being written out right now, so intermediate links may not resolve
+// yet, and a link to a path that does not exist is still a link that will
+// resolve once something creates it.
+func extractSymlink(root string, header *tar.Header, target string) error {
+	err := checkSymlinkTarget(root, target, header.Linkname)
+	if err != nil {
+		return err
+	}
+
+	err = os.MkdirAll(filepath.Dir(target), dirPermissions)
 	if err != nil {
 		return fmt.Errorf("os.MkdirAll: %w", err)
 	}
@@ -284,6 +306,29 @@ func extractSymlink(header *tar.Header, target string) error {
 	err = os.Symlink(header.Linkname, target)
 	if err != nil {
 		return fmt.Errorf("os.Symlink: %w", err)
+	}
+
+	return nil
+}
+
+// checkSymlinkTarget reports whether linkname, resolved from the directory
+// holding target, stays inside root. An absolute linkname never does.
+func checkSymlinkTarget(root, target, linkname string) error {
+	if linkname == "" {
+		return fmt.Errorf("%w: empty symlink target for %s", ErrUnsafePath, target)
+	}
+
+	cleanedLink := filepath.Clean(filepath.FromSlash(linkname))
+	if filepath.IsAbs(cleanedLink) {
+		return fmt.Errorf("%w: symlink %s points outside the archive: %s", ErrUnsafePath, target, linkname)
+	}
+
+	// Relative links resolve against the directory the link itself sits in.
+	resolved := filepath.Clean(filepath.Join(filepath.Dir(target), cleanedLink))
+
+	cleanedRoot := filepath.Clean(root)
+	if resolved != cleanedRoot && !strings.HasPrefix(resolved, cleanedRoot+string(filepath.Separator)) {
+		return fmt.Errorf("%w: symlink %s escapes the archive: %s", ErrUnsafePath, target, linkname)
 	}
 
 	return nil

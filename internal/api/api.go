@@ -16,6 +16,7 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	generator "github.com/easyp-tech/service/api/generator/v1"
@@ -123,12 +124,19 @@ func (api *API) UpdatePlugin(ctx context.Context, request *generator.UpdatePlugi
 		configJSON = b
 	}
 
+	updateConfig, updateTags, maskErr := updateMaskFields(request.GetUpdateMask())
+	if maskErr != nil {
+		return nil, maskErr
+	}
+
 	info, err := api.app.UpdatePlugin(ctx, core.UpdatePluginRequest{
-		Group:   strings.TrimSpace(request.GetGroup()),
-		Name:    strings.TrimSpace(request.GetName()),
-		Version: strings.TrimSpace(request.GetVersion()),
-		Config:  configJSON,
-		Tags:    compactStrings(request.GetTags()),
+		Group:        strings.TrimSpace(request.GetGroup()),
+		Name:         strings.TrimSpace(request.GetName()),
+		Version:      strings.TrimSpace(request.GetVersion()),
+		Config:       configJSON,
+		Tags:         compactStrings(request.GetTags()),
+		UpdateConfig: updateConfig,
+		UpdateTags:   updateTags,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("api.app.UpdatePlugin: %w", err)
@@ -137,6 +145,41 @@ func (api *API) UpdatePlugin(ctx context.Context, request *generator.UpdatePlugi
 	return &generator.UpdatePluginResponse{
 		Plugin: pluginInfoToProto(info),
 	}, nil
+}
+
+// updateMaskFields resolves an UpdatePlugin field mask to the two fields this
+// service can replace.
+//
+// An absent or empty mask means both, which is what UpdatePlugin did before the
+// mask existed — so a client written against the older contract keeps working
+// unchanged.
+//
+// An unknown path is refused rather than ignored. A mask is the caller stating
+// what it intends to change; silently dropping a path it named would apply some
+// other update than the one asked for, and "tag" instead of "tags" is exactly
+// the kind of thing that gets typed.
+func updateMaskFields(mask *fieldmaskpb.FieldMask) (updateConfig, updateTags bool, err error) {
+	paths := mask.GetPaths()
+	if len(paths) == 0 {
+		return true, true, nil
+	}
+
+	for _, path := range paths {
+		switch strings.TrimSpace(path) {
+		case "config":
+			updateConfig = true
+		case "tags":
+			updateTags = true
+		default:
+			return false, false, status.Errorf(
+				codes.InvalidArgument,
+				"update_mask: unknown path %q; the paths are \"config\" and \"tags\"",
+				path,
+			)
+		}
+	}
+
+	return updateConfig, updateTags, nil
 }
 
 func (api *API) DeletePlugin(ctx context.Context, request *generator.DeletePluginRequest) (*generator.DeletePluginResponse, error) {
@@ -175,6 +218,8 @@ func ErrorToStatus(err error) *status.Status {
 	case errors.Is(err, core.ErrNotFound):
 		code = codes.NotFound
 	case errors.Is(err, core.ErrInvalidPluginName):
+		code = codes.InvalidArgument
+	case errors.Is(err, core.ErrInvalidConfig):
 		code = codes.InvalidArgument
 	case errors.Is(err, core.ErrGenerationFailed):
 		code = codes.Internal

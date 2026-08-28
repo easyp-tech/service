@@ -24,6 +24,16 @@ var (
 	ErrFeatureDenied      = errors.New("feature denied")
 	ErrStorageUnavailable = errors.New("binary storage unavailable")
 	ErrBinaryNotUploaded  = errors.New("plugin archive not found in binary storage")
+	// ErrInvalidConfig covers a plugin configuration the caller got wrong: no
+	// command, an unparseable document, an executable outside plugins_dir.
+	//
+	// It exists so those reach the client as InvalidArgument. The registry
+	// package has always had its own errors for this, but they wrapped nothing
+	// from core, so errors.Is missed them in ErrorToStatus and every malformed
+	// config — the most common mistake a client can make against CreatePlugin —
+	// was reported as codes.Internal, i.e. as the server's fault. The proto's
+	// own error table promised InvalidArgument the whole time.
+	ErrInvalidConfig = errors.New("invalid plugin configuration")
 )
 
 // Feature identifies a service capability for licensing and feature-gating.
@@ -203,6 +213,22 @@ type (
 		Version string
 		Config  json.RawMessage
 		Tags    []string
+
+		// UpdateConfig and UpdateTags say which fields the caller asked to
+		// replace, decoded from the request's update_mask. A mask that named
+		// nothing sets both, which is what this operation did unconditionally
+		// before the mask existed.
+		//
+		// Booleans rather than the FieldMask itself: core does not import the
+		// generated API types, and "which of two fields" does not need a path
+		// language to express.
+		//
+		// The distinction is not cosmetic. Config was validated before anything
+		// else and an absent config was an empty one, so a caller wanting to
+		// change a tag had to resend the plugin's whole command line — and a
+		// mistake there points a registry entry at a different binary.
+		UpdateConfig bool
+		UpdateTags   bool
 	}
 
 	// AuditEntry представляет одну запись аудит-журнала.
