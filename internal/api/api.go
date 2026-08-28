@@ -19,11 +19,11 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	generator "github.com/easyp-tech/service/api/generator/v1"
+	generator "github.com/easyp-tech/service/api/easyp/generator/v1"
 	"github.com/easyp-tech/service/internal/core"
 )
 
-var _ generator.ServiceAPIServer = (*API)(nil)
+var _ generator.GeneratorAPIServer = (*API)(nil)
 
 // API provides the API server implementation.
 type API struct {
@@ -36,13 +36,13 @@ type API struct {
 // The gRPC server and health server are expected to be created
 // externally (e.g. via grpchelper.NewServer).
 func New(grpcSrv *grpc.Server, healthSrv *health.Server, applications core.Service, logger *slog.Logger) *API {
-	healthSrv.SetServingStatus(generator.ServiceAPI_ServiceDesc.ServiceName, healthpb.HealthCheckResponse_SERVING)
+	healthSrv.SetServingStatus(generator.GeneratorAPI_ServiceDesc.ServiceName, healthpb.HealthCheckResponse_SERVING)
 
 	api := &API{
 		app:        applications,
 		mcpHandler: newMCPHandler(applications, logger),
 	}
-	generator.RegisterServiceAPIServer(grpcSrv, api)
+	generator.RegisterGeneratorAPIServer(grpcSrv, api)
 
 	return api
 }

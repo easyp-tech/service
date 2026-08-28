@@ -49,7 +49,7 @@ func runLoggedCall(t *testing.T) string {
 
 	_, err := interceptor(ctx, req,
 		&grpc.UnaryServerInfo{
-			FullMethod: "/easyp.generator.v1.ServiceAPI/GenerateCode",
+			FullMethod: "/easyp.generator.v1.GeneratorAPI/GenerateCode",
 		},
 		func(context.Context, any) (any, error) { return resp, nil },
 	)

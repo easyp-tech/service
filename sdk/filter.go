@@ -1,7 +1,7 @@
 package sdk
 
 import (
-	generator "github.com/easyp-tech/service/api/generator/v1"
+	generator "github.com/easyp-tech/service/api/easyp/generator/v1"
 )
 
 // PluginFilter задаёт критерии фильтрации плагинов.

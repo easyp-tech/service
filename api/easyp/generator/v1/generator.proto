@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package api.generator.v1;
+package easyp.generator.v1;
 
 import "mcp/options/v1/options.proto";
 import "doc/v1/doc.proto";
@@ -9,7 +9,7 @@ import "google/protobuf/field_mask.proto";
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 
-option go_package = "github.com/easyp-tech/service/api/generator/v1;generator";
+option go_package = "github.com/easyp-tech/service/api/easyp/generator/v1;generator";
 
 // EasyP Code Generation Service
 //
@@ -64,7 +64,7 @@ option go_package = "github.com/easyp-tech/service/api/generator/v1;generator";
 //
 // Use `latest` as version to get the most recent version:
 // - `protocolbuffers/go:latest`
-service ServiceAPI {
+service GeneratorAPI {
   // Generate code using a specified plugin.
   //
   // This method executes a protobuf code generation plugin and returns the generated files.

@@ -3,7 +3,7 @@ package api
 import (
 	"context"
 
-	"github.com/easyp-tech/service/api/generator/v1"
+	"github.com/easyp-tech/service/api/easyp/generator/v1"
 	"github.com/easyp-tech/service/internal/core"
 )
 

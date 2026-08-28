@@ -12,7 +12,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	generator "github.com/easyp-tech/service/api/generator/v1"
+	generator "github.com/easyp-tech/service/api/easyp/generator/v1"
 	"github.com/easyp-tech/service/internal/auth"
 	"github.com/easyp-tech/service/internal/core"
 )
@@ -57,10 +57,10 @@ func NewAuthInterceptor(
 		// Reads are anonymous. Health is included because grpchelper.NewServer
 		// registers it on the server and probes cannot carry credentials.
 		public: map[string]struct{}{
-			generator.ServiceAPI_GenerateCode_FullMethodName: {},
-			generator.ServiceAPI_Plugins_FullMethodName:      {},
-			healthpb.Health_Check_FullMethodName:             {},
-			healthpb.Health_Watch_FullMethodName:             {},
+			generator.GeneratorAPI_GenerateCode_FullMethodName: {},
+			generator.GeneratorAPI_Plugins_FullMethodName:      {},
+			healthpb.Health_Check_FullMethodName:               {},
+			healthpb.Health_Watch_FullMethodName:               {},
 		},
 	}
 }

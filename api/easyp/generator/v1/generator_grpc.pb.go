@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             v0.14.1-v0.16.6-bufbuild-protocompile-easyp
-// source: api/generator/v1/generator.proto
+// source: easyp/generator/v1/generator.proto
 
 package generator
 
@@ -19,14 +19,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ServiceAPI_GenerateCode_FullMethodName = "/api.generator.v1.ServiceAPI/GenerateCode"
-	ServiceAPI_Plugins_FullMethodName      = "/api.generator.v1.ServiceAPI/Plugins"
-	ServiceAPI_CreatePlugin_FullMethodName = "/api.generator.v1.ServiceAPI/CreatePlugin"
-	ServiceAPI_UpdatePlugin_FullMethodName = "/api.generator.v1.ServiceAPI/UpdatePlugin"
-	ServiceAPI_DeletePlugin_FullMethodName = "/api.generator.v1.ServiceAPI/DeletePlugin"
+	GeneratorAPI_GenerateCode_FullMethodName = "/easyp.generator.v1.GeneratorAPI/GenerateCode"
+	GeneratorAPI_Plugins_FullMethodName      = "/easyp.generator.v1.GeneratorAPI/Plugins"
+	GeneratorAPI_CreatePlugin_FullMethodName = "/easyp.generator.v1.GeneratorAPI/CreatePlugin"
+	GeneratorAPI_UpdatePlugin_FullMethodName = "/easyp.generator.v1.GeneratorAPI/UpdatePlugin"
+	GeneratorAPI_DeletePlugin_FullMethodName = "/easyp.generator.v1.GeneratorAPI/DeletePlugin"
 )
 
-// ServiceAPIClient is the client API for ServiceAPI service.
+// GeneratorAPIClient is the client API for GeneratorAPI service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
@@ -83,7 +83,7 @@ const (
 //
 // Use `latest` as version to get the most recent version:
 // - `protocolbuffers/go:latest`
-type ServiceAPIClient interface {
+type GeneratorAPIClient interface {
 	// Generate code using a specified plugin.
 	//
 	// This method executes a protobuf code generation plugin and returns the generated files.
@@ -152,66 +152,66 @@ type ServiceAPIClient interface {
 	DeletePlugin(ctx context.Context, in *DeletePluginRequest, opts ...grpc.CallOption) (*DeletePluginResponse, error)
 }
 
-type serviceAPIClient struct {
+type generatorAPIClient struct {
 	cc grpc.ClientConnInterface
 }
 
-func NewServiceAPIClient(cc grpc.ClientConnInterface) ServiceAPIClient {
-	return &serviceAPIClient{cc}
+func NewGeneratorAPIClient(cc grpc.ClientConnInterface) GeneratorAPIClient {
+	return &generatorAPIClient{cc}
 }
 
-func (c *serviceAPIClient) GenerateCode(ctx context.Context, in *GenerateCodeRequest, opts ...grpc.CallOption) (*GenerateCodeResponse, error) {
+func (c *generatorAPIClient) GenerateCode(ctx context.Context, in *GenerateCodeRequest, opts ...grpc.CallOption) (*GenerateCodeResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GenerateCodeResponse)
-	err := c.cc.Invoke(ctx, ServiceAPI_GenerateCode_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, GeneratorAPI_GenerateCode_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *serviceAPIClient) Plugins(ctx context.Context, in *PluginsRequest, opts ...grpc.CallOption) (*PluginsResponse, error) {
+func (c *generatorAPIClient) Plugins(ctx context.Context, in *PluginsRequest, opts ...grpc.CallOption) (*PluginsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PluginsResponse)
-	err := c.cc.Invoke(ctx, ServiceAPI_Plugins_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, GeneratorAPI_Plugins_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *serviceAPIClient) CreatePlugin(ctx context.Context, in *CreatePluginRequest, opts ...grpc.CallOption) (*CreatePluginResponse, error) {
+func (c *generatorAPIClient) CreatePlugin(ctx context.Context, in *CreatePluginRequest, opts ...grpc.CallOption) (*CreatePluginResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreatePluginResponse)
-	err := c.cc.Invoke(ctx, ServiceAPI_CreatePlugin_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, GeneratorAPI_CreatePlugin_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *serviceAPIClient) UpdatePlugin(ctx context.Context, in *UpdatePluginRequest, opts ...grpc.CallOption) (*UpdatePluginResponse, error) {
+func (c *generatorAPIClient) UpdatePlugin(ctx context.Context, in *UpdatePluginRequest, opts ...grpc.CallOption) (*UpdatePluginResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UpdatePluginResponse)
-	err := c.cc.Invoke(ctx, ServiceAPI_UpdatePlugin_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, GeneratorAPI_UpdatePlugin_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *serviceAPIClient) DeletePlugin(ctx context.Context, in *DeletePluginRequest, opts ...grpc.CallOption) (*DeletePluginResponse, error) {
+func (c *generatorAPIClient) DeletePlugin(ctx context.Context, in *DeletePluginRequest, opts ...grpc.CallOption) (*DeletePluginResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DeletePluginResponse)
-	err := c.cc.Invoke(ctx, ServiceAPI_DeletePlugin_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, GeneratorAPI_DeletePlugin_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// ServiceAPIServer is the server API for ServiceAPI service.
-// All implementations should embed UnimplementedServiceAPIServer
+// GeneratorAPIServer is the server API for GeneratorAPI service.
+// All implementations should embed UnimplementedGeneratorAPIServer
 // for forward compatibility.
 //
 // # EasyP Code Generation Service
@@ -267,7 +267,7 @@ func (c *serviceAPIClient) DeletePlugin(ctx context.Context, in *DeletePluginReq
 //
 // Use `latest` as version to get the most recent version:
 // - `protocolbuffers/go:latest`
-type ServiceAPIServer interface {
+type GeneratorAPIServer interface {
 	// Generate code using a specified plugin.
 	//
 	// This method executes a protobuf code generation plugin and returns the generated files.
@@ -336,166 +336,166 @@ type ServiceAPIServer interface {
 	DeletePlugin(context.Context, *DeletePluginRequest) (*DeletePluginResponse, error)
 }
 
-// UnimplementedServiceAPIServer should be embedded to have
+// UnimplementedGeneratorAPIServer should be embedded to have
 // forward compatible implementations.
 //
 // NOTE: this should be embedded by value instead of pointer to avoid a nil
 // pointer dereference when methods are called.
-type UnimplementedServiceAPIServer struct{}
+type UnimplementedGeneratorAPIServer struct{}
 
-func (UnimplementedServiceAPIServer) GenerateCode(context.Context, *GenerateCodeRequest) (*GenerateCodeResponse, error) {
+func (UnimplementedGeneratorAPIServer) GenerateCode(context.Context, *GenerateCodeRequest) (*GenerateCodeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GenerateCode not implemented")
 }
-func (UnimplementedServiceAPIServer) Plugins(context.Context, *PluginsRequest) (*PluginsResponse, error) {
+func (UnimplementedGeneratorAPIServer) Plugins(context.Context, *PluginsRequest) (*PluginsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Plugins not implemented")
 }
-func (UnimplementedServiceAPIServer) CreatePlugin(context.Context, *CreatePluginRequest) (*CreatePluginResponse, error) {
+func (UnimplementedGeneratorAPIServer) CreatePlugin(context.Context, *CreatePluginRequest) (*CreatePluginResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreatePlugin not implemented")
 }
-func (UnimplementedServiceAPIServer) UpdatePlugin(context.Context, *UpdatePluginRequest) (*UpdatePluginResponse, error) {
+func (UnimplementedGeneratorAPIServer) UpdatePlugin(context.Context, *UpdatePluginRequest) (*UpdatePluginResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdatePlugin not implemented")
 }
-func (UnimplementedServiceAPIServer) DeletePlugin(context.Context, *DeletePluginRequest) (*DeletePluginResponse, error) {
+func (UnimplementedGeneratorAPIServer) DeletePlugin(context.Context, *DeletePluginRequest) (*DeletePluginResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeletePlugin not implemented")
 }
-func (UnimplementedServiceAPIServer) testEmbeddedByValue() {}
+func (UnimplementedGeneratorAPIServer) testEmbeddedByValue() {}
 
-// UnsafeServiceAPIServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to ServiceAPIServer will
+// UnsafeGeneratorAPIServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to GeneratorAPIServer will
 // result in compilation errors.
-type UnsafeServiceAPIServer interface {
-	mustEmbedUnimplementedServiceAPIServer()
+type UnsafeGeneratorAPIServer interface {
+	mustEmbedUnimplementedGeneratorAPIServer()
 }
 
-func RegisterServiceAPIServer(s grpc.ServiceRegistrar, srv ServiceAPIServer) {
-	// If the following call panics, it indicates UnimplementedServiceAPIServer was
+func RegisterGeneratorAPIServer(s grpc.ServiceRegistrar, srv GeneratorAPIServer) {
+	// If the following call panics, it indicates UnimplementedGeneratorAPIServer was
 	// embedded by pointer and is nil.  This will cause panics if an
 	// unimplemented method is ever invoked, so we test this at initialization
 	// time to prevent it from happening at runtime later due to I/O.
 	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
 		t.testEmbeddedByValue()
 	}
-	s.RegisterService(&ServiceAPI_ServiceDesc, srv)
+	s.RegisterService(&GeneratorAPI_ServiceDesc, srv)
 }
 
-func _ServiceAPI_GenerateCode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _GeneratorAPI_GenerateCode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GenerateCodeRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(ServiceAPIServer).GenerateCode(ctx, in)
+		return srv.(GeneratorAPIServer).GenerateCode(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: ServiceAPI_GenerateCode_FullMethodName,
+		FullMethod: GeneratorAPI_GenerateCode_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ServiceAPIServer).GenerateCode(ctx, req.(*GenerateCodeRequest))
+		return srv.(GeneratorAPIServer).GenerateCode(ctx, req.(*GenerateCodeRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _ServiceAPI_Plugins_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _GeneratorAPI_Plugins_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(PluginsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(ServiceAPIServer).Plugins(ctx, in)
+		return srv.(GeneratorAPIServer).Plugins(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: ServiceAPI_Plugins_FullMethodName,
+		FullMethod: GeneratorAPI_Plugins_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ServiceAPIServer).Plugins(ctx, req.(*PluginsRequest))
+		return srv.(GeneratorAPIServer).Plugins(ctx, req.(*PluginsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _ServiceAPI_CreatePlugin_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _GeneratorAPI_CreatePlugin_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreatePluginRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(ServiceAPIServer).CreatePlugin(ctx, in)
+		return srv.(GeneratorAPIServer).CreatePlugin(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: ServiceAPI_CreatePlugin_FullMethodName,
+		FullMethod: GeneratorAPI_CreatePlugin_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ServiceAPIServer).CreatePlugin(ctx, req.(*CreatePluginRequest))
+		return srv.(GeneratorAPIServer).CreatePlugin(ctx, req.(*CreatePluginRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _ServiceAPI_UpdatePlugin_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _GeneratorAPI_UpdatePlugin_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(UpdatePluginRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(ServiceAPIServer).UpdatePlugin(ctx, in)
+		return srv.(GeneratorAPIServer).UpdatePlugin(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: ServiceAPI_UpdatePlugin_FullMethodName,
+		FullMethod: GeneratorAPI_UpdatePlugin_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ServiceAPIServer).UpdatePlugin(ctx, req.(*UpdatePluginRequest))
+		return srv.(GeneratorAPIServer).UpdatePlugin(ctx, req.(*UpdatePluginRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _ServiceAPI_DeletePlugin_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _GeneratorAPI_DeletePlugin_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DeletePluginRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(ServiceAPIServer).DeletePlugin(ctx, in)
+		return srv.(GeneratorAPIServer).DeletePlugin(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: ServiceAPI_DeletePlugin_FullMethodName,
+		FullMethod: GeneratorAPI_DeletePlugin_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ServiceAPIServer).DeletePlugin(ctx, req.(*DeletePluginRequest))
+		return srv.(GeneratorAPIServer).DeletePlugin(ctx, req.(*DeletePluginRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-// ServiceAPI_ServiceDesc is the grpc.ServiceDesc for ServiceAPI service.
+// GeneratorAPI_ServiceDesc is the grpc.ServiceDesc for GeneratorAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
-var ServiceAPI_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "api.generator.v1.ServiceAPI",
-	HandlerType: (*ServiceAPIServer)(nil),
+var GeneratorAPI_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "easyp.generator.v1.GeneratorAPI",
+	HandlerType: (*GeneratorAPIServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
 			MethodName: "GenerateCode",
-			Handler:    _ServiceAPI_GenerateCode_Handler,
+			Handler:    _GeneratorAPI_GenerateCode_Handler,
 		},
 		{
 			MethodName: "Plugins",
-			Handler:    _ServiceAPI_Plugins_Handler,
+			Handler:    _GeneratorAPI_Plugins_Handler,
 		},
 		{
 			MethodName: "CreatePlugin",
-			Handler:    _ServiceAPI_CreatePlugin_Handler,
+			Handler:    _GeneratorAPI_CreatePlugin_Handler,
 		},
 		{
 			MethodName: "UpdatePlugin",
-			Handler:    _ServiceAPI_UpdatePlugin_Handler,
+			Handler:    _GeneratorAPI_UpdatePlugin_Handler,
 		},
 		{
 			MethodName: "DeletePlugin",
-			Handler:    _ServiceAPI_DeletePlugin_Handler,
+			Handler:    _GeneratorAPI_DeletePlugin_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "api/generator/v1/generator.proto",
+	Metadata: "easyp/generator/v1/generator.proto",
 }

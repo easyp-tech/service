@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v0.14.1-v0.16.6-bufbuild-protocompile-easyp
-// source: api/generator/v1/generator.proto
+// source: easyp/generator/v1/generator.proto
 
 package generator
 
@@ -50,7 +50,7 @@ type GenerateCodeRequest struct {
 
 func (x *GenerateCodeRequest) Reset() {
 	*x = GenerateCodeRequest{}
-	mi := &file_api_generator_v1_generator_proto_msgTypes[0]
+	mi := &file_easyp_generator_v1_generator_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -62,7 +62,7 @@ func (x *GenerateCodeRequest) String() string {
 func (*GenerateCodeRequest) ProtoMessage() {}
 
 func (x *GenerateCodeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_generator_v1_generator_proto_msgTypes[0]
+	mi := &file_easyp_generator_v1_generator_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -75,7 +75,7 @@ func (x *GenerateCodeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GenerateCodeRequest.ProtoReflect.Descriptor instead.
 func (*GenerateCodeRequest) Descriptor() ([]byte, []int) {
-	return file_api_generator_v1_generator_proto_rawDescGZIP(), []int{0}
+	return file_easyp_generator_v1_generator_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *GenerateCodeRequest) GetCodeGeneratorRequest() *pluginpb.CodeGeneratorRequest {
@@ -106,7 +106,7 @@ type GenerateCodeResponse struct {
 
 func (x *GenerateCodeResponse) Reset() {
 	*x = GenerateCodeResponse{}
-	mi := &file_api_generator_v1_generator_proto_msgTypes[1]
+	mi := &file_easyp_generator_v1_generator_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -118,7 +118,7 @@ func (x *GenerateCodeResponse) String() string {
 func (*GenerateCodeResponse) ProtoMessage() {}
 
 func (x *GenerateCodeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_generator_v1_generator_proto_msgTypes[1]
+	mi := &file_easyp_generator_v1_generator_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -131,7 +131,7 @@ func (x *GenerateCodeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GenerateCodeResponse.ProtoReflect.Descriptor instead.
 func (*GenerateCodeResponse) Descriptor() ([]byte, []int) {
-	return file_api_generator_v1_generator_proto_rawDescGZIP(), []int{1}
+	return file_easyp_generator_v1_generator_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *GenerateCodeResponse) GetCodeGeneratorResponse() *pluginpb.CodeGeneratorResponse {
@@ -178,7 +178,7 @@ type PluginsRequest struct {
 
 func (x *PluginsRequest) Reset() {
 	*x = PluginsRequest{}
-	mi := &file_api_generator_v1_generator_proto_msgTypes[2]
+	mi := &file_easyp_generator_v1_generator_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -190,7 +190,7 @@ func (x *PluginsRequest) String() string {
 func (*PluginsRequest) ProtoMessage() {}
 
 func (x *PluginsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_generator_v1_generator_proto_msgTypes[2]
+	mi := &file_easyp_generator_v1_generator_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -203,7 +203,7 @@ func (x *PluginsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginsRequest.ProtoReflect.Descriptor instead.
 func (*PluginsRequest) Descriptor() ([]byte, []int) {
-	return file_api_generator_v1_generator_proto_rawDescGZIP(), []int{2}
+	return file_easyp_generator_v1_generator_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *PluginsRequest) GetGroup() string {
@@ -266,7 +266,7 @@ type PluginsResponse struct {
 
 func (x *PluginsResponse) Reset() {
 	*x = PluginsResponse{}
-	mi := &file_api_generator_v1_generator_proto_msgTypes[3]
+	mi := &file_easyp_generator_v1_generator_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -278,7 +278,7 @@ func (x *PluginsResponse) String() string {
 func (*PluginsResponse) ProtoMessage() {}
 
 func (x *PluginsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_generator_v1_generator_proto_msgTypes[3]
+	mi := &file_easyp_generator_v1_generator_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -291,7 +291,7 @@ func (x *PluginsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginsResponse.ProtoReflect.Descriptor instead.
 func (*PluginsResponse) Descriptor() ([]byte, []int) {
-	return file_api_generator_v1_generator_proto_rawDescGZIP(), []int{3}
+	return file_easyp_generator_v1_generator_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *PluginsResponse) GetPlugins() []*PluginInfo {
@@ -348,7 +348,7 @@ type PluginInfo struct {
 
 func (x *PluginInfo) Reset() {
 	*x = PluginInfo{}
-	mi := &file_api_generator_v1_generator_proto_msgTypes[4]
+	mi := &file_easyp_generator_v1_generator_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -360,7 +360,7 @@ func (x *PluginInfo) String() string {
 func (*PluginInfo) ProtoMessage() {}
 
 func (x *PluginInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_api_generator_v1_generator_proto_msgTypes[4]
+	mi := &file_easyp_generator_v1_generator_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -373,7 +373,7 @@ func (x *PluginInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginInfo.ProtoReflect.Descriptor instead.
 func (*PluginInfo) Descriptor() ([]byte, []int) {
-	return file_api_generator_v1_generator_proto_rawDescGZIP(), []int{4}
+	return file_easyp_generator_v1_generator_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *PluginInfo) GetId() string {
@@ -437,7 +437,7 @@ type CreatePluginRequest struct {
 
 func (x *CreatePluginRequest) Reset() {
 	*x = CreatePluginRequest{}
-	mi := &file_api_generator_v1_generator_proto_msgTypes[5]
+	mi := &file_easyp_generator_v1_generator_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -449,7 +449,7 @@ func (x *CreatePluginRequest) String() string {
 func (*CreatePluginRequest) ProtoMessage() {}
 
 func (x *CreatePluginRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_generator_v1_generator_proto_msgTypes[5]
+	mi := &file_easyp_generator_v1_generator_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -462,7 +462,7 @@ func (x *CreatePluginRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreatePluginRequest.ProtoReflect.Descriptor instead.
 func (*CreatePluginRequest) Descriptor() ([]byte, []int) {
-	return file_api_generator_v1_generator_proto_rawDescGZIP(), []int{5}
+	return file_easyp_generator_v1_generator_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *CreatePluginRequest) GetGroup() string {
@@ -511,7 +511,7 @@ type CreatePluginResponse struct {
 
 func (x *CreatePluginResponse) Reset() {
 	*x = CreatePluginResponse{}
-	mi := &file_api_generator_v1_generator_proto_msgTypes[6]
+	mi := &file_easyp_generator_v1_generator_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -523,7 +523,7 @@ func (x *CreatePluginResponse) String() string {
 func (*CreatePluginResponse) ProtoMessage() {}
 
 func (x *CreatePluginResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_generator_v1_generator_proto_msgTypes[6]
+	mi := &file_easyp_generator_v1_generator_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -536,7 +536,7 @@ func (x *CreatePluginResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreatePluginResponse.ProtoReflect.Descriptor instead.
 func (*CreatePluginResponse) Descriptor() ([]byte, []int) {
-	return file_api_generator_v1_generator_proto_rawDescGZIP(), []int{6}
+	return file_easyp_generator_v1_generator_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *CreatePluginResponse) GetPlugin() *PluginInfo {
@@ -579,7 +579,7 @@ type UpdatePluginRequest struct {
 
 func (x *UpdatePluginRequest) Reset() {
 	*x = UpdatePluginRequest{}
-	mi := &file_api_generator_v1_generator_proto_msgTypes[7]
+	mi := &file_easyp_generator_v1_generator_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -591,7 +591,7 @@ func (x *UpdatePluginRequest) String() string {
 func (*UpdatePluginRequest) ProtoMessage() {}
 
 func (x *UpdatePluginRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_generator_v1_generator_proto_msgTypes[7]
+	mi := &file_easyp_generator_v1_generator_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -604,7 +604,7 @@ func (x *UpdatePluginRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdatePluginRequest.ProtoReflect.Descriptor instead.
 func (*UpdatePluginRequest) Descriptor() ([]byte, []int) {
-	return file_api_generator_v1_generator_proto_rawDescGZIP(), []int{7}
+	return file_easyp_generator_v1_generator_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *UpdatePluginRequest) GetGroup() string {
@@ -660,7 +660,7 @@ type UpdatePluginResponse struct {
 
 func (x *UpdatePluginResponse) Reset() {
 	*x = UpdatePluginResponse{}
-	mi := &file_api_generator_v1_generator_proto_msgTypes[8]
+	mi := &file_easyp_generator_v1_generator_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -672,7 +672,7 @@ func (x *UpdatePluginResponse) String() string {
 func (*UpdatePluginResponse) ProtoMessage() {}
 
 func (x *UpdatePluginResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_generator_v1_generator_proto_msgTypes[8]
+	mi := &file_easyp_generator_v1_generator_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -685,7 +685,7 @@ func (x *UpdatePluginResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdatePluginResponse.ProtoReflect.Descriptor instead.
 func (*UpdatePluginResponse) Descriptor() ([]byte, []int) {
-	return file_api_generator_v1_generator_proto_rawDescGZIP(), []int{8}
+	return file_easyp_generator_v1_generator_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *UpdatePluginResponse) GetPlugin() *PluginInfo {
@@ -710,7 +710,7 @@ type DeletePluginRequest struct {
 
 func (x *DeletePluginRequest) Reset() {
 	*x = DeletePluginRequest{}
-	mi := &file_api_generator_v1_generator_proto_msgTypes[9]
+	mi := &file_easyp_generator_v1_generator_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -722,7 +722,7 @@ func (x *DeletePluginRequest) String() string {
 func (*DeletePluginRequest) ProtoMessage() {}
 
 func (x *DeletePluginRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_generator_v1_generator_proto_msgTypes[9]
+	mi := &file_easyp_generator_v1_generator_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -735,7 +735,7 @@ func (x *DeletePluginRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletePluginRequest.ProtoReflect.Descriptor instead.
 func (*DeletePluginRequest) Descriptor() ([]byte, []int) {
-	return file_api_generator_v1_generator_proto_rawDescGZIP(), []int{9}
+	return file_easyp_generator_v1_generator_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *DeletePluginRequest) GetGroup() string {
@@ -768,7 +768,7 @@ type DeletePluginResponse struct {
 
 func (x *DeletePluginResponse) Reset() {
 	*x = DeletePluginResponse{}
-	mi := &file_api_generator_v1_generator_proto_msgTypes[10]
+	mi := &file_easyp_generator_v1_generator_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -780,7 +780,7 @@ func (x *DeletePluginResponse) String() string {
 func (*DeletePluginResponse) ProtoMessage() {}
 
 func (x *DeletePluginResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_generator_v1_generator_proto_msgTypes[10]
+	mi := &file_easyp_generator_v1_generator_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -793,14 +793,14 @@ func (x *DeletePluginResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletePluginResponse.ProtoReflect.Descriptor instead.
 func (*DeletePluginResponse) Descriptor() ([]byte, []int) {
-	return file_api_generator_v1_generator_proto_rawDescGZIP(), []int{10}
+	return file_easyp_generator_v1_generator_proto_rawDescGZIP(), []int{10}
 }
 
-var File_api_generator_v1_generator_proto protoreflect.FileDescriptor
+var File_easyp_generator_v1_generator_proto protoreflect.FileDescriptor
 
-const file_api_generator_v1_generator_proto_rawDesc = "" +
+const file_easyp_generator_v1_generator_proto_rawDesc = "" +
 	"\n" +
-	" api/generator/v1/generator.proto\x12\x10api.generator.v1\x1a\x1cmcp/options/v1/options.proto\x1a\x10doc/v1/doc.proto\x1a%google/protobuf/compiler/plugin.proto\x1a google/protobuf/field_mask.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x8e\x02\n" +
+	"\"easyp/generator/v1/generator.proto\x12\x12easyp.generator.v1\x1a\x1cmcp/options/v1/options.proto\x1a\x10doc/v1/doc.proto\x1a%google/protobuf/compiler/plugin.proto\x1a google/protobuf/field_mask.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x8e\x02\n" +
 	"\x13GenerateCodeRequest\x12k\n" +
 	"\x16code_generator_request\x18\x01 \x01(\v2..google.protobuf.compiler.CodeGeneratorRequestB\x05\xdaI\x02\b\x01R\x14codeGeneratorRequest\x12\x89\x01\n" +
 	"\vplugin_name\x18\x02 \x01(\tBh\xdaIe\b\x01\xa2\x01\x1bprotocolbuffers/go:v1.36.10\x92\x02B^[a-z][a-z0-9-]*/[a-z][a-z0-9-]*:(v[0-9]+\\.[0-9]+\\.[0-9]+|latest)$R\n" +
@@ -821,9 +821,9 @@ const file_api_generator_v1_generator_proto_rawDesc = "" +
 	"\b_versionB\f\n" +
 	"\n" +
 	"_page_sizeB\r\n" +
-	"\v_page_token\"\x8c\x01\n" +
-	"\x0fPluginsResponse\x12=\n" +
-	"\aplugins\x18\x01 \x03(\v2\x1c.api.generator.v1.PluginInfoB\x05\xdaI\x02\x10\x01R\aplugins\x12-\n" +
+	"\v_page_token\"\x8e\x01\n" +
+	"\x0fPluginsResponse\x12?\n" +
+	"\aplugins\x18\x01 \x03(\v2\x1e.easyp.generator.v1.PluginInfoB\x05\xdaI\x02\x10\x01R\aplugins\x12-\n" +
 	"\x0fnext_page_token\x18\x03 \x01(\tB\x05\xdaI\x02\x10\x01R\rnextPageTokenJ\x04\b\x02\x10\x03R\x05total\"\xc2\x02\n" +
 	"\n" +
 	"PluginInfo\x12\x17\n" +
@@ -840,9 +840,9 @@ const file_api_generator_v1_generator_proto_rawDesc = "" +
 	"\x04name\x18\x02 \x01(\tB\x1e\xdaI\x1b\b\x01\xa2\x01\x02go\x92\x02\x11^[a-z][a-z0-9-]*$R\x04name\x12D\n" +
 	"\aversion\x18\x03 \x01(\tB*\xdaI'\b\x01\xa2\x01\x06v1.5.1\x92\x02\x19^v[0-9]+\\.[0-9]+\\.[0-9]+$R\aversion\x12/\n" +
 	"\x06config\x18\x04 \x01(\v2\x17.google.protobuf.StructR\x06config\x12\x12\n" +
-	"\x04tags\x18\x05 \x03(\tR\x04tags\"S\n" +
-	"\x14CreatePluginResponse\x12;\n" +
-	"\x06plugin\x18\x01 \x01(\v2\x1c.api.generator.v1.PluginInfoB\x05\xdaI\x02\x10\x01R\x06plugin\"\xc9\x02\n" +
+	"\x04tags\x18\x05 \x03(\tR\x04tags\"U\n" +
+	"\x14CreatePluginResponse\x12=\n" +
+	"\x06plugin\x18\x01 \x01(\v2\x1e.easyp.generator.v1.PluginInfoB\x05\xdaI\x02\x10\x01R\x06plugin\"\xc9\x02\n" +
 	"\x13UpdatePluginRequest\x126\n" +
 	"\x05group\x18\x01 \x01(\tB \xdaI\x1d\b\x01\xa2\x01\x04grpc\x92\x02\x11^[a-z][a-z0-9-]*$R\x05group\x122\n" +
 	"\x04name\x18\x02 \x01(\tB\x1e\xdaI\x1b\b\x01\xa2\x01\x02go\x92\x02\x11^[a-z][a-z0-9-]*$R\x04name\x12D\n" +
@@ -850,74 +850,73 @@ const file_api_generator_v1_generator_proto_rawDesc = "" +
 	"\x06config\x18\x04 \x01(\v2\x17.google.protobuf.StructR\x06config\x12\x12\n" +
 	"\x04tags\x18\x05 \x03(\tR\x04tags\x12;\n" +
 	"\vupdate_mask\x18\x06 \x01(\v2\x1a.google.protobuf.FieldMaskR\n" +
-	"updateMask\"S\n" +
-	"\x14UpdatePluginResponse\x12;\n" +
-	"\x06plugin\x18\x01 \x01(\v2\x1c.api.generator.v1.PluginInfoB\x05\xdaI\x02\x10\x01R\x06plugin\"\xc7\x01\n" +
+	"updateMask\"U\n" +
+	"\x14UpdatePluginResponse\x12=\n" +
+	"\x06plugin\x18\x01 \x01(\v2\x1e.easyp.generator.v1.PluginInfoB\x05\xdaI\x02\x10\x01R\x06plugin\"\xc7\x01\n" +
 	"\x13DeletePluginRequest\x126\n" +
 	"\x05group\x18\x01 \x01(\tB \xdaI\x1d\b\x01\xa2\x01\x04grpc\x92\x02\x11^[a-z][a-z0-9-]*$R\x05group\x122\n" +
 	"\x04name\x18\x02 \x01(\tB\x1e\xdaI\x1b\b\x01\xa2\x01\x02go\x92\x02\x11^[a-z][a-z0-9-]*$R\x04name\x12D\n" +
 	"\aversion\x18\x03 \x01(\tB*\xdaI'\b\x01\xa2\x01\x06v1.5.1\x92\x02\x19^v[0-9]+\\.[0-9]+\\.[0-9]+$R\aversion\"\x16\n" +
-	"\x14DeletePluginResponse2\xe6\x04\n" +
-	"\n" +
-	"ServiceAPI\x12e\n" +
-	"\fGenerateCode\x12%.api.generator.v1.GenerateCodeRequest\x1a&.api.generator.v1.GenerateCodeResponse\"\x06ҷ,\x02 \x01\x12\xbb\x01\n" +
-	"\aPlugins\x12 .api.generator.v1.PluginsRequest\x1a!.api.generator.v1.PluginsResponse\"kҷ,g\n" +
-	"\fplugins_list\x12\fList plugins\x1aIList available plugins with optional filters: group, name, version, tags.\x12e\n" +
-	"\fCreatePlugin\x12%.api.generator.v1.CreatePluginRequest\x1a&.api.generator.v1.CreatePluginResponse\"\x06ҷ,\x02 \x01\x12e\n" +
-	"\fUpdatePlugin\x12%.api.generator.v1.UpdatePluginRequest\x1a&.api.generator.v1.UpdatePluginResponse\"\x06ҷ,\x02 \x01\x12e\n" +
-	"\fDeletePlugin\x12%.api.generator.v1.DeletePluginRequest\x1a&.api.generator.v1.DeletePluginResponse\"\x06ҷ,\x02 \x01B:Z8github.com/easyp-tech/service/api/generator/v1;generatorb\x06proto3"
+	"\x14DeletePluginResponse2\xfc\x04\n" +
+	"\fGeneratorAPI\x12i\n" +
+	"\fGenerateCode\x12'.easyp.generator.v1.GenerateCodeRequest\x1a(.easyp.generator.v1.GenerateCodeResponse\"\x06ҷ,\x02 \x01\x12\xbf\x01\n" +
+	"\aPlugins\x12\".easyp.generator.v1.PluginsRequest\x1a#.easyp.generator.v1.PluginsResponse\"kҷ,g\n" +
+	"\fplugins_list\x12\fList plugins\x1aIList available plugins with optional filters: group, name, version, tags.\x12i\n" +
+	"\fCreatePlugin\x12'.easyp.generator.v1.CreatePluginRequest\x1a(.easyp.generator.v1.CreatePluginResponse\"\x06ҷ,\x02 \x01\x12i\n" +
+	"\fUpdatePlugin\x12'.easyp.generator.v1.UpdatePluginRequest\x1a(.easyp.generator.v1.UpdatePluginResponse\"\x06ҷ,\x02 \x01\x12i\n" +
+	"\fDeletePlugin\x12'.easyp.generator.v1.DeletePluginRequest\x1a(.easyp.generator.v1.DeletePluginResponse\"\x06ҷ,\x02 \x01B@Z>github.com/easyp-tech/service/api/easyp/generator/v1;generatorb\x06proto3"
 
 var (
-	file_api_generator_v1_generator_proto_rawDescOnce sync.Once
-	file_api_generator_v1_generator_proto_rawDescData []byte
+	file_easyp_generator_v1_generator_proto_rawDescOnce sync.Once
+	file_easyp_generator_v1_generator_proto_rawDescData []byte
 )
 
-func file_api_generator_v1_generator_proto_rawDescGZIP() []byte {
-	file_api_generator_v1_generator_proto_rawDescOnce.Do(func() {
-		file_api_generator_v1_generator_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_api_generator_v1_generator_proto_rawDesc), len(file_api_generator_v1_generator_proto_rawDesc)))
+func file_easyp_generator_v1_generator_proto_rawDescGZIP() []byte {
+	file_easyp_generator_v1_generator_proto_rawDescOnce.Do(func() {
+		file_easyp_generator_v1_generator_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_easyp_generator_v1_generator_proto_rawDesc), len(file_easyp_generator_v1_generator_proto_rawDesc)))
 	})
-	return file_api_generator_v1_generator_proto_rawDescData
+	return file_easyp_generator_v1_generator_proto_rawDescData
 }
 
-var file_api_generator_v1_generator_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
-var file_api_generator_v1_generator_proto_goTypes = []any{
-	(*GenerateCodeRequest)(nil),            // 0: api.generator.v1.GenerateCodeRequest
-	(*GenerateCodeResponse)(nil),           // 1: api.generator.v1.GenerateCodeResponse
-	(*PluginsRequest)(nil),                 // 2: api.generator.v1.PluginsRequest
-	(*PluginsResponse)(nil),                // 3: api.generator.v1.PluginsResponse
-	(*PluginInfo)(nil),                     // 4: api.generator.v1.PluginInfo
-	(*CreatePluginRequest)(nil),            // 5: api.generator.v1.CreatePluginRequest
-	(*CreatePluginResponse)(nil),           // 6: api.generator.v1.CreatePluginResponse
-	(*UpdatePluginRequest)(nil),            // 7: api.generator.v1.UpdatePluginRequest
-	(*UpdatePluginResponse)(nil),           // 8: api.generator.v1.UpdatePluginResponse
-	(*DeletePluginRequest)(nil),            // 9: api.generator.v1.DeletePluginRequest
-	(*DeletePluginResponse)(nil),           // 10: api.generator.v1.DeletePluginResponse
+var file_easyp_generator_v1_generator_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_easyp_generator_v1_generator_proto_goTypes = []any{
+	(*GenerateCodeRequest)(nil),            // 0: easyp.generator.v1.GenerateCodeRequest
+	(*GenerateCodeResponse)(nil),           // 1: easyp.generator.v1.GenerateCodeResponse
+	(*PluginsRequest)(nil),                 // 2: easyp.generator.v1.PluginsRequest
+	(*PluginsResponse)(nil),                // 3: easyp.generator.v1.PluginsResponse
+	(*PluginInfo)(nil),                     // 4: easyp.generator.v1.PluginInfo
+	(*CreatePluginRequest)(nil),            // 5: easyp.generator.v1.CreatePluginRequest
+	(*CreatePluginResponse)(nil),           // 6: easyp.generator.v1.CreatePluginResponse
+	(*UpdatePluginRequest)(nil),            // 7: easyp.generator.v1.UpdatePluginRequest
+	(*UpdatePluginResponse)(nil),           // 8: easyp.generator.v1.UpdatePluginResponse
+	(*DeletePluginRequest)(nil),            // 9: easyp.generator.v1.DeletePluginRequest
+	(*DeletePluginResponse)(nil),           // 10: easyp.generator.v1.DeletePluginResponse
 	(*pluginpb.CodeGeneratorRequest)(nil),  // 11: google.protobuf.compiler.CodeGeneratorRequest
 	(*pluginpb.CodeGeneratorResponse)(nil), // 12: google.protobuf.compiler.CodeGeneratorResponse
 	(*timestamppb.Timestamp)(nil),          // 13: google.protobuf.Timestamp
 	(*structpb.Struct)(nil),                // 14: google.protobuf.Struct
 	(*fieldmaskpb.FieldMask)(nil),          // 15: google.protobuf.FieldMask
 }
-var file_api_generator_v1_generator_proto_depIdxs = []int32{
-	11, // 0: api.generator.v1.GenerateCodeRequest.code_generator_request:type_name -> google.protobuf.compiler.CodeGeneratorRequest
-	12, // 1: api.generator.v1.GenerateCodeResponse.code_generator_response:type_name -> google.protobuf.compiler.CodeGeneratorResponse
-	4,  // 2: api.generator.v1.PluginsResponse.plugins:type_name -> api.generator.v1.PluginInfo
-	13, // 3: api.generator.v1.PluginInfo.created_at:type_name -> google.protobuf.Timestamp
-	14, // 4: api.generator.v1.CreatePluginRequest.config:type_name -> google.protobuf.Struct
-	4,  // 5: api.generator.v1.CreatePluginResponse.plugin:type_name -> api.generator.v1.PluginInfo
-	14, // 6: api.generator.v1.UpdatePluginRequest.config:type_name -> google.protobuf.Struct
-	15, // 7: api.generator.v1.UpdatePluginRequest.update_mask:type_name -> google.protobuf.FieldMask
-	4,  // 8: api.generator.v1.UpdatePluginResponse.plugin:type_name -> api.generator.v1.PluginInfo
-	0,  // 9: api.generator.v1.ServiceAPI.GenerateCode:input_type -> api.generator.v1.GenerateCodeRequest
-	2,  // 10: api.generator.v1.ServiceAPI.Plugins:input_type -> api.generator.v1.PluginsRequest
-	5,  // 11: api.generator.v1.ServiceAPI.CreatePlugin:input_type -> api.generator.v1.CreatePluginRequest
-	7,  // 12: api.generator.v1.ServiceAPI.UpdatePlugin:input_type -> api.generator.v1.UpdatePluginRequest
-	9,  // 13: api.generator.v1.ServiceAPI.DeletePlugin:input_type -> api.generator.v1.DeletePluginRequest
-	1,  // 14: api.generator.v1.ServiceAPI.GenerateCode:output_type -> api.generator.v1.GenerateCodeResponse
-	3,  // 15: api.generator.v1.ServiceAPI.Plugins:output_type -> api.generator.v1.PluginsResponse
-	6,  // 16: api.generator.v1.ServiceAPI.CreatePlugin:output_type -> api.generator.v1.CreatePluginResponse
-	8,  // 17: api.generator.v1.ServiceAPI.UpdatePlugin:output_type -> api.generator.v1.UpdatePluginResponse
-	10, // 18: api.generator.v1.ServiceAPI.DeletePlugin:output_type -> api.generator.v1.DeletePluginResponse
+var file_easyp_generator_v1_generator_proto_depIdxs = []int32{
+	11, // 0: easyp.generator.v1.GenerateCodeRequest.code_generator_request:type_name -> google.protobuf.compiler.CodeGeneratorRequest
+	12, // 1: easyp.generator.v1.GenerateCodeResponse.code_generator_response:type_name -> google.protobuf.compiler.CodeGeneratorResponse
+	4,  // 2: easyp.generator.v1.PluginsResponse.plugins:type_name -> easyp.generator.v1.PluginInfo
+	13, // 3: easyp.generator.v1.PluginInfo.created_at:type_name -> google.protobuf.Timestamp
+	14, // 4: easyp.generator.v1.CreatePluginRequest.config:type_name -> google.protobuf.Struct
+	4,  // 5: easyp.generator.v1.CreatePluginResponse.plugin:type_name -> easyp.generator.v1.PluginInfo
+	14, // 6: easyp.generator.v1.UpdatePluginRequest.config:type_name -> google.protobuf.Struct
+	15, // 7: easyp.generator.v1.UpdatePluginRequest.update_mask:type_name -> google.protobuf.FieldMask
+	4,  // 8: easyp.generator.v1.UpdatePluginResponse.plugin:type_name -> easyp.generator.v1.PluginInfo
+	0,  // 9: easyp.generator.v1.GeneratorAPI.GenerateCode:input_type -> easyp.generator.v1.GenerateCodeRequest
+	2,  // 10: easyp.generator.v1.GeneratorAPI.Plugins:input_type -> easyp.generator.v1.PluginsRequest
+	5,  // 11: easyp.generator.v1.GeneratorAPI.CreatePlugin:input_type -> easyp.generator.v1.CreatePluginRequest
+	7,  // 12: easyp.generator.v1.GeneratorAPI.UpdatePlugin:input_type -> easyp.generator.v1.UpdatePluginRequest
+	9,  // 13: easyp.generator.v1.GeneratorAPI.DeletePlugin:input_type -> easyp.generator.v1.DeletePluginRequest
+	1,  // 14: easyp.generator.v1.GeneratorAPI.GenerateCode:output_type -> easyp.generator.v1.GenerateCodeResponse
+	3,  // 15: easyp.generator.v1.GeneratorAPI.Plugins:output_type -> easyp.generator.v1.PluginsResponse
+	6,  // 16: easyp.generator.v1.GeneratorAPI.CreatePlugin:output_type -> easyp.generator.v1.CreatePluginResponse
+	8,  // 17: easyp.generator.v1.GeneratorAPI.UpdatePlugin:output_type -> easyp.generator.v1.UpdatePluginResponse
+	10, // 18: easyp.generator.v1.GeneratorAPI.DeletePlugin:output_type -> easyp.generator.v1.DeletePluginResponse
 	14, // [14:19] is the sub-list for method output_type
 	9,  // [9:14] is the sub-list for method input_type
 	9,  // [9:9] is the sub-list for extension type_name
@@ -925,27 +924,27 @@ var file_api_generator_v1_generator_proto_depIdxs = []int32{
 	0,  // [0:9] is the sub-list for field type_name
 }
 
-func init() { file_api_generator_v1_generator_proto_init() }
-func file_api_generator_v1_generator_proto_init() {
-	if File_api_generator_v1_generator_proto != nil {
+func init() { file_easyp_generator_v1_generator_proto_init() }
+func file_easyp_generator_v1_generator_proto_init() {
+	if File_easyp_generator_v1_generator_proto != nil {
 		return
 	}
-	file_api_generator_v1_generator_proto_msgTypes[2].OneofWrappers = []any{}
+	file_easyp_generator_v1_generator_proto_msgTypes[2].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_generator_v1_generator_proto_rawDesc), len(file_api_generator_v1_generator_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_easyp_generator_v1_generator_proto_rawDesc), len(file_easyp_generator_v1_generator_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_api_generator_v1_generator_proto_goTypes,
-		DependencyIndexes: file_api_generator_v1_generator_proto_depIdxs,
-		MessageInfos:      file_api_generator_v1_generator_proto_msgTypes,
+		GoTypes:           file_easyp_generator_v1_generator_proto_goTypes,
+		DependencyIndexes: file_easyp_generator_v1_generator_proto_depIdxs,
+		MessageInfos:      file_easyp_generator_v1_generator_proto_msgTypes,
 	}.Build()
-	File_api_generator_v1_generator_proto = out.File
-	file_api_generator_v1_generator_proto_goTypes = nil
-	file_api_generator_v1_generator_proto_depIdxs = nil
+	File_easyp_generator_v1_generator_proto = out.File
+	file_easyp_generator_v1_generator_proto_goTypes = nil
+	file_easyp_generator_v1_generator_proto_depIdxs = nil
 }

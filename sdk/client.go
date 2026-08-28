@@ -9,13 +9,13 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/pluginpb"
 
-	generator "github.com/easyp-tech/service/api/generator/v1"
+	generator "github.com/easyp-tech/service/api/easyp/generator/v1"
 )
 
 // Client is a client for the EasyP API Service.
 type Client struct {
 	conn      *grpc.ClientConn
-	genClient generator.ServiceAPIClient
+	genClient generator.GeneratorAPIClient
 	cfg       *config
 	health    *healthMonitor // nil if health check is disabled
 }
@@ -52,7 +52,7 @@ func NewClient(addr string, opts ...Option) (*Client, error) {
 
 	client := &Client{
 		conn:      conn,
-		genClient: generator.NewServiceAPIClient(conn),
+		genClient: generator.NewGeneratorAPIClient(conn),
 		cfg:       cfg,
 	}
 
