@@ -153,8 +153,12 @@ groups:
   - name: easyp.errors
     rules:
       - alert: EasypGenerationErrorRate
+        # See the same rule in the Helm chart's prometheusrule.yaml. The
+        # numerator has {plugin, error_type} and the denominator has no labels,
+        # so an unaggregated division matched nothing and this alert could not
+        # fire. `sum without` drops exactly those two and keeps job/instance.
         expr: |
-          rate(easyp_generation_errors_total[5m])
+          sum without (plugin, error_type) (rate(easyp_generation_errors_total[5m]))
             / clamp_min(rate(easyp_pool_jobs_total[5m]), 0.001)
             > 0.05
         for: 10m

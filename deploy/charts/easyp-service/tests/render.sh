@@ -475,6 +475,107 @@ if expect_render "the defaults ship a network policy"; then
 fi
 
 echo
+echo "== install paths a customer actually takes =="
+
+# Every check above runs with BASE, and BASE carries --set tls.enabled=false.
+# That is convenient — it gets past the TLS preflight so a case can vary one
+# thing — and it is also why this suite was blind to the two defects that made
+# the chart uninstallable on its documented path: nothing here had TLS on, and
+# the cert-manager case above never enabled ingress. These checks deliberately
+# do not use BASE.
+
+# The DSN is the one thing every path needs; TLS is what each case decides.
+DSN=(
+  --set secrets.create=true
+  --set secrets.data.DB_POSTGRES_DSN=postgres://localhost/easyp
+)
+
+raw() { helm template test "$CHART" "$@"; }
+
+raw_render() {
+  local what="$1"; shift
+  if ! out="$(raw "$@" 2>&1)"; then
+    fail "$what: helm template failed"$'\n'"$out"
+    return 1
+  fi
+  return 0
+}
+
+raw_failure() {
+  local what="$1" wanted="$2"; shift 2
+  if out="$(raw "$@" 2>&1)"; then
+    fail "$what: expected helm template to fail, but it rendered"
+    return
+  fi
+  if ! grep -qF "$wanted" <<<"$out"; then
+    fail "$what: failed, but the message does not mention '$wanted'"$'\n'"$out"
+    return
+  fi
+  pass "$what"
+}
+
+# values.yaml claimed for a long time that a DSN was the only mandatory input.
+# It is not: tls.enabled defaults to true, so TLS material is a third decision.
+# The check is that the refusal names it — an installer who supplies a DSN and
+# nothing else has to be told which of the three ways out to take.
+raw_failure "an install with only a DSN is refused, and the message names TLS" \
+  "tls.enabled requires either tls.serverSecret or certManager.enabled" \
+  "${DSN[@]}"
+
+# The full production shape: cert-manager issues both certificates, the ingress
+# terminates outside, and the router reaches the pod over mutual TLS. This is
+# the path the chart's own values.yaml documents, and until v0.14.0 it did not
+# render at all — an unconditional guard demanded a Secret the chart was about
+# to create itself, and it fired before the check that knew better.
+if raw_render "the documented production path renders (cert-manager + ingress + mTLS)" \
+  "${DSN[@]}" \
+  --set certManager.enabled=true \
+  --set certManager.issuerRef.name=test-issuer \
+  --set ingress.enabled=true \
+  --set ingress.host=easyp.example.com \
+  --set 'config.server.trustedProxies={10.0.0.0/8}'; then
+
+  problems=""
+  grep -q "kind: ServersTransport" <<<"$out" || problems="$problems no-ServersTransport"
+  [[ "$(grep -c "kind: Certificate" <<<"$out")" == "2" ]] \
+    || problems="$problems expected-two-Certificates"
+
+  # Every secret something references has to be one a Certificate writes.
+  # A ServersTransport pointing at a name nobody issues renders and applies
+  # cleanly, and shows up as the router failing every request to a listener
+  # that is working fine.
+  issued="$(grep -E "^  secretName: " <<<"$out" | awk '{print $2}' | sort -u)"
+  while read -r name; do
+    [[ -z "$name" ]] && continue
+    grep -qx "$name" <<<"$issued" || problems="$problems unissued:$name"
+  done < <(grep -E "^    - .*-client-tls$|^    - .*-server-tls$" <<<"$out" | awk '{print $2}' | sort -u)
+
+  if [[ -n "$problems" ]]; then
+    fail "the documented production path renders (cert-manager + ingress + mTLS):$problems"
+  else
+    pass "the documented production path renders (cert-manager + ingress + mTLS)"
+  fi
+fi
+
+# The hole the deleted guard was covering, and the reason its replacement tests
+# certManager.enabled as well as clientCertificate.enabled.
+# clientCertificate.enabled defaults to true, but certificates.yaml is gated on
+# certManager.enabled — so this combination would otherwise pass validation and
+# render a ServersTransport pointing at a Secret nobody creates.
+raw_failure "an ingress with no client certificate on either side is refused" \
+  "the gRPC listener demands a client certificate" \
+  "${DSN[@]}" \
+  --set tls.serverSecret=byo-server-tls \
+  --set ingress.enabled=true \
+  --set ingress.host=easyp.example.com \
+  --set 'config.server.trustedProxies={10.0.0.0/8}'
+
+# The other supported shape: the operator brings the certificates.
+raw_render "bring-your-own server certificate renders" \
+  "${DSN[@]}" --set tls.serverSecret=byo-server-tls \
+  && pass "bring-your-own server certificate renders"
+
+echo
 echo "== alerting rules =="
 
 # A PromQL typo renders as valid YAML and then never fires. promtool is the only
@@ -502,11 +603,39 @@ promtool_check() {
   return 2
 }
 
+# `promtool check rules` reads the expressions, and that is not the same as
+# knowing they can fire. EasypGenerationErrorRate passed it in every CI run for
+# months while being incapable of producing an alert: the numerator carried
+# {plugin, error_type}, the denominator carried neither, and a vector division
+# matches on the full label set — so the two sides never had a series in common.
+# Valid PromQL, valid YAML, dead rule.
+#
+# `promtool test rules` is the one that would have caught it. It wants a test
+# file and the rules file it names, so this mounts a directory rather than a
+# single file.
+promtool_unit_test() {
+  local dir="$1"
+
+  if command -v promtool >/dev/null 2>&1; then
+    promtool test rules "$dir/test.yaml"
+    return
+  fi
+
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    docker run --rm -v "$dir:/t:ro" --entrypoint promtool \
+      prom/prometheus:latest test rules /t/test.yaml
+    return
+  fi
+
+  return 2
+}
+
 # The X's are required: BSD mktemp accepts a template without them and GNU
 # mktemp refuses, so this ran on a laptop and failed the Chart job on every CI
 # run until someone read past the checks that had already passed.
 rules_yaml="$(mktemp -t easyp-rules.XXXXXX)"
-trap 'rm -f "$rules_yaml"' EXIT
+unit_dir="$(mktemp -d -t easyp-ruletest.XXXXXX)"
+trap 'rm -f "$rules_yaml"; rm -rf "$unit_dir"' EXIT
 
 if out="$(render --set prometheusRule.enabled=true --show-only templates/prometheusrule.yaml 2>&1)"; then
   # PrometheusRule wraps the rule groups under spec:. promtool wants them at the
@@ -528,6 +657,59 @@ if out="$(render --set prometheusRule.enabled=true --show-only templates/prometh
   fi
 else
   fail "the alerting rules do not render"$'\n'"$out"
+fi
+
+# The error-rate alert has to be able to fire. Feeding it the exact label sets
+# the service emits is the only way to know: the two counters are declared in
+# different packages — internal/adapters/metrics/metrics.go for the errors,
+# internal/core/pool.go for the jobs — so nothing but a query brings them
+# together, and adding a label to either one silently kills the rule again.
+#
+# The expected annotations are spelled out because promtool compares the whole
+# alert. That couples this test to the rule's wording, which is the intent:
+# editing the summary should be a decision, not a side effect.
+if [[ -s "$rules_yaml" ]]; then
+  cp "$rules_yaml" "$unit_dir/rules.yaml"
+
+  cat > "$unit_dir/test.yaml" <<'UNITTEST'
+rule_files:
+  - rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'easyp_generation_errors_total{job="easyp",instance="pod-a",plugin="grpc/go:v1.5.1",error_type="permanent"}'
+        values: '0+2x30'
+      - series: 'easyp_pool_jobs_total{job="easyp",instance="pod-a"}'
+        values: '0+10x30'
+    alert_rule_test:
+      # 2 errors/min over 10 jobs/min is 20%, well past the 5% default, and
+      # 20m clears the rule's `for: 10m`.
+      - eval_time: 20m
+        alertname: EasypGenerationErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: easyp
+              instance: pod-a
+            exp_annotations:
+              runbook_url: "https://github.com/easyp-tech/service/blob/master/docs/RUNBOOKS.md#easypgenerationerrorrate"
+              summary: "More than 0.05 of EasyP generations are failing"
+              description: "A plugin is broken, or its binary does not match the checksum recorded for it."
+UNITTEST
+
+  chmod 0644 "$unit_dir/rules.yaml" "$unit_dir/test.yaml"
+  chmod 0755 "$unit_dir"
+
+  if check="$(promtool_unit_test "$unit_dir" 2>&1)"; then
+    pass "the generation error-rate alert can actually fire"
+  elif [[ $? -eq 2 ]]; then
+    echo "  SKIP  promtool: no promtool, and no docker daemon to borrow one from"
+  else
+    fail "the generation error-rate alert can actually fire"$'\n'"$check"
+  fi
 fi
 
 # Zero means no licence at all, which is the community default. Without this

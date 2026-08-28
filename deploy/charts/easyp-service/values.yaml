@@ -1,8 +1,23 @@
 # Default values for easyp-service.
 #
-# Two things have no working default and must be supplied before the chart will
-# install: a database DSN (see `secrets`) and, if you want the gRPC API reachable
-# from outside the cluster, `ingress.host`.
+# Three things have no working default and must be decided before the chart will
+# install. Each is refused at install time rather than at runtime, so a missing
+# one is a message naming it, not a pod that comes up wrong.
+#
+#   1. A database DSN — see `secrets`. There is nothing sensible to default to.
+#
+#   2. TLS material, because `tls.enabled` defaults to true. Supply one of:
+#        tls.serverSecret=<kubernetes.io/tls Secret>   you bring the certificate
+#        certManager.enabled=true                      the chart issues it
+#        tls.enabled=false                             plaintext, trusted network
+#      The default stays on: a listener that speaks plaintext is the wrong thing
+#      to arrive at by saying nothing. But it does mean there is no install that
+#      consists only of a DSN, and this list said otherwise until v0.14.0.
+#
+#   3. `ingress.host`, and with it `config.server.trustedProxies`, if you want
+#      the gRPC API reachable from outside the cluster. Both are required
+#      together — see the comment on trustedProxies for why the second one is
+#      not optional.
 
 replicaCount: 1
 

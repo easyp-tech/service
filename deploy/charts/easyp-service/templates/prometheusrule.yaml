@@ -149,8 +149,19 @@ spec:
     - name: {{ include "easyp-service.fullname" . }}.errors
       rules:
         - alert: EasypGenerationErrorRate
+          # The numerator is aggregated, and that is the whole rule.
+          # easyp_generation_errors_total carries {plugin, error_type};
+          # easyp_pool_jobs_total is a bare counter with no labels of its own.
+          # A vector division matches on the full label set, so the two sides
+          # had no series in common and this alert could not fire — it was
+          # written, reviewed, shipped, and silently dead in both this chart and
+          # the compose stack.
+          #
+          # `sum without` rather than `sum by`: it drops exactly the two extra
+          # labels and keeps job/instance, so the ratio stays per-instance
+          # instead of collapsing the whole fleet into one number.
           expr: |
-            rate(easyp_generation_errors_total[5m])
+            sum without (plugin, error_type) (rate(easyp_generation_errors_total[5m]))
               / clamp_min(rate(easyp_pool_jobs_total[5m]), 0.001)
               > {{ .Values.prometheusRule.generationErrorRatio }}
           for: 10m
