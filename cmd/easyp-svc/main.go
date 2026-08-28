@@ -205,7 +205,14 @@ func getServiceCommand() *cli.Command {
 						Value: "",
 					},
 					&cli.StringFlag{
-						Name: "log_level",
+						Name: "log-level",
+						// Every other flag in this tool is kebab-case
+						// (--dry-run, --tls-ca, --force-path-style); this one
+						// was the exception. The old spelling is kept as an
+						// alias rather than dropped: it appears in committed
+						// compose files and in scripts, and a flag that stops
+						// existing fails the start rather than the flag.
+						Aliases: []string{"log_level"},
 						Usage: "log level (debug, info, warn, error); " +
 							"overrides log.level from the configuration",
 						// No default, so that "not given" stays distinguishable
@@ -217,13 +224,13 @@ func getServiceCommand() *cli.Command {
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					cfgPath := cmd.String(flagCfg)
-					logLvl := cmd.String("log_level")
+					logLvl := cmd.String("log-level")
 
 					// Printed before the logger exists, so it stays plain text.
 					// It says only where the settings come from; what they
 					// resolved to is the "configuration resolved" record the
 					// service logs once it knows, which is the honest place for
-					// it — an unset --log_level is not a level of "".
+					// it — an unset --log-level is not a level of "".
 					if cfgPath == "" {
 						_, _ = fmt.Fprintln(os.Stdout, "Starting easyp-svc from the environment")
 					} else {
@@ -505,9 +512,13 @@ func s3Flags() []cli.Flag {
 func registerFlags() []cli.Flag {
 	return append([]cli.Flag{
 		&cli.StringFlag{
-			Name:  "addr",
-			Usage: "gRPC server address",
-			Value: "localhost:8080",
+			Name: "addr",
+			// The service's own default. 8080 is what the Helm chart maps the
+			// gRPC port to, which made this flag right for a cluster and wrong
+			// for the binary anyone runs locally — and the two disagreed
+			// silently, as a connection refused.
+			Usage: "gRPC server address (the chart publishes gRPC on 8080)",
+			Value: "localhost:23410",
 		},
 		&cli.StringFlag{
 			Name:  flagCfg,

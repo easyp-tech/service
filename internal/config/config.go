@@ -272,7 +272,7 @@ type WorkerPoolConfig struct {
 // public key the service runs in community mode.
 //
 // The env names below are relative to the section prefix, so they resolve to
-// LICENSE_KEY, LICENSE_FILE, LICENSE_PUBLIC_KEY and LICENSE_CACHE_TTL.
+// LICENSE_KEY, LICENSE_FILE, LICENSE_PUBLIC_KEYS and LICENSE_CACHE_TTL.
 type LicenseConfig struct {
 	// Key is an inline PASETO token. Takes priority over File. It is a
 	// credential — anyone holding it can run an enterprise tier — so it is
@@ -914,6 +914,11 @@ func load(ctx context.Context, path string, lookuper envconfig.Lookuper) (Result
 	if err != nil {
 		return res, err
 	}
+
+	// Before the decode and before the schema check, so both see only current
+	// names: a renamed key fills the field its new name points at, and is not
+	// then reported as unrecognised by the check that has just been satisfied.
+	diags = append(diags, applyYAMLAliases(root, yamlAliases)...)
 
 	fromFile, doc, decodeDiags, err := decodeDocument(root)
 	if err != nil {
