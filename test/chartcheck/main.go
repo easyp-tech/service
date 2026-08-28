@@ -62,7 +62,7 @@ func run(addr, group string) error {
 
 	// The SDK walks pages itself; the raw client below checks the wire-level
 	// paging. First the aggregate view:
-	all, err := client.ListPlugins(ctx, sdk.PluginFilter{Group: group})
+	all, err := client.ListPlugins(ctx, sdk.WithFilter(sdk.PluginFilter{Group: group}))
 	if err != nil {
 		return fmt.Errorf("ListPlugins: %w", err)
 	}

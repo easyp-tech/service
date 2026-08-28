@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/pluginpb"
 
@@ -120,26 +121,39 @@ func (c *Client) GenerateCode(
 // filtered. The server pages its listing; this walks every page before
 // returning, so the caller sees one list, not the first hundred entries. The
 // configured list timeout spans the whole walk.
-func (c *Client) ListPlugins(ctx context.Context, filter ...PluginFilter) ([]*generator.PluginInfo, error) {
+//
+// Options rather than a variadic filter: `filter ...PluginFilter` was an
+// optional argument wearing a variadic's clothes, and a second option could
+// only have been added by changing the signature — which, past v1, means a new
+// method with a worse name.
+func (c *Client) ListPlugins(ctx context.Context, opts ...ListOption) ([]*generator.PluginInfo, error) {
 	ctx, cancel := c.withTimeout(ctx, c.cfg.listPluginsTimeout)
 	defer cancel()
 
-	req := &generator.PluginsRequest{}
-	if len(filter) > 0 {
-		if filter[0].Group != "" {
-			req.Group = new(filter[0].Group)
-		}
-		if filter[0].Name != "" {
-			req.Name = new(filter[0].Name)
-		}
-		if filter[0].Version != "" {
-			req.Version = new(filter[0].Version)
-		}
-		req.Tags = append([]string(nil), filter[0].Tags...)
+	var listCfg listConfig
+	for _, opt := range opts {
+		opt.applyList(&listCfg)
 	}
+
+	req := &generator.PluginsRequest{}
+	if listCfg.filter.Group != "" {
+		req.Group = &listCfg.filter.Group
+	}
+
+	if listCfg.filter.Name != "" {
+		req.Name = &listCfg.filter.Name
+	}
+
+	if listCfg.filter.Version != "" {
+		req.Version = &listCfg.filter.Version
+	}
+
+	req.Tags = append([]string(nil), listCfg.filter.Tags...)
 
 	var plugins []*generator.PluginInfo
 
+	// The filter travels with every page: the continuation token is only
+	// meaningful alongside the filters it was issued for.
 	for {
 		resp, err := c.genClient.Plugins(ctx, req)
 		if err != nil {
@@ -156,11 +170,73 @@ func (c *Client) ListPlugins(ctx context.Context, filter ...PluginFilter) ([]*ge
 		req.PageToken = &token
 	}
 
-	if len(filter) == 0 || filter[0].isEmpty() {
-		return plugins, nil
+	// No second pass over the result. The server applies these filters itself,
+	// so re-applying them here only mattered if the two disagreed — and then the
+	// client would have quietly hidden the disagreement instead of surfacing it.
+	return plugins, nil
+}
+
+// UpdatePlugin replaces the config and tags of a registered plugin.
+//
+// paths selects what to replace: "config", "tags", or both. Passing none
+// replaces both, which is what the service does with an empty mask. Updating
+// tags alone leaves the plugin's command line untouched — which is the point of
+// the mask, since resending a command line to change a label is how a registry
+// entry ends up pointing at the wrong binary.
+func (c *Client) UpdatePlugin(
+	ctx context.Context,
+	group, name, version string,
+	pluginConfig map[string]any,
+	tags []string,
+	paths ...string,
+) (*generator.PluginInfo, error) {
+	ctx, cancel := c.withTimeout(ctx, c.cfg.createPluginTimeout)
+	defer cancel()
+
+	req := &generator.UpdatePluginRequest{
+		Group:   group,
+		Name:    name,
+		Version: version,
+		Tags:    tags,
 	}
 
-	return applyFilter(plugins, filter[0]), nil
+	if len(paths) > 0 {
+		req.UpdateMask = &fieldmaskpb.FieldMask{Paths: append([]string(nil), paths...)}
+	}
+
+	if pluginConfig != nil {
+		cfgStruct, err := structpb.NewStruct(pluginConfig)
+		if err != nil {
+			return nil, fmt.Errorf("structpb.NewStruct: %w", err)
+		}
+
+		req.Config = cfgStruct
+	}
+
+	resp, err := c.genClient.UpdatePlugin(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("c.genClient.UpdatePlugin: %w", err)
+	}
+
+	return resp.GetPlugin(), nil
+}
+
+// DeletePlugin removes a plugin registration. The archive in object storage is
+// left alone.
+func (c *Client) DeletePlugin(ctx context.Context, group, name, version string) error {
+	ctx, cancel := c.withTimeout(ctx, c.cfg.createPluginTimeout)
+	defer cancel()
+
+	_, err := c.genClient.DeletePlugin(ctx, &generator.DeletePluginRequest{
+		Group:   group,
+		Name:    name,
+		Version: version,
+	})
+	if err != nil {
+		return fmt.Errorf("c.genClient.DeletePlugin: %w", err)
+	}
+
+	return nil
 }
 
 // CreatePlugin registers a new plugin in the service.
