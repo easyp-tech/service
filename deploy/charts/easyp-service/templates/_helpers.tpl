@@ -267,21 +267,6 @@ process kill itself mid-generation while the grace period still looked generous.
 {{- end }}
 {{- end }}
 
-{{/*
-The ServersTransport tells the router which client certificate to present on
-the mTLS leg, and the chart creates no such Secret — it can only be supplied.
-Left empty it fell back to a generated name, "<fullname>-client-tls", that
-exists nowhere: the resource rendered, applied, and pointed at nothing, and the
-first sign of it would have been the router failing every request to a listener
-that was working fine. The server certificate has been guarded this way from
-the start; this is the other half of the same pair.
-*/}}
-{{- if and .Values.ingress.enabled .Values.tls.enabled .Values.ingress.serversTransport.enabled }}
-{{- if not .Values.ingress.serversTransport.clientSecret }}
-{{- fail "easyp-service: ingress.serversTransport.enabled requires ingress.serversTransport.clientSecret — a kubernetes.io/tls Secret with the client certificate the router presents. The chart does not create one." }}
-{{- end }}
-{{- end }}
-
 {{- if .Values.certManager.enabled }}
 {{- if not .Values.certManager.issuerRef.name }}
 {{- fail "easyp-service: certManager.enabled requires certManager.issuerRef.name." }}
@@ -303,9 +288,30 @@ runs, and nothing says otherwise.
 {{- if not .Values.config.server.trustedProxies }}
 {{- fail "easyp-service: ingress.enabled requires config.server.trustedProxies. Behind a proxy every caller arrives from the proxy's address, so with this empty the rate limit and per-client concurrency limit apply to all callers combined, and the audit log records the ingress rather than who acted. Set it to the CIDR your ingress controller's pods run in." }}
 {{- end }}
+{{/*
+The ServersTransport tells the router which client certificate to present on
+the mTLS leg. Two things can supply it: a Secret the operator brings, or the
+cert-manager Certificate this chart renders — and the fallback name
+"<fullname>-client-tls" is exactly the secretName that Certificate writes, so
+both paths converge on one value.
+
+Both halves of the cert-manager condition are load-bearing.
+certManager.clientCertificate.enabled defaults to true, but certificates.yaml
+is gated on certManager.enabled, so "cert-manager off, clientCertificate on" —
+the default for anyone who never touched the section — would otherwise pass this
+check and render a ServersTransport pointing at a Secret nobody creates. The
+first sign of that is the router failing every request to a listener that is
+working fine.
+
+This guard used to have an unconditional twin above the certManager block, which
+fired first and made the cert-manager path unreachable: `helm install` with
+certManager.enabled and ingress.enabled failed asking for a Secret the chart was
+about to create itself. tests/render.sh exercised cert-manager without ingress,
+so nothing caught it.
+*/}}
 {{- if and .Values.tls.enabled .Values.ingress.serversTransport.enabled }}
-{{- if and (not .Values.ingress.serversTransport.clientSecret) (not .Values.certManager.clientCertificate.enabled) }}
-{{- fail "easyp-service: the gRPC listener demands a client certificate, so the router needs one. Set ingress.serversTransport.clientSecret or enable certManager.clientCertificate." }}
+{{- if and (not .Values.ingress.serversTransport.clientSecret) (not (and .Values.certManager.enabled .Values.certManager.clientCertificate.enabled)) }}
+{{- fail "easyp-service: the gRPC listener demands a client certificate, so the router needs one. Set ingress.serversTransport.clientSecret to a kubernetes.io/tls Secret you supply, or set certManager.enabled with certManager.clientCertificate.enabled so the chart issues one." }}
 {{- end }}
 {{- end }}
 {{- if and .Values.tls.enabled (not .Values.ingress.serversTransport.enabled) }}

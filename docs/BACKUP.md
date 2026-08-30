@@ -46,10 +46,20 @@ being relied on.
 2. **Do not run migrations by hand.** The service applies them itself at startup
    and serialises that across replicas. Start one replica and let it.
 3. **Check `goose_db_version` against the binary you are restoring onto.** A
-   database restored from a newer release than the binary is the one case that
-   startup cannot resolve on its own: goose will not roll forward from a version
-   it does not know, and the service refuses to start rather than run against a
-   schema it does not understand. Restore onto the matching release.
+   database restored from a newer release than the binary **starts anyway** —
+   this is not caught, and it used to say here that it was. goose objects only
+   to migrations missing *below* the database's highest version; one it has
+   never heard of, above that mark, leaves it with nothing to apply and no
+   complaint. Pinned by `TestRollbackOntoAnOlderBinary`.
+
+   So the limit on running an older binary is not a startup check, it is time.
+   The older binary has no partition maintainer for anything migration 00002
+   introduced, so once the months that migration pre-created are used up, audit
+   rows land in `audit_log_default` — and a non-empty default partition blocks
+   creating the month that would overlap it, which is a problem you inherit on
+   the way *forward*. **Treat a rollback as bounded by
+   `config.audit.preCreateMonths`** (three by default), and prefer restoring
+   onto the matching release.
 4. **Expect the plugin cache to be empty.** It is a cache, and with
    `persistence.enabled=false` it is empty after every restart anyway. The first
    request for each plugin re-downloads it. Watch

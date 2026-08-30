@@ -108,10 +108,16 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # pg_dump and psql are what the restore drill actually exercises. The test
+      # fails rather than skips when they are missing under CI: a skipped drill
+      # reports success for a procedure that never ran.
+      - name: postgresql-client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
       - name: Test
         env:
           EASYP_TEST_DSN: postgres://postgres:postgres@localhost:5432/easyp?sslmode=disable
-        run: go test -tags integration -timeout 10m ./test/...
+        run: go test -tags integration -timeout 10m ./test/... ./internal/database/...
 
   vuln:
     name: Vulnerabilities
@@ -144,6 +150,167 @@ jobs:
       # parse, and a values.yaml key with no env var behind it.
       - name: Lint and render
         run: deploy/charts/easyp-service/tests/render.sh
+
+  # Rendering proves the templates produce YAML. It does not prove the YAML
+  # produces a running pod, and the difference is where the chart's two worst
+  # defects lived: a guard that made the documented cert-manager path
+  # unreachable, and a values.yaml that named two mandatory inputs out of three.
+  # Both rendered fine for months.
+  #
+  # This installs the shape a customer installs — cert-manager issuing both
+  # certificates, an ingress in front, mutual TLS on the leg between them — and
+  # waits for the pod to say it is ready.
+  cluster:
+    name: Chart on a cluster
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+
+      - name: Create cluster
+        uses: helm/kind-action@v1
+
+      # The chart demands a CA issuer: both certificates have to chain to
+      # something the other side trusts, and cert-manager writes that CA into
+      # ca.crt of each secret, which is what tls.clientCASecret falls back to.
+      - name: Install cert-manager
+        run: |
+          helm repo add jetstack https://charts.jetstack.io
+          helm repo update
+          helm install cert-manager jetstack/cert-manager \
+            --namespace cert-manager --create-namespace \
+            --set crds.enabled=true --wait --timeout 5m
+          kubectl apply -f - <<'EOF'
+          apiVersion: cert-manager.io/v1
+          kind: ClusterIssuer
+          metadata:
+            name: selfsigned
+          spec:
+            selfSigned: {}
+          ---
+          apiVersion: cert-manager.io/v1
+          kind: Certificate
+          metadata:
+            name: easyp-ca
+            namespace: cert-manager
+          spec:
+            isCA: true
+            commonName: easyp-ca
+            secretName: easyp-ca
+            issuerRef:
+              name: selfsigned
+              kind: ClusterIssuer
+          ---
+          apiVersion: cert-manager.io/v1
+          kind: ClusterIssuer
+          metadata:
+            name: easyp-ca
+          spec:
+            ca:
+              secretName: easyp-ca
+          EOF
+          kubectl wait --for=condition=Ready certificate/easyp-ca -n cert-manager --timeout=2m
+
+      # The ServersTransport the chart renders is a Traefik CRD. Only the
+      # definition is needed for the object to apply; nothing has to route.
+      - name: Install Traefik CRDs
+        run: |
+          helm repo add traefik https://traefik.github.io/charts
+          helm repo update
+          helm install traefik traefik/traefik --namespace traefik --create-namespace --wait --timeout 5m
+
+      - name: Postgres
+        run: |
+          helm repo add bitnami https://charts.bitnami.com/bitnami
+          helm repo update
+          helm install pg bitnami/postgresql \
+            --set auth.postgresPassword=postgres --set auth.database=easyp \
+            --wait --timeout 5m
+
+      # The full path, and the values.yaml header's three mandatory inputs: the
+      # DSN, TLS material (here cert-manager), and the ingress host with the
+      # trusted proxies that must accompany it.
+      - name: Install the chart
+        run: |
+          helm install easyp deploy/charts/easyp-service \
+            --set secrets.create=true \
+            --set secrets.data.DB_POSTGRES_DSN='postgres://postgres:postgres@pg-postgresql:5432/easyp?sslmode=disable' \
+            --set certManager.enabled=true \
+            --set certManager.issuerRef.name=easyp-ca \
+            --set ingress.enabled=true \
+            --set ingress.host=easyp.example.com \
+            --set 'config.server.trustedProxies={10.244.0.0/16}' \
+            --wait --timeout 8m
+
+      - name: The pod is ready and answering
+        run: |
+          kubectl wait --for=condition=Ready pod \
+            -l app.kubernetes.io/name=easyp-service --timeout=5m
+          pod="$(kubectl get pod -l app.kubernetes.io/name=easyp-service -o name | head -1)"
+          kubectl exec "$pod" -- /easyp-svc --version
+
+      # Chart 0.3.1 fixed exactly this and nothing tested it: the secret was not
+      # hashed into the pod template, so rotating a write token left the old pod
+      # running and the new token rejected until someone restarted by hand.
+      - name: Rotating a write token rolls the pod
+        run: |
+          before="$(kubectl get pod -l app.kubernetes.io/name=easyp-service -o jsonpath='{.items[0].metadata.name}')"
+          helm upgrade easyp deploy/charts/easyp-service --reuse-values \
+            --set secrets.data.AUTH_WRITE_TOKENS="ci=$(printf 'rotated' | sha256sum | cut -d' ' -f1)" \
+            --wait --timeout 5m
+          kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=easyp-service --timeout=5m
+          after="$(kubectl get pod -l app.kubernetes.io/name=easyp-service -o jsonpath='{.items[0].metadata.name}')"
+          if [[ "$before" == "$after" ]]; then
+            echo "::error::the pod was not replaced; the secret is not hashed into the pod template"
+            exit 1
+          fi
+
+      - name: Describe what failed
+        if: failure()
+        run: |
+          kubectl get pods,certificates,secrets -A
+          kubectl describe pod -l app.kubernetes.io/name=easyp-service || true
+          kubectl logs -l app.kubernetes.io/name=easyp-service --tail=200 || true
+
+  # Generated code is checked in, and nothing checked that it matched the proto
+  # it claims to come from. Two ways that went wrong: `easyp generate` leaves
+  # .mcp.go untouched without an error, so it can be arbitrarily stale; and the
+  # files in the tree had been produced by a locally patched toolchain that
+  # exists nowhere in this repository, which the version stamp in their headers
+  # records. Regenerating and diffing catches both — the stamp is part of the
+  # diff.
+  generated:
+    name: Generated code is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The version go.mod declares, which is what makes this a check rather
+      # than a race between whatever each machine happens to have installed.
+      - name: Install easyp
+        run: |
+          version="$(go list -m -f '{{.Version}}' github.com/easyp-tech/easyp 2>/dev/null || echo v0.16.6)"
+          go install "github.com/easyp-tech/easyp/cmd/easyp@${version}"
+
+      # Both steps. easyp writes .pb.go and _grpc.pb.go; .mcp.go needs the
+      # direct plugin invocation, per the KNOWN ISSUE in easyp.yaml.
+      - name: Regenerate
+        run: |
+          easyp --cfg easyp.yaml generate
+          go run -tags mcpgen ./test/mcpgen
+
+      - name: No pending regeneration
+        run: |
+          if ! git diff --exit-code; then
+            echo "::error::generated code does not match the proto; run the two commands above and commit"
+            exit 1
+          fi
 
   # Two credentials have already reached this public repository through files
   # nobody thought to gitignore. A pattern list catches the shapes; this catches

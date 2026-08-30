@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/sethvargo/go-envconfig"
+	"gopkg.in/yaml.v3"
 )
 
 // LoadWith is Load with the environment supplied by the caller. Exported to the
@@ -50,4 +51,21 @@ func AliasLookuperFor(inner envconfig.Lookuper) *AliasLookuper {
 // AliasesUsed reports the alternative names that supplied a value.
 func AliasesUsed(lookuper *AliasLookuper) map[string]string {
 	return lookuper.used
+}
+
+// ApplyYAMLAliasesWith is applyYAMLAliases with the table supplied by the
+// caller. yamlAliases is empty until a rename needs it, so the mechanism would
+// otherwise be untested exactly while it is being relied on to exist.
+func ApplyYAMLAliasesWith(root *yaml.Node, aliases map[string]string) Diagnostics {
+	return applyYAMLAliases(root, aliases)
+}
+
+// YAMLAliases exposes the shipped table so a test can check its shape.
+func YAMLAliases() map[string]string {
+	return yamlAliases
+}
+
+// ParseDocumentForTest parses a config document the way the loader does.
+func ParseDocumentForTest(data []byte) (*yaml.Node, Diagnostics, error) {
+	return parseDocument(data)
 }
