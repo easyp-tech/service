@@ -8,12 +8,14 @@ go 1.26.6
 
 // api/ and sdk/ are separate modules so that a client importing them does not
 // inherit this module's Elastic License 2.0 through the module it lives in.
-// The replace directives point at the working tree: they let a contract change
-// be built and tested here before api/ and sdk/ are tagged, and they are what
-// makes `go build ./...` work on a checkout with no published submodule tags.
+// The replace directives point at the working tree, which is what lets a
+// contract change be built and tested here before the submodules are tagged.
+// They apply only while this is the main module: `go install
+// .../cmd/easyp-svc@v0.14.0` ignores them and resolves the requires from the
+// proxy, so those versions name real tags rather than placeholders.
 require (
-	github.com/easyp-tech/service/api v0.0.0
-	github.com/easyp-tech/service/sdk v0.0.0
+	github.com/easyp-tech/service/api v0.14.0
+	github.com/easyp-tech/service/sdk v0.14.0
 )
 
 replace (

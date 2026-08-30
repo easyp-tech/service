@@ -8,7 +8,7 @@ module github.com/easyp-tech/service/sdk
 go 1.26.6
 
 require (
-	github.com/easyp-tech/service/api v0.0.0
+	github.com/easyp-tech/service/api v0.14.0
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.11
@@ -32,6 +32,11 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-// Until api/ is published under its own tag, and afterwards so that a change to
-// the contract is testable here before it is released.
+// For development in this working tree only. A replace directive is honoured
+// solely in the main module, so a consumer that runs `go get .../sdk@v0.14.0`
+// never sees this line — it resolves the require above from the proxy. That is
+// why the version there has to be a tag that exists rather than a placeholder:
+// with v0.0.0 the require was unsatisfiable for everyone outside this
+// repository, and nothing here would have noticed, because here the replace
+// applies.
 replace github.com/easyp-tech/service/api => ../api
