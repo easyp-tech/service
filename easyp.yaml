@@ -66,17 +66,22 @@ lint:
 generate:
 
   inputs:
+    # root is the import root, path is what to walk inside it. The proto lives
+    # at api/easyp/generator/v1/ on disk but its import path is
+    # easyp/generator/v1/generator.proto — which is what PACKAGE_DIRECTORY_MATCH
+    # compares against package easyp.generator.v1. The api/ prefix is a Go
+    # module boundary, not part of the proto namespace.
     - directory:
-        path: api
-        root: "."
+        path: easyp
+        root: api
 
   plugins:
     - remote: "plugins.beta.easyp.tech/protocolbuffers/go"
-      out: .
+      out: api
       opts:
         paths: source_relative
     - remote: "plugins.beta.easyp.tech/grpc/go"
-      out: .
+      out: api
       opts:
         paths: source_relative
         require_unimplemented_servers: false
@@ -89,7 +94,7 @@ generate:
     # stale without any error. Until that is fixed, regenerate it with:
     #   go run -tags mcpgen ./test/mcpgen
     - command: ["go", "run", "github.com/easyp-tech/protoc-gen-mcp/cmd/protoc-gen-mcp@v0.5.0"]
-      out: .
+      out: api
       opts:
         paths: source_relative
     # - remote: "api.beta.easyp.tech/easyp-tech/easydoc"

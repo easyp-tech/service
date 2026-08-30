@@ -7,7 +7,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	generator "github.com/easyp-tech/service/api/generator/v1"
+	generator "github.com/easyp-tech/service/api/easyp/generator/v1"
 	"github.com/easyp-tech/service/internal/core"
 )
 
@@ -42,9 +42,11 @@ func listPlugins(ctx context.Context, svc core.Service, req *generator.PluginsRe
 		return nil, fmt.Errorf("ListPlugins: %w", err)
 	}
 
+	// No count field: it used to carry len(plugins) under the name `total`,
+	// which reads as the size of the collection and is not. A client that wants
+	// the page size has it in the slice.
 	response := &generator.PluginsResponse{
 		Plugins:       make([]*generator.PluginInfo, 0, len(list.Plugins)),
-		Total:         int32(len(list.Plugins)), //nolint:gosec // bounded by core.MaxPageSize
 		NextPageToken: encodePageToken(list.Next),
 	}
 

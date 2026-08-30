@@ -22,7 +22,15 @@ WORKDIR /app
 
 # Dependencies are their own layer, so editing source does not re-download them.
 # go.sum has to travel with go.mod or the download runs unverified.
+#
+# api/ and sdk/ are separate modules that the root module reaches through
+# `replace` directives pointing into the working tree. Those directories do not
+# exist yet at this point in the build — `COPY . .` comes later — and a replace
+# aimed at a missing directory fails the download outright. Copying the two
+# manifests first keeps the dependency layer cacheable and satisfies them.
 COPY go.mod go.sum ./
+COPY api/go.mod api/go.sum ./api/
+COPY sdk/go.mod sdk/go.sum ./sdk/
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 COPY . .

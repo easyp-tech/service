@@ -14,7 +14,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	generator "github.com/easyp-tech/service/api/generator/v1"
+	generator "github.com/easyp-tech/service/api/easyp/generator/v1"
 	"github.com/easyp-tech/service/internal/api"
 	"github.com/easyp-tech/service/internal/auth"
 	"github.com/easyp-tech/service/internal/core"
@@ -93,13 +93,13 @@ func TestAuthInterceptor(t *testing.T) {
 	}{
 		{
 			name:       "GenerateCode is anonymous",
-			method:     generator.ServiceAPI_GenerateCode_FullMethodName,
+			method:     generator.GeneratorAPI_GenerateCode_FullMethodName,
 			wantCalled: true,
 			wantActor:  "unknown",
 		},
 		{
 			name:       "Plugins is anonymous",
-			method:     generator.ServiceAPI_Plugins_FullMethodName,
+			method:     generator.GeneratorAPI_Plugins_FullMethodName,
 			wantCalled: true,
 			wantActor:  "unknown",
 		},
@@ -111,30 +111,30 @@ func TestAuthInterceptor(t *testing.T) {
 		},
 		{
 			name:       "CreatePlugin without a token is rejected",
-			method:     generator.ServiceAPI_CreatePlugin_FullMethodName,
+			method:     generator.GeneratorAPI_CreatePlugin_FullMethodName,
 			wantCalled: false,
 		},
 		{
 			name:          "UpdatePlugin with a wrong token is rejected",
-			method:        generator.ServiceAPI_UpdatePlugin_FullMethodName,
+			method:        generator.GeneratorAPI_UpdatePlugin_FullMethodName,
 			authorization: "Bearer wrong",
 			wantCalled:    false,
 		},
 		{
 			name:       "DeletePlugin without a token is rejected",
-			method:     generator.ServiceAPI_DeletePlugin_FullMethodName,
+			method:     generator.GeneratorAPI_DeletePlugin_FullMethodName,
 			wantCalled: false,
 		},
 		{
 			name:          "DeletePlugin with a valid token runs and names the actor",
-			method:        generator.ServiceAPI_DeletePlugin_FullMethodName,
+			method:        generator.GeneratorAPI_DeletePlugin_FullMethodName,
 			authorization: "Bearer good",
 			wantCalled:    true,
 			wantActor:     "ci",
 		},
 		{
 			name:       "an unlisted method is protected by default",
-			method:     "/api.generator.v1.ServiceAPI/SomethingNew",
+			method:     "/easyp.generator.v1.GeneratorAPI/SomethingNew",
 			wantCalled: false,
 		},
 	}
@@ -206,7 +206,7 @@ func TestAuthInterceptorErrorCarriesStatus(t *testing.T) {
 	_, err := newInterceptor(t).UnaryServerInterceptor()(
 		t.Context(),
 		nil,
-		&grpc.UnaryServerInfo{FullMethod: generator.ServiceAPI_DeletePlugin_FullMethodName},
+		&grpc.UnaryServerInfo{FullMethod: generator.GeneratorAPI_DeletePlugin_FullMethodName},
 		handler.unary,
 	)
 
@@ -227,12 +227,12 @@ func TestEveryRPCIsClassified(t *testing.T) {
 		"Plugins":      {},
 	}
 
-	for _, method := range generator.ServiceAPI_ServiceDesc.Methods {
+	for _, method := range generator.GeneratorAPI_ServiceDesc.Methods {
 		t.Run(method.MethodName, func(t *testing.T) {
 			t.Parallel()
 
 			handler := &recordingHandler{}
-			fullMethod := "/" + generator.ServiceAPI_ServiceDesc.ServiceName + "/" + method.MethodName
+			fullMethod := "/" + generator.GeneratorAPI_ServiceDesc.ServiceName + "/" + method.MethodName
 
 			_, err := newInterceptor(t).UnaryServerInterceptor()(
 				t.Context(),

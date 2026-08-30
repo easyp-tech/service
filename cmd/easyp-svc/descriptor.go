@@ -10,7 +10,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
 
-	generator "github.com/easyp-tech/service/api/generator/v1"
+	generator "github.com/easyp-tech/service/api/easyp/generator/v1"
 )
 
 // descriptorPermissions is the mode of the written descriptor set. It describes
@@ -25,9 +25,9 @@ const descriptorPermissions = 0o644
 // machine; a descriptor set sidesteps that entirely:
 //
 //	easyp-svc api descriptor -o api.protoset
-//	grpcurl -protoset api.protoset ... api.generator.v1.ServiceAPI/Plugins
+//	grpcurl -protoset api.protoset ... easyp.generator.v1.GeneratorAPI/Plugins
 func runAPIDescriptor(outPath string) error {
-	root, err := protoregistry.GlobalFiles.FindFileByPath(generator.File_api_generator_v1_generator_proto.Path())
+	root, err := protoregistry.GlobalFiles.FindFileByPath(generator.File_easyp_generator_v1_generator_proto.Path())
 	if err != nil {
 		return fmt.Errorf("protoregistry.FindFileByPath: %w", err)
 	}

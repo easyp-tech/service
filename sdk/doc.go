@@ -5,13 +5,17 @@
 //
 // Example usage:
 //
-//	c, err := sdk.NewClient("localhost:8080", sdk.WithInsecure())
+//	c, err := sdk.NewClient("localhost:23410", sdk.WithInsecure())
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
 //	defer c.Close()
 //
 //	plugins, err := c.ListPlugins(context.Background())
+//
+// Filtering is an option, so a call can gain one without changing shape:
+//
+//	plugins, err := c.ListPlugins(ctx, sdk.WithFilter(sdk.PluginFilter{Group: "grpc"}))
 //	if err != nil {
 //	    log.Fatal(err)
 //	}

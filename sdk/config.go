@@ -146,6 +146,23 @@ func WithRetryBaseDelay(d time.Duration) Option {
 	})
 }
 
+// WithRetryMaxDelay caps the backoff between retries. The delay grows
+// exponentially from WithRetryBaseDelay and stops here.
+func WithRetryMaxDelay(d time.Duration) Option {
+	return optionFunc(func(c *config) {
+		c.retryMaxDelay = d
+	})
+}
+
+// WithCreatePluginTimeout sets the default timeout for CreatePlugin,
+// UpdatePlugin and DeletePlugin. The default is generous because with object
+// storage enabled the service streams the whole plugin archive to checksum it.
+func WithCreatePluginTimeout(d time.Duration) Option {
+	return optionFunc(func(c *config) {
+		c.createPluginTimeout = d
+	})
+}
+
 // WithGenerateCodeTimeout sets the default timeout for GenerateCode calls.
 func WithGenerateCodeTimeout(d time.Duration) Option {
 	return optionFunc(func(c *config) {

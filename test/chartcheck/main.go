@@ -19,7 +19,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	generator "github.com/easyp-tech/service/api/generator/v1"
+	generator "github.com/easyp-tech/service/api/easyp/generator/v1"
 	"github.com/easyp-tech/service/sdk"
 )
 
@@ -62,7 +62,7 @@ func run(addr, group string) error {
 
 	// The SDK walks pages itself; the raw client below checks the wire-level
 	// paging. First the aggregate view:
-	all, err := client.ListPlugins(ctx, sdk.PluginFilter{Group: group})
+	all, err := client.ListPlugins(ctx, sdk.WithFilter(sdk.PluginFilter{Group: group}))
 	if err != nil {
 		return fmt.Errorf("ListPlugins: %w", err)
 	}
@@ -81,7 +81,7 @@ func run(addr, group string) error {
 	}
 	defer conn.Close()
 
-	raw := generator.NewServiceAPIClient(conn)
+	raw := generator.NewGeneratorAPIClient(conn)
 
 	var pages []int
 

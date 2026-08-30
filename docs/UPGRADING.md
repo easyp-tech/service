@@ -3,6 +3,146 @@
 Only releases that need a hand are listed. A version absent from this file
 upgrades by pulling the new image.
 
+## v0.13.x → v0.14.0
+
+The largest set of breaking changes this project will make. They are grouped
+here rather than spread over several releases on purpose: the surfaces freeze at
+1.0, and after that every one of them costs a major version.
+
+**Read [The gRPC service was renamed](#the-grpc-service-was-renamed) first.** It
+breaks every client at once, including `easyp` itself, and no other item matters
+until that one is handled.
+
+### The gRPC service was renamed
+
+The proto package and the service both changed name:
+
+| | Before | After |
+|---|---|---|
+| Package | `api.generator.v1` | `easyp.generator.v1` |
+| Service | `ServiceAPI` | `GeneratorAPI` |
+| Method path | `/api.generator.v1.ServiceAPI/GenerateCode` | `/easyp.generator.v1.GeneratorAPI/GenerateCode` |
+| Go import | `…/service/api/generator/v1` | `…/service/api/easyp/generator/v1` |
+
+The old package name carried no vendor prefix and collides with anything else
+called the same in a shared schema registry; `ServiceAPI` is two words for
+"thing". Both are frozen forever at 1.0, which is why they move now.
+
+**A client that is not rebuilt gets `Unimplemented` on every call.** The service
+does not answer the old method path. That includes `easyp` itself: `remote:`
+plugins in `easyp.yaml` reach this service over gRPC, so an `easyp` older than
+the release that tracks this change cannot generate against a v0.14.0 server.
+Upgrade `easyp` alongside the service.
+
+### `api` and `sdk` are separate Go modules
+
+Both carried an Apache-2.0 `LICENSE`, but Go tooling reads licences per module,
+not per directory — so a client importing the SDK had its licence scanner report
+the service's Elastic-2.0 on their own build.
+
+```
+require (
+    github.com/easyp-tech/service/api v0.14.0
+    github.com/easyp-tech/service/sdk v0.14.0
+)
+```
+
+`go get github.com/easyp-tech/service` no longer supplies either. They are tagged
+as `api/v0.14.0` and `sdk/v0.14.0`.
+
+### `PluginsResponse.total` is gone
+
+It held the number of plugins in *this page*, which `plugins.length` already
+says, under a name that promises the size of the collection. Field number 2 is
+reserved and will not be reused.
+
+### `UpdatePlugin` takes a field mask
+
+`update_mask` selects what to replace: `config`, `tags`, or both. **An omitted
+mask replaces both, exactly as before** — existing callers need no change.
+
+It exists because config was validated before anything else and an absent config
+was an empty one, so changing a tag meant resending the plugin's whole command
+line. An unknown path in the mask is rejected rather than ignored.
+
+### A plugin's `command[0]` must be inside `plugins_dir`
+
+The check used to accept a command where *any* element resolved inside the
+plugins directory, so `["/bin/sh", "-c", "…", "/plugins/x"]` passed on the
+strength of its last argument while `/bin/sh` was what ran. Arguments are still
+unconstrained; only the executable is checked.
+
+**A registration whose `command[0]` is a wrapper script outside `plugins_dir`
+now fails** with `INVALID_ARGUMENT`. Re-register it with the plugin binary as
+`command[0]` and the wrapper's work expressed in arguments, or move the wrapper
+inside the plugins directory.
+
+### Plugin archives may not contain symlinks pointing outside themselves
+
+An archive could ship its `plugin` entrypoint as a symlink to `/bin/sh`: the
+link file landed inside `plugins_dir`, so every containment check was satisfied.
+Such an archive is now refused at unpack with `unsafe path in archive`. Links
+that stay inside the archive still work.
+
+### `UpdatePlugin` recomputes the archive checksum
+
+Creating a plugin records the sha256 of its archive; updating one did not, and
+because the checksum lives inside the config document, replacing the config
+dropped it. An empty expected checksum means "nothing to check", so **one
+`UpdatePlugin` with a hand-written config permanently disabled verification of
+that plugin's binary** — silently.
+
+Update now recomputes it, as Create does. **A plugin whose verification had been
+switched off this way is checked again on its next download**, and if the object
+in storage no longer matches what was registered it fails with
+`plugin archive checksum mismatch` instead of running. That is the correct
+outcome, but it can surface as a plugin that "suddenly broke": re-push the
+archive and re-register, or confirm why the object changed.
+
+### Error messages changed shape
+
+Statuses used to carry the service's internal call chain —
+`api.app.Generate: c.registry.Get: ensureBinary: …`. They now carry only the
+terminal cause, and every non-OK status gains a `google.rpc.ErrorInfo` with a
+stable `reason` and domain `easyp.tech`.
+
+**A client matching on message text will break.** Match on `reason` instead:
+`NOT_FOUND`, `INVALID_PLUGIN_NAME`, `INVALID_CONFIG`, `GENERATION_FAILED`,
+`SERVER_OVERLOADED`, `ALREADY_EXISTS`, `MAX_PLUGINS_EXCEEDED`, `SHUTTING_DOWN`,
+`STORAGE_UNAVAILABLE`, `BINARY_NOT_UPLOADED`, `FEATURE_DENIED`,
+`DEADLINE_EXCEEDED`, `CANCELED`, `INTERNAL`. Adding a reason is a compatible
+change; changing what one means is not.
+
+Malformed plugin configurations also return `INVALID_ARGUMENT` rather than
+`INTERNAL`. They were the caller's mistake reported as the server's fault.
+
+### Go SDK
+
+- `ListPlugins(ctx, filter ...PluginFilter)` → `ListPlugins(ctx, ...ListOption)`.
+  Pass a filter as `sdk.WithFilter(sdk.PluginFilter{…})`.
+- The client no longer re-filters results it received; the server already did.
+- **Transient errors are `Unavailable` only.** `ResourceExhausted` and
+  `DeadlineExceeded` are no longer retried: the first is the service saying it
+  has no capacity (or that a licence ceiling was reached, which no wait clears),
+  and the second re-runs a generation that already spent the full timeout. A
+  caller who wants either retried can add an interceptor.
+- `UpdatePlugin` and `DeletePlugin` exist.
+- `WithRetryMaxDelay` and `WithCreatePluginTimeout` exist.
+- A large `WithMaxRetries` no longer panics inside the interceptor: the backoff
+  shift overflowed past roughly attempt 40 and `rand.Int64N` rejects the result.
+
+### The MCP endpoint lost the easyp.yaml schema tool
+
+`plugins_list` remains; the schema helpers are gone. They came from
+`easyp/mcp/easypconfig`, and taking that package meant taking the `easyp`
+module — which imports this service's own generated API in order to call it.
+A service that cannot compile without its own client is the wrong shape, so the
+dependency was removed rather than worked around. The tool is planned to return
+from a standalone library both sides can depend on.
+
+This only affects deployments that set `mcp.enabled=true`; the endpoint is off
+by default.
+
 ## v0.13.0 → v0.13.1
 
 The service is unchanged; this release exists to ship **chart 0.3.2**.

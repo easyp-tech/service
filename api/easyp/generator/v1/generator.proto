@@ -1,26 +1,50 @@
 syntax = "proto3";
 
-package api.generator.v1;
+package easyp.generator.v1;
 
 import "mcp/options/v1/options.proto";
 import "doc/v1/doc.proto";
 import "google/protobuf/compiler/plugin.proto";
+import "google/protobuf/field_mask.proto";
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 
-option go_package = "github.com/easyp-tech/service/api/generator/v1;generator";
+option go_package = "github.com/easyp-tech/service/api/easyp/generator/v1;generator";
 
 // EasyP Code Generation Service
 //
 // This service provides a centralized API for executing protobuf/gRPC code generation plugins.
-// Plugins run as isolated Docker containers, ensuring version consistency across development teams.
+// Plugins are executed by the service, so every caller uses the same plugin version.
 //
 // ## Benefits
 //
 // - **Version Control**: All developers use the same plugin versions
 // - **Zero Setup**: No local plugin installation required
-// - **Security**: Plugins run in sandboxed containers with resource limits
 // - **Auditability**: Centralized logging of all generation requests
+//
+// ## How plugins are executed
+//
+// A plugin is a binary the service runs as a local child process. It is not a
+// container. Stated plainly because this file said the opposite until v0.14.0,
+// and a customer's security review is the wrong place to discover it.
+//
+// What the service does constrain:
+//
+// - **Environment**: the child gets only the variables in the plugin's own
+//   config — the service's environment, including its database and object
+//   storage credentials, is not inherited
+// - **Process group**: each plugin runs in its own group, so a timeout kills
+//   the whole tree rather than leaving orphans
+// - **Time**: bounded by `worker_pool.generation_timeout` (120s by default)
+// - **Concurrency**: bounded by `worker_pool.max_concurrent_generations`
+// - **Output size**: bounded by `registry.max_output_size`
+// - **Executable**: must live inside the configured plugins directory
+//
+// What it does **not** constrain: memory, CPU, filesystem access beyond the
+// service account's own, and **network access** — a plugin can reach anything
+// the service's pod can reach. Registering a plugin is therefore as privileged
+// as running code on the host, and the write token that authorises it should be
+// treated accordingly.
 //
 // ## Quick Start
 //
@@ -40,15 +64,16 @@ option go_package = "github.com/easyp-tech/service/api/generator/v1;generator";
 //
 // Use `latest` as version to get the most recent version:
 // - `protocolbuffers/go:latest`
-service ServiceAPI {
+service GeneratorAPI {
   // Generate code using a specified plugin.
   //
   // This method executes a protobuf code generation plugin and returns the generated files.
-  // The plugin runs in an isolated Docker container with the following default limits:
+  // The plugin runs as a local child process under the limits described on the
+  // service above — notably a time bound and an output-size bound, and notably
+  // *not* a memory, CPU or network bound.
   //
-  // - **Network**: Disabled (no external access)
-  // - **Memory**: 128MB
-  // - **CPU**: 1.0 core
+  // This method is anonymous: it requires no credentials. Only the mutating
+  // methods take a write token.
   //
   // ## Error Codes
   //
@@ -56,6 +81,9 @@ service ServiceAPI {
   // |------|-------------|
   // | `NOT_FOUND` | Plugin not found in registry |
   // | `INVALID_ARGUMENT` | Invalid plugin name format |
+  // | `RESOURCE_EXHAUSTED` | The service is at its concurrency limit; retry later |
+  // | `UNAVAILABLE` | Object storage is unreachable, or the service is shutting down |
+  // | `FAILED_PRECONDITION` | The plugin is registered but its archive is not in storage |
   // | `INTERNAL` | Plugin execution failed |
   // | `DEADLINE_EXCEEDED` | Plugin execution timeout |
   rpc GenerateCode(GenerateCodeRequest) returns (GenerateCodeResponse) {
@@ -221,15 +249,20 @@ message PluginsRequest {
 
 // Response message for listing plugins.
 message PluginsResponse {
+  // Removed in v0.14.0. `total` was the number of plugins in *this page*, which
+  // is what `plugins.length` already says, while the name promised the size of
+  // the collection — the reading every client author would arrive at, and one
+  // that quietly under-reports any registry with more than a page in it.
+  //
+  // Reserved rather than repurposed: a field number that once meant something
+  // else on the wire must never come back with a new meaning.
+  reserved 2;
+  reserved "total";
+
   // List of available plugins matching the supplied filters.
   //
   // Plugins are sorted by group, name, and version.
   repeated PluginInfo plugins = 1 [(doc.v1.field) = {
-    output_only: true
-  }];
-
-  // Number of matching plugins in this response.
-  int32 total = 2 [(doc.v1.field) = {
     output_only: true
   }];
 
@@ -365,11 +398,26 @@ message UpdatePluginRequest {
     example: "v1.5.1"
   }];
 
-  // New plugin configuration (replaces existing).
+  // New plugin configuration.
+  //
+  // Replaces the existing config when `update_mask` selects it. Note that a
+  // config is validated on the way in: `command[0]` must name the plugin
+  // executable inside the service's plugins directory.
   google.protobuf.Struct config = 4;
 
-  // New tags (replaces existing).
+  // New tags. Replaces the existing tags when `update_mask` selects them.
   repeated string tags = 5;
+
+  // Fields to replace: any of "config", "tags".
+  //
+  // Omitting the mask replaces both, which is what this RPC has always done.
+  //
+  // The mask exists because "both, always" made a tag edit impossible: `config`
+  // is validated before anything else, an absent one was an empty one, and the
+  // call was rejected. Renaming a tag therefore meant resending the plugin's
+  // whole command line, and getting that wrong is how a registry entry starts
+  // pointing at the wrong binary.
+  google.protobuf.FieldMask update_mask = 6;
 }
 
 // Response message for updating a plugin.

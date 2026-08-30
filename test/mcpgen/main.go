@@ -1,6 +1,6 @@
 //go:build mcpgen
 
-// Command mcpgen regenerates api/generator/v1/generator.mcp.go by invoking
+// Command mcpgen regenerates api/easyp/generator/v1/generator.mcp.go by invoking
 // protoc-gen-mcp directly with a CodeGeneratorRequest built from the compiled
 // descriptors. It exists because `easyp generate`'s command-plugin executor
 // hands the plugin a request it answers with a valid, empty response — no
@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
@@ -27,8 +28,12 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/pluginpb"
 
-	generator "github.com/easyp-tech/service/api/generator/v1"
+	generator "github.com/easyp-tech/service/api/easyp/generator/v1"
 )
+
+// outDir mirrors `out: api` in easyp.yaml — the module directory the
+// generated contract lives in.
+const outDir = "api"
 
 func main() {
 	if err := run(); err != nil {
@@ -38,7 +43,7 @@ func main() {
 }
 
 func run() error {
-	target := generator.File_api_generator_v1_generator_proto
+	target := generator.File_easyp_generator_v1_generator_proto
 
 	var files []*descriptorpb.FileDescriptorProto
 
@@ -97,11 +102,17 @@ func run() error {
 	}
 
 	for _, f := range resp.File {
-		if err := os.WriteFile(f.GetName(), []byte(f.GetContent()), 0o644); err != nil { //nolint:gosec // generated source
-			return fmt.Errorf("write %s: %w", f.GetName(), err)
+		// The plugin names its output relative to the proto's import path, which
+		// is easyp/generator/v1/... — the api/ prefix is a Go module boundary,
+		// not part of the proto namespace. Joining it back on mirrors `out: api`
+		// in easyp.yaml, so both generators land in the same place.
+		out := filepath.Join(outDir, f.GetName())
+
+		if err := os.WriteFile(out, []byte(f.GetContent()), 0o644); err != nil { //nolint:gosec // generated source
+			return fmt.Errorf("write %s: %w", out, err)
 		}
 
-		fmt.Println("wrote", f.GetName())
+		fmt.Println("wrote", out)
 	}
 
 	return nil
