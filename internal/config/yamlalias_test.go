@@ -6,7 +6,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
 	"gopkg.in/yaml.v3"
 
 	"github.com/easyp-tech/service/internal/config"

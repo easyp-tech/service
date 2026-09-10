@@ -11,11 +11,10 @@ import (
 	"testing"
 	"testing/fstest"
 
+	_ "github.com/lib/pq"
 	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	_ "github.com/lib/pq"
 )
 
 const dsnEnv = "EASYP_TEST_DSN"
@@ -36,6 +35,11 @@ const dsnEnv = "EASYP_TEST_DSN"
 // audit rows land in audit_log_default, and a non-empty default partition
 // blocks creating the month that would overlap it. A rollback is therefore
 // bounded by audit.pre_create_months, not by a startup check.
+// Not parallel, for the same reason the restore drill is not: it migrates a
+// shared database up and back down, and nothing else may be looking at it while
+// the schema is mid-flight.
+//
+//nolint:paralleltest // exclusive use of the database is the whole point
 func TestRollbackOntoAnOlderBinary(t *testing.T) {
 	dsn := os.Getenv(dsnEnv)
 	if dsn == "" {

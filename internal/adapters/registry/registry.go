@@ -264,44 +264,6 @@ func (r *Registry) Get(ctx context.Context, pluginGroup, pluginName, pluginVersi
 	return &dbFormat, nil
 }
 
-// checkExecutableContained resolves the plugin entrypoint and refuses one that
-// leaves pluginsDir. A plugin with no command is left alone: ValidateConfig
-// rejects that at registration, and rows predating it are not made worse by
-// being reported as an escape they are not.
-func (r *Registry) checkExecutableContained(plug *plugin) error {
-	if len(plug.pluginConfig.Command) == 0 {
-		return nil
-	}
-
-	binPath := plug.pluginConfig.Command[0]
-
-	resolved, err := filepath.EvalSymlinks(binPath)
-	if err != nil {
-		// Not found is the storage-less deployment's normal state for a plugin
-		// nobody has installed; exec reports it with a better message than a
-		// containment check could.
-		if os.IsNotExist(err) {
-			return nil
-		}
-
-		return fmt.Errorf("%w: resolving plugin executable: %w", core.ErrGenerationFailed, err)
-	}
-
-	root, err := filepath.EvalSymlinks(r.pluginsDir)
-	if err != nil {
-		return fmt.Errorf("%w: resolving plugins directory: %w", core.ErrGenerationFailed, err)
-	}
-
-	if resolved != root && !strings.HasPrefix(resolved, root+string(filepath.Separator)) {
-		return fmt.Errorf(
-			"%w: plugin executable %q resolves to %q, outside %q",
-			core.ErrInvalidConfig, binPath, resolved, root,
-		)
-	}
-
-	return nil
-}
-
 // archiveKey returns the storage object key for a plugin archive.
 func archiveKey(group, name, version string) string {
 	return path.Join(group, name, version, "plugin.tgz")
@@ -708,8 +670,15 @@ func (r *Registry) Update(ctx context.Context, req core.UpdatePluginRequest) (*c
 	// as opposed to being written back with whatever the caller left empty.
 	// Only generated placeholders and fixed column names reach the string;
 	// every value goes through a parameter.
-	setClauses := make([]string, 0, 2)
-	args := make([]any, 0, 5)
+	// Two columns the mask can select, and at most five parameters: those two
+	// plus the three that identify the row.
+	const (
+		updatableColumns = 2
+		maxArgs          = 5
+	)
+
+	setClauses := make([]string, 0, updatableColumns)
+	args := make([]any, 0, maxArgs)
 
 	if req.UpdateConfig {
 		args = append(args, config)
@@ -721,12 +690,23 @@ func (r *Registry) Update(ctx context.Context, req core.UpdatePluginRequest) (*c
 		setClauses = append(setClauses, fmt.Sprintf("tags = $%d", len(args)))
 	}
 
-	args = append(args, req.Group, req.Name, req.Version)
+	// Positions recorded as each is appended: how many parameters precede them
+	// depends on the mask, and counting back from the end is the kind of
+	// arithmetic that survives one edit and not the next.
+	args = append(args, req.Group)
+	groupArg := len(args)
+
+	args = append(args, req.Name)
+	nameArg := len(args)
+
+	args = append(args, req.Version)
+	versionArg := len(args)
+
 	query := fmt.Sprintf(
 		`UPDATE plugins SET %s
 		 WHERE group_name = $%d AND name = $%d AND version = $%d
 		 RETURNING id, group_name, name, version, tags, created_at`,
-		strings.Join(setClauses, ", "), len(args)-2, len(args)-1, len(args),
+		strings.Join(setClauses, ", "), groupArg, nameArg, versionArg,
 	)
 
 	var plug plugin
@@ -779,6 +759,44 @@ func (r *Registry) Delete(ctx context.Context, group, name, version string) erro
 	}
 
 	r.cleanupBinary(ctx, group, name, version)
+
+	return nil
+}
+
+// checkExecutableContained resolves the plugin entrypoint and refuses one that
+// leaves pluginsDir. A plugin with no command is left alone: ValidateConfig
+// rejects that at registration, and rows predating it are not made worse by
+// being reported as an escape they are not.
+func (r *Registry) checkExecutableContained(plug *plugin) error {
+	if len(plug.pluginConfig.Command) == 0 {
+		return nil
+	}
+
+	binPath := plug.pluginConfig.Command[0]
+
+	resolved, err := filepath.EvalSymlinks(binPath)
+	if err != nil {
+		// Not found is the storage-less deployment's normal state for a plugin
+		// nobody has installed; exec reports it with a better message than a
+		// containment check could.
+		if os.IsNotExist(err) {
+			return nil
+		}
+
+		return fmt.Errorf("%w: resolving plugin executable: %w", core.ErrGenerationFailed, err)
+	}
+
+	root, err := filepath.EvalSymlinks(r.pluginsDir)
+	if err != nil {
+		return fmt.Errorf("%w: resolving plugins directory: %w", core.ErrGenerationFailed, err)
+	}
+
+	if resolved != root && !strings.HasPrefix(resolved, root+string(filepath.Separator)) {
+		return fmt.Errorf(
+			"%w: plugin executable %q resolves to %q, outside %q",
+			core.ErrInvalidConfig, binPath, resolved, root,
+		)
+	}
 
 	return nil
 }

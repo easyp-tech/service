@@ -7,6 +7,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// pairStride is how far apart consecutive keys sit in a mapping node's Content:
+// yaml.v3 stores a mapping as key, value, key, value.
+const pairStride = 2
+
 // yamlAliases maps a config key's former name to its current one, for keys that
 // were renamed rather than removed.
 //
@@ -64,13 +68,13 @@ func rewriteAliases(node *yaml.Node, path []string, aliases map[string]string, o
 	// Which current names this mapping already spells, so that a file carrying
 	// both the old and the new name is not silently resolved in favour of
 	// whichever came first.
-	present := make(map[string]bool, len(node.Content)/2)
-	for i := 0; i+1 < len(node.Content); i += 2 {
-		present[node.Content[i].Value] = true
+	present := make(map[string]bool, len(node.Content)/pairStride)
+	for idx := 0; idx+1 < len(node.Content); idx += pairStride {
+		present[node.Content[idx].Value] = true
 	}
 
-	for i := 0; i+1 < len(node.Content); i += 2 {
-		key := node.Content[i]
+	for idx := 0; idx+1 < len(node.Content); idx += pairStride {
+		key := node.Content[idx]
 
 		if key.Value == mergeKey {
 			continue
@@ -80,7 +84,8 @@ func rewriteAliases(node *yaml.Node, path []string, aliases map[string]string, o
 
 		current, renamed := aliases[name]
 		if !renamed {
-			rewriteAliases(resolveAlias(node.Content[i+1]), append(append([]string{}, path...), key.Value), aliases, out)
+			rewriteAliases(resolveAlias(node.Content[idx+1]),
+				append(append([]string{}, path...), key.Value), aliases, out)
 
 			continue
 		}
@@ -110,7 +115,7 @@ func rewriteAliases(node *yaml.Node, path []string, aliases map[string]string, o
 			Path:     name,
 			Line:     key.Line,
 			Message:  fmt.Sprintf("%s was renamed to %s; the old name still works but will stop", name, current),
-			Hint:     fmt.Sprintf("rename it to %s", newLeaf),
+			Hint:     "rename it to " + newLeaf,
 		})
 
 		key.Value = newLeaf
