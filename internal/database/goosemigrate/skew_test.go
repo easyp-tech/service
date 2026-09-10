@@ -20,7 +20,8 @@ import (
 const dsnEnv = "EASYP_TEST_DSN"
 
 // TestRollbackOntoAnOlderBinary records what actually happens when a database
-// is newer than the binary running against it — the case docs/BACKUP.md singles
+// is newer than the binary running against it — the case the backup procedure
+// (https://easyp.tech/docs/api-service/backup) singles
 // out and describes wrongly.
 //
 // BACKUP.md said the service "refuses to start rather than run against a schema
