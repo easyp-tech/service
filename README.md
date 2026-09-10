@@ -523,6 +523,18 @@ The token's name appears in the audit log, so `SELECT metadata FROM audit_log`
 shows which credential performed an operation. Multiple tokens let you rotate
 without downtime: add the new one, deploy, remove the old.
 
+```yaml
+auth:
+  # Demand a credential for reads as well — GenerateCode, Plugins and the MCP
+  # endpoint. Health is never covered: a probe carries none, and a listener that
+  # fails its own readiness check never serves anything.
+  #
+  # Off by default, because the same binary serves the public plugin catalogue.
+  # Turn it on for a private registry, where "readable by anything that can
+  # reach the pod" is not a property anyone chose.
+  require_authentication: true
+```
+
 ### Licensing
 
 Without a token the service runs in **community** mode: no audit log, and three
@@ -814,9 +826,15 @@ One list of write tokens (`auth.write_tokens`), stored as digests. No tenants,
 no roles, no per-plugin ownership. The audit trail records a token's *label* and
 the caller's IP, so two engineers sharing a CI token are indistinguishable in it.
 
-`GenerateCode` and `Plugins` are anonymous, and there is no setting that makes
-them otherwise. Anything that can reach the port can execute registered plugins,
-bounded only by `rate_limit`.
+`GenerateCode` and `Plugins` are anonymous **by default**, because the same
+binary serves the public catalogue, where demanding a credential to fetch a
+well-known plugin would break every client. Set
+`auth.require_authentication: true` and every RPC but health needs a write
+token — including the MCP endpoint, which is plain HTTP outside the interceptor
+chain and is wrapped separately.
+
+That is a single shared credential, not identity: it decides *whether* a caller
+may read, never *which* caller is reading.
 
 ### It does not run in more than one replica
 

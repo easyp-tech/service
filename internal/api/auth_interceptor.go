@@ -37,11 +37,36 @@ const (
 )
 
 // NewAuthInterceptor builds the interceptor and registers its failure counter.
+// AuthOption adjusts an AuthInterceptor at construction.
+type AuthOption func(*AuthInterceptor)
+
+// WithRequiredAuthentication empties the anonymous allow-list, so every RPC but
+// health needs a credential.
+//
+// An option rather than a second constructor because the allow-list is the only
+// thing that varies, and because the default has to stay the one that serves a
+// public catalogue.
+func WithRequiredAuthentication() AuthOption {
+	return func(ai *AuthInterceptor) {
+		for method := range ai.public {
+			// Health survives: a probe cannot present a credential, and a
+			// listener that fails its own readiness check never serves anything.
+			if method == healthpb.Health_Check_FullMethodName ||
+				method == healthpb.Health_Watch_FullMethodName {
+				continue
+			}
+
+			delete(ai.public, method)
+		}
+	}
+}
+
 func NewAuthInterceptor(
 	authenticator auth.Authenticator,
 	logger *slog.Logger,
 	reg *prometheus.Registry,
 	namespace string,
+	opts ...AuthOption,
 ) *AuthInterceptor {
 	failures := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
@@ -50,7 +75,7 @@ func NewAuthInterceptor(
 	}, []string{"reason"})
 	reg.MustRegister(failures)
 
-	return &AuthInterceptor{
+	interceptor := &AuthInterceptor{
 		authenticator: authenticator,
 		logger:        logger,
 		failures:      failures,
@@ -63,6 +88,12 @@ func NewAuthInterceptor(
 			healthpb.Health_Watch_FullMethodName:               {},
 		},
 	}
+
+	for _, opt := range opts {
+		opt(interceptor)
+	}
+
+	return interceptor
 }
 
 // UnaryServerInterceptor authenticates unary calls.
