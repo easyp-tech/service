@@ -94,6 +94,7 @@ type fakeGate struct {
 func (g fakeGate) Enabled(feature Feature) bool { return g.enabled[feature] }
 func (g fakeGate) MaxWorkers() int              { return -1 }
 func (g fakeGate) MaxPlugins() int              { return -1 }
+func (g fakeGate) MaxGenerations() int          { return -1 }
 
 // failingRegistry fails every call, which drives Core down its audit-on-error paths.
 type failingRegistry struct{ Registry }

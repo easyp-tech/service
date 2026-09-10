@@ -447,13 +447,22 @@ server:
   tls:
     cert_file: "/certs/server.crt"
     key_file: "/certs/server.key"
-    # Present ⇒ mutual TLS: only certificates signed by this CA are accepted.
+    # Present ⇒ mutual TLS. Every certificate this CA issues for client
+    # authentication is accepted — see the warning below before choosing one.
     client_ca_file: "/certs/ca.crt"
 ```
 
 Leaving `cert_file` empty serves plaintext; the service logs a warning on every
 start so that never happens unnoticed. `cert_file` and `key_file` must be set
 together, and `client_ca_file` alone is rejected at startup.
+
+**Name a CA that exists for this service, not your corporate root.** The
+listener checks that the client certificate chains to `client_ca_file` and
+carries the `clientAuth` extended key usage. It does not check *whose*
+certificate it is: there is no subject or SAN allow-list. An internal PKI issues
+`clientAuth` certificates to many workloads — that is what it is for — so naming
+one here makes every one of those workloads able to create, replace and delete
+plugins. A CA scoped to this service keeps the set to the clients you issued.
 
 In the compose stack traefik is the only client holding a certificate, and the
 gRPC port is not published to the host — the way in is `easyp.api.localhost` on
@@ -514,11 +523,36 @@ The token's name appears in the audit log, so `SELECT metadata FROM audit_log`
 shows which credential performed an operation. Multiple tokens let you rotate
 without downtime: add the new one, deploy, remove the old.
 
+```yaml
+auth:
+  # Demand a credential for reads as well — GenerateCode, Plugins and the MCP
+  # endpoint. Health is never covered: a probe carries none, and a listener that
+  # fails its own readiness check never serves anything.
+  #
+  # Off by default, because the same binary serves the public plugin catalogue.
+  # Turn it on for a private registry, where "readable by anything that can
+  # reach the pod" is not a property anyone chose.
+  require_authentication: true
+```
+
 ### Licensing
 
-Without a token the service runs in **community** mode: no audit log, at most 4
-workers and 10 registered plugins. Enterprise needs two things — a token and the
-public key it is verified against:
+Without a token the service runs in **community** mode: no audit log, and three
+ceilings that a licence lifts —
+
+| Setting | Community | Enterprise |
+|---|---|---|
+| `worker_pool.workers` | 4 | as configured |
+| `worker_pool.max_concurrent_generations` | 16 | as configured |
+| registered plugins | 10 | unlimited |
+
+Each community ceiling is the shipped default of the setting it caps, so a
+deployment that never changed one is not affected by the ceiling existing. A
+configuration above it is lowered at startup, and the service logs which setting
+was lowered and to what — it is a ceiling, not a substitution, so asking for
+less than the tier permits gives you less.
+
+Enterprise needs two things — a token and the public key it is verified against:
 
 ```bash
 LICENSE_PUBLIC_KEYS=<kid>:<hex> LICENSE_KEY=<paseto-token> task up
@@ -792,9 +826,15 @@ One list of write tokens (`auth.write_tokens`), stored as digests. No tenants,
 no roles, no per-plugin ownership. The audit trail records a token's *label* and
 the caller's IP, so two engineers sharing a CI token are indistinguishable in it.
 
-`GenerateCode` and `Plugins` are anonymous, and there is no setting that makes
-them otherwise. Anything that can reach the port can execute registered plugins,
-bounded only by `rate_limit`.
+`GenerateCode` and `Plugins` are anonymous **by default**, because the same
+binary serves the public catalogue, where demanding a credential to fetch a
+well-known plugin would break every client. Set
+`auth.require_authentication: true` and every RPC but health needs a write
+token — including the MCP endpoint, which is plain HTTP outside the interceptor
+chain and is wrapped separately.
+
+That is a single shared credential, not identity: it decides *whether* a caller
+may read, never *which* caller is reading.
 
 ### It does not run in more than one replica
 
@@ -835,6 +875,33 @@ audience checked, expiry with the grace period the token carries. The public
 half is supplied by `license.public_keys`, which is part of the deployment's
 configuration. Whoever can edit those values decides which authority may issue
 licences for that installation.
+
+### Mutual TLS checks the certificate authority, not the caller
+
+Mutual TLS is real: with `server.tls.client_ca_file` set, the listener requires a
+client certificate, verifies it chains to that CA, and — through Go's TLS stack —
+requires the `clientAuth` extended key usage, so a server or edge certificate
+from the same CA is refused.
+
+What it does not do is look at who the certificate says it is. No common name,
+no SAN allow-list, no mapping to an identity: the audit trail still records the
+write token's label, not the certificate's subject. So the CA named there is the
+entire check, and every certificate it issues for client authentication is a
+write credential for this installation.
+
+### The Go client's stability is the wire contract's stability
+
+`sdk.Client.ListPlugins` returns `[]*generator.PluginInfo` — the generated type
+from the `api` module, not a type the SDK owns. That is the usual shape for a
+gRPC client and it avoids a mirror of every message, but the consequence is
+permanent: a v2 of the wire contract is a v2 of the client, whatever else the
+client's own surface does. The two modules version separately and are released
+in lockstep for that reason.
+
+`ListPlugins` also walks every page and returns the whole registry. Each request
+gets its own timeout, so the walk finishes on a large registry, but there is no
+way to ask for one page — a caller that wants to stream results needs a method
+that does not exist yet.
 
 ### The Go client carries the MCP libraries
 

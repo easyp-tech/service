@@ -127,9 +127,6 @@ func (c *Client) GenerateCode(
 // only have been added by changing the signature — which, past v1, means a new
 // method with a worse name.
 func (c *Client) ListPlugins(ctx context.Context, opts ...ListOption) ([]*generator.PluginInfo, error) {
-	ctx, cancel := c.withTimeout(ctx, c.cfg.listPluginsTimeout)
-	defer cancel()
-
 	var listCfg listConfig
 	for _, opt := range opts {
 		opt.applyList(&listCfg)
@@ -155,7 +152,19 @@ func (c *Client) ListPlugins(ctx context.Context, opts ...ListOption) ([]*genera
 	// The filter travels with every page: the continuation token is only
 	// meaningful alongside the filters it was issued for.
 	for {
-		resp, err := c.genClient.Plugins(ctx, req)
+		// Per page, not per traversal. The timeout used to be applied once
+		// around the whole loop, which made it a budget for the entire
+		// registry: past a few thousand plugins the last page never arrived
+		// and the call failed with nothing to show, so a large registry — an
+		// Enterprise one, where the plugin count is not capped — could not be
+		// listed at all. A caller who wants to bound the whole walk still can,
+		// by giving ctx a deadline: withTimeout honours the earlier of the two.
+		page, cancel := c.withTimeout(ctx, c.cfg.listPluginsTimeout)
+
+		resp, err := c.genClient.Plugins(page, req)
+
+		cancel()
+
 		if err != nil {
 			return nil, fmt.Errorf("c.genClient.Plugins: %w", err)
 		}
@@ -165,6 +174,12 @@ func (c *Client) ListPlugins(ctx context.Context, opts ...ListOption) ([]*genera
 		token := resp.GetNextPageToken()
 		if token == "" {
 			break
+		}
+
+		// Checked between pages as well as inside the call: a cancelled caller
+		// should stop the walk, not begin another page of it.
+		if err = ctx.Err(); err != nil {
+			return nil, fmt.Errorf("listing plugins: %w", err)
 		}
 
 		req.PageToken = &token

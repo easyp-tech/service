@@ -37,6 +37,18 @@ var (
 // leave the registry open.
 type AuthConfig struct {
 	WriteTokens TokenList `env:"WRITE_TOKENS" yaml:"write_tokens"`
+
+	// RequireAuthentication demands a credential for every RPC, including the
+	// reads that are anonymous by default.
+	//
+	// The default is false because the same binary serves the public catalogue,
+	// where insisting on a credential to fetch a well-known plugin would break
+	// every client. A private registry is the opposite case: "readable by
+	// anything that can reach the pod" is not a property its operator chose.
+	//
+	// Health is never covered — probes carry no credentials, and a listener
+	// whose health check fails closed is a listener that never becomes ready.
+	RequireAuthentication bool `env:"REQUIRE_AUTHENTICATION,default=false" yaml:"require_authentication"`
 }
 
 // WriteToken is one credential permitted to call the mutating RPCs. Name is a
