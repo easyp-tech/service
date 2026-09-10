@@ -252,3 +252,102 @@ func TestEveryRPCIsClassified(t *testing.T) {
 		})
 	}
 }
+
+// TestRequiredAuthenticationClosesTheReads covers the setting that turns an
+// irreversible promise into a configurable one.
+//
+// Anonymous reads are correct for the public catalogue — demanding a credential
+// to fetch a well-known plugin would break every client — and wrong for a
+// private registry, where "readable by anything that can reach the pod" is not a
+// property its operator chose. Without the setting, 1.0 would freeze the first
+// answer for both.
+func TestRequiredAuthenticationClosesTheReads(t *testing.T) {
+	t.Parallel()
+
+	strict := api.NewAuthInterceptor(
+		fakeAuthenticator{accept: "good"},
+		slog.New(slog.DiscardHandler),
+		prometheus.NewRegistry(),
+		"test",
+		api.WithRequiredAuthentication(),
+	)
+
+	tests := []struct {
+		name          string
+		method        string
+		authorization string
+		wantCalled    bool
+	}{
+		{
+			name:       "GenerateCode now needs a credential",
+			method:     generator.GeneratorAPI_GenerateCode_FullMethodName,
+			wantCalled: false,
+		},
+		{
+			name:       "Plugins now needs a credential",
+			method:     generator.GeneratorAPI_Plugins_FullMethodName,
+			wantCalled: false,
+		},
+		{
+			name:          "GenerateCode with a credential is served",
+			method:        generator.GeneratorAPI_GenerateCode_FullMethodName,
+			authorization: "Bearer good",
+			wantCalled:    true,
+		},
+		{
+			// A probe cannot present one, and a listener that fails its own
+			// readiness check never serves anything at all.
+			name:       "health is still reachable without one",
+			method:     healthpb.Health_Check_FullMethodName,
+			wantCalled: true,
+		},
+		{
+			name:       "Health.Watch too",
+			method:     healthpb.Health_Watch_FullMethodName,
+			wantCalled: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			handler := &recordingHandler{}
+
+			_, err := strict.UnaryServerInterceptor()(
+				ctxWith(t, tt.authorization),
+				nil,
+				&grpc.UnaryServerInfo{FullMethod: tt.method},
+				handler.unary,
+			)
+
+			assert.Equal(t, tt.wantCalled, handler.called, "handler reached")
+
+			if !tt.wantCalled {
+				require.Equal(t, codes.Unauthenticated, status.Code(err))
+
+				return
+			}
+
+			require.NoError(t, err)
+		})
+	}
+}
+
+// TestDefaultLeavesReadsAnonymous pins the other half: the option is opt-in, and
+// the public catalogue is what the default has to keep serving.
+func TestDefaultLeavesReadsAnonymous(t *testing.T) {
+	t.Parallel()
+
+	handler := &recordingHandler{}
+
+	_, err := newInterceptor(t).UnaryServerInterceptor()(
+		ctxWith(t, ""),
+		nil,
+		&grpc.UnaryServerInfo{FullMethod: generator.GeneratorAPI_Plugins_FullMethodName},
+		handler.unary,
+	)
+
+	require.NoError(t, err)
+	assert.True(t, handler.called)
+}

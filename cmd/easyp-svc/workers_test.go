@@ -3,9 +3,11 @@ package main
 import (
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/easyp-tech/service/internal/config"
 	"github.com/easyp-tech/service/internal/core"
 )
 
@@ -60,7 +62,40 @@ func TestCappedWorkers(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			require.Equal(t, tc.want, cappedWorkers(tc.configured, tc.limit, discard))
+			require.Equal(t, tc.want, cappedByLicence("worker_pool.workers", tc.configured, tc.limit, discard))
 		})
 	}
+}
+
+// TestCommunityCeilingsMatchTheShippedDefaults is the check that keeps the
+// generations ceiling from quietly becoming a take.
+//
+// The lever exists so the tier can be drawn on throughput later; the planks are
+// set where the configuration already stands, so nobody who never touched the
+// setting loses anything on the day it lands. If a default moves, this fails and
+// the ceiling has to be moved with it — deliberately, rather than by drift.
+func TestCommunityCeilingsMatchTheShippedDefaults(t *testing.T) {
+	t.Parallel()
+
+	defaults, err := config.Defaults(t.Context())
+	require.NoError(t, err)
+
+	claims := core.CommunityLicenseClaims()
+
+	require.Equal(t, defaults.WorkerPool.Workers, claims.MaxWorkers,
+		"the community worker ceiling must be the shipped default")
+	require.Equal(t, defaults.WorkerPool.MaxConcurrentGenerations, claims.MaxGenerations,
+		"the community generation ceiling must be the shipped default")
+}
+
+// TestEnterpriseHasNoGenerationCeiling pins the other half: the paid tier
+// configures its own throughput.
+func TestEnterpriseHasNoGenerationCeiling(t *testing.T) {
+	t.Parallel()
+
+	claims := core.EnterpriseLicenseClaims(time.Now().Add(time.Hour), false)
+
+	require.Equal(t, core.LicenseUnlimited, claims.MaxGenerations)
+	require.Equal(t, 64, cappedByLicence("worker_pool.max_concurrent_generations", 64,
+		claims.MaxGenerations, slog.New(slog.DiscardHandler)))
 }

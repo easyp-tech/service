@@ -20,6 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 
 	adapter_audit "github.com/easyp-tech/service/internal/adapters/audit"
 	adapter_metrics "github.com/easyp-tech/service/internal/adapters/metrics"
@@ -161,6 +162,43 @@ func checkConfiguredFiles(cfg config.Config, log *slog.Logger) error {
 	return preflight.Err() //nolint:wrapcheck // each diagnostic already names its setting and its reason
 }
 
+// requireBearer puts the same credential check in front of the MCP endpoint
+// that the gRPC interceptor puts in front of the RPCs.
+//
+// When required is false the handler is returned untouched, so the default costs
+// nothing and the public catalogue keeps serving MCP anonymously.
+//
+// The authenticator speaks gRPC metadata, which is a map of header names to
+// values — the same shape an HTTP header set has — so the adaptation is one
+// conversion rather than a second authenticator.
+func requireBearer(
+	next http.Handler, authenticator auth.Authenticator, required bool, log *slog.Logger,
+) http.Handler {
+	if !required {
+		return next
+	}
+
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		md := metadata.New(map[string]string{
+			"authorization": request.Header.Get("Authorization"),
+		})
+
+		actor, err := authenticator.Authenticate(request.Context(), md)
+		if err != nil {
+			// The same reticence the gRPC path shows: the reason is logged, not
+			// returned, so a caller learns nothing from the difference between a
+			// missing credential and a wrong one.
+			log.Warn("MCP request rejected", "error", err, "remote", request.RemoteAddr)
+			writer.Header().Set("WWW-Authenticate", "Bearer")
+			http.Error(writer, "valid credentials are required", http.StatusUnauthorized)
+
+			return
+		}
+
+		next.ServeHTTP(writer, request.WithContext(core.WithActor(request.Context(), actor.Name)))
+	})
+}
+
 // configSource names where the settings came from, for the startup summary.
 func configSource(cfgPath string) string {
 	if cfgPath == "" {
@@ -258,10 +296,10 @@ func run(ctx context.Context, cfg config.Config, reg *prometheus.Registry) error
 		return fmt.Errorf("buildLicenseClient: %w", err)
 	}
 
-	_, pool, _, grpcServer, apiSrv := initApp(ctx, cfg, repo, reg, namespace, auditWorker, grpcCreds, licenseClient)
+	application := initApp(ctx, cfg, repo, reg, namespace, auditWorker, grpcCreds, licenseClient)
 
 	defer func() {
-		lost := pool.Shutdown(cfg.WorkerPool.ShutdownTimeout)
+		lost := application.pool.Shutdown(cfg.WorkerPool.ShutdownTimeout)
 		if lost > 0 {
 			log.Warn("generation jobs lost on shutdown", "count", lost)
 		}
@@ -275,7 +313,7 @@ func run(ctx context.Context, cfg config.Config, reg *prometheus.Registry) error
 	// From here readiness reports the database rather than "starting".
 	readiness.Store(healthCheck)
 
-	serveErr := serveApp(ctx, log, cfg, reg, grpcServer, apiSrv.MCPHandler(), partitions.Run)
+	serveErr := serveApp(ctx, log, cfg, reg, application.grpcServer, application.mcpHandler, partitions.Run)
 	if serveErr != nil {
 		serveErr = fmt.Errorf("serveApp: %w", serveErr)
 	}
@@ -530,7 +568,7 @@ func checkServiceTier(configured string, actualTier func() string, log *slog.Log
 	}
 }
 
-// cappedWorkers applies the licence's worker ceiling to the configured number.
+// cappedByLicence applies a licence ceiling to a configured number.
 //
 // A ceiling, not a substitution. This used to assign the licence limit outright,
 // which made it a floor as well: a community deployment asking for two workers
@@ -540,15 +578,63 @@ func checkServiceTier(configured string, actualTier func() string, log *slog.Log
 //
 // A licence that imposes no limit of its own reports core.LicenseUnlimited (-1),
 // so anything non-positive leaves the configured value alone.
-func cappedWorkers(configured, licenseLimit int, log *slog.Logger) int {
+//
+// setting is the dotted name of the field being capped, so the log line names
+// what an operator would have to change rather than what the code calls it.
+func cappedByLicence(setting string, configured, licenseLimit int, log *slog.Logger) int {
 	if licenseLimit <= 0 || licenseLimit >= configured {
 		return configured
 	}
 
-	log.Info("worker_pool.workers lowered to the licence tier's limit",
-		"configured", configured, "licence_limit", licenseLimit)
+	log.Info(setting+" lowered to the licence tier's limit",
+		"setting", setting, "configured", configured, "licence_limit", licenseLimit)
 
 	return licenseLimit
+}
+
+// buildFeatureGate resolves the licence and returns the gate every ceiling is
+// read from.
+//
+// A failure here is not fatal: an installation with no licence, or one whose
+// licence cannot be read, is a community installation, which is a supported way
+// to run this and not an error state.
+func buildFeatureGate(
+	ctx context.Context,
+	cfg config.Config,
+	licenseClient core.LicenseClient,
+	log *slog.Logger,
+	reg *prometheus.Registry,
+	namespace string,
+) *license.FeatureGate {
+	lm, err := license.NewManager(ctx, licenseClient, license.Config{
+		CacheTTL: cfg.License.CacheTTL,
+	}, log, reg, namespace)
+	if err != nil {
+		log.Warn("license initialization error, continuing in community mode", "error", err)
+	}
+
+	lm.StartRefreshWatcher(ctx)
+
+	// Read through a closure rather than sampled once: the licence a deployment
+	// is running on changes while it runs — that is what the grace period is —
+	// and a tier compared at boot could never report the change.
+	checkServiceTier(cfg.Telemetry.ServiceTier, func() string { return lm.Claims().Tier }, log, reg, namespace)
+
+	return license.NewFeatureGate(lm)
+}
+
+// app is what initApp assembles. A struct rather than six return values: half
+// of them are unused at any given call site, and a positional list that long is
+// read by counting commas.
+type app struct {
+	core       *core.Core
+	pool       *core.WorkerPool
+	gate       *license.FeatureGate
+	grpcServer *grpc.Server
+	api        *api.API
+	// mcpHandler is already wrapped in whatever auth.require_authentication
+	// asked for; see requireBearer.
+	mcpHandler http.Handler
 }
 
 func initApp(
@@ -560,35 +646,29 @@ func initApp(
 	auditSink core.AuditSink,
 	grpcCreds credentials.TransportCredentials,
 	licenseClient core.LicenseClient,
-) (*core.Core, *core.WorkerPool, *license.FeatureGate, *grpc.Server, *api.API) {
+) app {
 	log := monitor.FromContext(ctx)
 
-	lm, err := license.NewManager(ctx, licenseClient, license.Config{
-		CacheTTL: cfg.License.CacheTTL,
-	}, log, reg, namespace)
-	if err != nil {
-		log.Warn("license initialization error, continuing in community mode", "error", err)
-	}
-	lm.StartRefreshWatcher(ctx)
-
-	gate := license.NewFeatureGate(lm)
-
-	checkServiceTier(cfg.Telemetry.ServiceTier, func() string { return lm.Claims().Tier }, log, reg, namespace)
+	gate := buildFeatureGate(ctx, cfg, licenseClient, log, reg, namespace)
 
 	rl, cl := buildLimiters(ctx, cfg, gate, log, reg, namespace)
 
 	tracedRegistry := telemetry.NewTracingRegistry(repo)
 
-	wpWorkers := cappedWorkers(cfg.WorkerPool.Workers, gate.MaxWorkers(), log)
+	wpWorkers := cappedByLicence("worker_pool.workers", cfg.WorkerPool.Workers, gate.MaxWorkers(), log)
+	wpGenerations := cappedByLicence("worker_pool.max_concurrent_generations",
+		cfg.WorkerPool.MaxConcurrentGenerations, gate.MaxGenerations(), log)
 
 	metricsAdapter := adapter_metrics.New(reg, namespace)
 	pool := core.NewWorkerPool(tracedRegistry, core.WorkerPoolConfig{
 		Workers:   wpWorkers,
 		QueueSize: cfg.WorkerPool.QueueSize,
-		// Not capped by the licence: MaxWorkers bounds plugin lookups, and this
-		// bounds plugin processes. Tying the paid limit to it is a pricing
-		// decision, not a plumbing one.
-		MaxConcurrentGenerations: cfg.WorkerPool.MaxConcurrentGenerations,
+		// Capped separately from Workers, because the two bound different things:
+		// a worker is held only while a plugin is located — a database read, and
+		// on a miss a download — while a generation is the plugin process. On a
+		// warm cache the worker ceiling barely binds, so this is the number that
+		// decides throughput, and the one a tier is worth drawing on.
+		MaxConcurrentGenerations: wpGenerations,
 		GenerationTimeout:        cfg.WorkerPool.GenerationTimeout,
 		MaxRetries:               cfg.WorkerPool.MaxRetries,
 		ShutdownTimeout:          cfg.WorkerPool.ShutdownTimeout,
@@ -610,9 +690,25 @@ func initApp(
 	// a new context is derived (as the auth interceptor does) and is empty
 	// ceremony when, as here, the stream's own context is merely read.
 	grpcSrv, apiSrv := buildGRPCServer( //nolint:contextcheck // limiter reads ss.Context(), derives nothing
-		log, reg, gate, rl, cl, tracedCore, grpcCreds, authenticator, cfg.Server)
+		log, reg, gate, rl, cl, tracedCore, grpcCreds, authenticator, cfg.Server,
+		cfg.Auth.RequireAuthentication)
 
-	return module, pool, gate, grpcSrv, apiSrv
+	// Wrapped here rather than at the listener, because this is where the
+	// authenticator is. The MCP endpoint is plain HTTP and sits outside the
+	// gRPC interceptor chain, so require_authentication has to reach it
+	// separately — otherwise closing the reads would close them everywhere
+	// except the one surface that carries no credential at all.
+	return app{
+		core:       module,
+		pool:       pool,
+		gate:       gate,
+		grpcServer: grpcSrv,
+		api:        apiSrv,
+		// Already wrapped in whatever auth.require_authentication asked for: MCP
+		// is plain HTTP outside the interceptor chain, so the check has to be
+		// put in front of it here, where the authenticator is.
+		mcpHandler: requireBearer(apiSrv.MCPHandler(), authenticator, cfg.Auth.RequireAuthentication, log),
+	}
 }
 
 func buildGRPCServer(
@@ -625,6 +721,7 @@ func buildGRPCServer(
 	creds credentials.TransportCredentials,
 	authenticator auth.Authenticator,
 	srvCfg config.Server,
+	requireAuth bool,
 ) (*grpc.Server, *api.API) {
 	serverMetrics := grpchelper.NewServerMetrics(reg, "easyp", "api")
 
@@ -635,7 +732,7 @@ func buildGRPCServer(
 	// wherever they happen, rather than only the ones a handler saw.
 	panicsCounter := safe.NewGuard(reg, serviceNamespace).Counter()
 
-	unaryExtra, streamExtra := buildExtraInterceptors(log, reg, gate, rl, cl, authenticator)
+	unaryExtra, streamExtra := buildExtraInterceptors(log, reg, gate, rl, cl, authenticator, requireAuth)
 
 	// Validate has already rejected an unparseable CIDR, so this cannot fail on
 	// a configuration that got this far.
@@ -701,8 +798,14 @@ func buildExtraInterceptors(
 	rl *ratelimiter.RateLimiter,
 	cl *ratelimiter.ConcurrencyLimiter,
 	authenticator auth.Authenticator,
+	requireAuth bool,
 ) ([]grpc.UnaryServerInterceptor, []grpc.StreamServerInterceptor) {
-	authInterceptor := api.NewAuthInterceptor(authenticator, log, reg, serviceNamespace)
+	var authOpts []api.AuthOption
+	if requireAuth {
+		authOpts = append(authOpts, api.WithRequiredAuthentication())
+	}
+
+	authInterceptor := api.NewAuthInterceptor(authenticator, log, reg, serviceNamespace, authOpts...)
 	licenseInterceptor := api.NewLicenseInterceptor(gate, log)
 
 	unary := []grpc.UnaryServerInterceptor{
