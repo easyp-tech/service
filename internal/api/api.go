@@ -160,11 +160,13 @@ func (api *API) UpdatePlugin(ctx context.Context, request *generator.UpdatePlugi
 // what it intends to change; silently dropping a path it named would apply some
 // other update than the one asked for, and "tag" instead of "tags" is exactly
 // the kind of thing that gets typed.
-func updateMaskFields(mask *fieldmaskpb.FieldMask) (updateConfig, updateTags bool, err error) {
+func updateMaskFields(mask *fieldmaskpb.FieldMask) (bool, bool, error) {
 	paths := mask.GetPaths()
 	if len(paths) == 0 {
 		return true, true, nil
 	}
+
+	var updateConfig, updateTags bool
 
 	for _, path := range paths {
 		switch strings.TrimSpace(path) {

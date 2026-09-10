@@ -25,6 +25,11 @@ import (
 // checks is exactly what that document promises survives: the registry, the
 // audit partitions, and the migration bookkeeping that decides what startup
 // does next.
+// Not parallel, and cannot be: it drops and recreates the public schema of a
+// shared database. A second test running against it at the same time would see
+// its tables vanish mid-query.
+//
+//nolint:paralleltest // exclusive use of the database is the whole point
 func TestBackupRestoreRoundTrip(t *testing.T) {
 	dsn := os.Getenv(dsnEnv)
 	if dsn == "" {
@@ -41,7 +46,7 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 
 	t.Cleanup(func() { _ = db.Close() })
 
-	reset(t, ctx, db)
+	reset(ctx, t, db)
 	require.NoError(t, goosemigrate.Up(ctx, dsn))
 
 	// The registry, with a checksum inside the config document. That is where
@@ -69,27 +74,27 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	wantPlugins := count(t, ctx, db, "SELECT count(*) FROM plugins")
-	wantAudit := count(t, ctx, db, "SELECT count(*) FROM audit_log")
-	wantVersion := count(t, ctx, db, "SELECT max(version_id) FROM goose_db_version")
-	wantParts := count(t, ctx, db, partitionCountQuery)
+	wantPlugins := count(ctx, t, db, "SELECT count(*) FROM plugins")
+	wantAudit := count(ctx, t, db, "SELECT count(*) FROM audit_log")
+	wantVersion := count(ctx, t, db, "SELECT max(version_id) FROM goose_db_version")
+	wantParts := count(ctx, t, db, partitionCountQuery)
 
 	require.Positive(t, wantParts, "the audit table must be partitioned before this proves anything")
 
 	dump := filepath.Join(t.TempDir(), "backup.sql")
-	run(t, "pg_dump", "--dbname="+dsn, "--file="+dump)
+	run(ctx, t, "pg_dump", "--dbname="+dsn, "--file="+dump)
 
 	// The disaster.
-	reset(t, ctx, db)
+	reset(ctx, t, db)
 
-	run(t, "psql", "--dbname="+dsn, "--set=ON_ERROR_STOP=1", "--quiet", "--file="+dump)
+	run(ctx, t, "psql", "--dbname="+dsn, "--set=ON_ERROR_STOP=1", "--quiet", "--file="+dump)
 
-	assert.Equal(t, wantPlugins, count(t, ctx, db, "SELECT count(*) FROM plugins"),
+	assert.Equal(t, wantPlugins, count(ctx, t, db, "SELECT count(*) FROM plugins"),
 		"the registry is the one thing nothing else holds")
-	assert.Equal(t, wantAudit, count(t, ctx, db, "SELECT count(*) FROM audit_log"))
-	assert.Equal(t, wantVersion, count(t, ctx, db, "SELECT max(version_id) FROM goose_db_version"),
+	assert.Equal(t, wantAudit, count(ctx, t, db, "SELECT count(*) FROM audit_log"))
+	assert.Equal(t, wantVersion, count(ctx, t, db, "SELECT max(version_id) FROM goose_db_version"),
 		"migration bookkeeping decides what the next startup does")
-	assert.Equal(t, wantParts, count(t, ctx, db, partitionCountQuery),
+	assert.Equal(t, wantParts, count(ctx, t, db, partitionCountQuery),
 		"partitions must come back as partitions, not as one flat table")
 
 	// The checksum survived inside the config document. Losing it does not fail
@@ -102,7 +107,7 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 	// And BACKUP.md's instruction to let the service migrate holds: there is
 	// nothing left to apply.
 	require.NoError(t, goosemigrate.Up(ctx, dsn))
-	assert.Equal(t, wantVersion, count(t, ctx, db, "SELECT max(version_id) FROM goose_db_version"))
+	assert.Equal(t, wantVersion, count(ctx, t, db, "SELECT max(version_id) FROM goose_db_version"))
 }
 
 // partitionCountQuery counts the partitions attached to audit_log.
@@ -111,14 +116,14 @@ SELECT count(*) FROM pg_inherits
 JOIN pg_class parent ON pg_inherits.inhparent = parent.oid
 WHERE parent.relname = 'audit_log'`
 
-func reset(t *testing.T, ctx context.Context, db *sql.DB) {
+func reset(ctx context.Context, t *testing.T, db *sql.DB) {
 	t.Helper()
 
 	_, err := db.ExecContext(ctx, "DROP SCHEMA public CASCADE; CREATE SCHEMA public")
 	require.NoError(t, err)
 }
 
-func count(t *testing.T, ctx context.Context, db *sql.DB, query string) int64 {
+func count(ctx context.Context, t *testing.T, db *sql.DB, query string) int64 {
 	t.Helper()
 
 	var n int64
@@ -127,10 +132,10 @@ func count(t *testing.T, ctx context.Context, db *sql.DB, query string) int64 {
 	return n
 }
 
-func run(t *testing.T, name string, args ...string) {
+func run(ctx context.Context, t *testing.T, name string, args ...string) {
 	t.Helper()
 
-	out, err := exec.Command(name, args...).CombinedOutput()
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
 	require.NoErrorf(t, err, "%s: %s", name, out)
 }
 
