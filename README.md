@@ -447,13 +447,22 @@ server:
   tls:
     cert_file: "/certs/server.crt"
     key_file: "/certs/server.key"
-    # Present ⇒ mutual TLS: only certificates signed by this CA are accepted.
+    # Present ⇒ mutual TLS. Every certificate this CA issues for client
+    # authentication is accepted — see the warning below before choosing one.
     client_ca_file: "/certs/ca.crt"
 ```
 
 Leaving `cert_file` empty serves plaintext; the service logs a warning on every
 start so that never happens unnoticed. `cert_file` and `key_file` must be set
 together, and `client_ca_file` alone is rejected at startup.
+
+**Name a CA that exists for this service, not your corporate root.** The
+listener checks that the client certificate chains to `client_ca_file` and
+carries the `clientAuth` extended key usage. It does not check *whose*
+certificate it is: there is no subject or SAN allow-list. An internal PKI issues
+`clientAuth` certificates to many workloads — that is what it is for — so naming
+one here makes every one of those workloads able to create, replace and delete
+plugins. A CA scoped to this service keeps the set to the clients you issued.
 
 In the compose stack traefik is the only client holding a certificate, and the
 gRPC port is not published to the host — the way in is `easyp.api.localhost` on
@@ -835,6 +844,19 @@ audience checked, expiry with the grace period the token carries. The public
 half is supplied by `license.public_keys`, which is part of the deployment's
 configuration. Whoever can edit those values decides which authority may issue
 licences for that installation.
+
+### Mutual TLS checks the certificate authority, not the caller
+
+Mutual TLS is real: with `server.tls.client_ca_file` set, the listener requires a
+client certificate, verifies it chains to that CA, and — through Go's TLS stack —
+requires the `clientAuth` extended key usage, so a server or edge certificate
+from the same CA is refused.
+
+What it does not do is look at who the certificate says it is. No common name,
+no SAN allow-list, no mapping to an identity: the audit trail still records the
+write token's label, not the certificate's subject. So the CA named there is the
+entire check, and every certificate it issues for client authentication is a
+write credential for this installation.
 
 ### The Go client carries the MCP libraries
 
