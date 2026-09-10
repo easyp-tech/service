@@ -695,7 +695,7 @@ tests:
               job: easyp
               instance: pod-a
             exp_annotations:
-              runbook_url: "https://github.com/easyp-tech/service/blob/master/docs/RUNBOOKS.md#easypgenerationerrorrate"
+              runbook_url: "https://easyp.tech/docs/api-service/runbooks#easypgenerationerrorrate"
               summary: "More than 0.05 of EasyP generations are failing"
               description: "A plugin is broken, or its binary does not match the checksum recorded for it."
 UNITTEST
@@ -725,20 +725,29 @@ fi
 # every one carries a runbook_url. The anchors are derived from alert names and
 # the headings are written by hand, which is exactly the pair that drifts apart
 # without something comparing them.
-runbooks="$REPO/docs/RUNBOOKS.md"
+# The runbooks are published rather than committed, so the headings live in the
+# docs site. When that repository is checked out beside this one the anchors are
+# still compared; in this repository's own CI it is not, and the check reports a
+# skip rather than a pass it did not earn.
+runbooks="$REPO/../docs-fumadocs/content/docs/api-service/runbooks.mdx"
 
-# The URL the chart actually ships has to name that same file. Checking anchors
-# in a path this script picks proves nothing about what a customer's alerts
-# link to: 0.3.1 went out pointing at .spec/RUNBOOKS.md, deleted days later,
-# and all 43 checks here still passed.
+# The URL the chart actually ships has to name the runbooks page. Checking
+# anchors against a file this script picks proves nothing about what a
+# customer's alerts link to: 0.3.1 went out pointing at .spec/RUNBOOKS.md,
+# deleted days later, and all 43 checks here still passed.
 base_url="$(grep -oE 'runbookBaseUrl: .*' "$CHART/values.yaml" | awk '{print $2}')"
-runbooks_rel="${runbooks#"$REPO/"}"
 
-if [[ "$base_url" != *"/$runbooks_rel" ]]; then
-  fail "runbookBaseUrl points at '$base_url', which does not end in '$runbooks_rel' — the alerts would link to a file that is not the one checked below"
+if [[ "$base_url" != */api-service/runbooks ]]; then
+  fail "runbookBaseUrl points at '$base_url', which is not the runbooks page — the alerts would link somewhere else"
 else
-  pass "runbookBaseUrl names the runbooks file this suite verifies"
+  pass "runbookBaseUrl names the runbooks page"
 fi
+
+# has_heading <alert>: the page carries a section named after it. Service alerts
+# are H2 and host alerts H3, so both levels count.
+has_heading() {
+  grep -qiE "^#{2,3} $1\$" "$runbooks"
+}
 
 missing=""
 
@@ -748,15 +757,19 @@ while read -r alert; do
     continue
   fi
 
-  if ! grep -qi "^## ${alert}\$" "$runbooks"; then
+  if [[ -f "$runbooks" ]] && ! has_heading "$alert"; then
     missing+=" $alert(no heading)"
   fi
 done < <(grep -oE '^\s*- alert: \w+' "$rules_yaml" | awk '{print $3}')
 
+if [[ ! -f "$runbooks" ]]; then
+  printf '  skip  every alert links to a runbook section that exists (docs-fumadocs not checked out)\n'
+fi
+
 if [[ -z "$missing" ]]; then
-  pass "every alert links to a runbook section that exists"
+  pass "every alert carries a runbook_url anchored on its own name"
 else
-  fail "every alert links to a runbook section that exists:$missing"
+  fail "every alert carries a runbook_url anchored on its own name:$missing"
 fi
 
 # The compose stack cannot use a PrometheusRule — there is no operator to
@@ -814,15 +827,15 @@ else
       continue
     fi
 
-    if ! grep -qi "^## ${alert}\$" "$runbooks"; then
+    if [[ -f "$runbooks" ]] && ! has_heading "$alert"; then
       host_missing+=" $alert(no heading)"
     fi
   done < <(grep -oE '^\s*- alert: \w+' "$host_rules" | awk '{print $3}')
 
   if [[ -z "$host_missing" ]]; then
-    pass "every host alert links to a runbook section that exists"
+    pass "every host alert carries a runbook_url anchored on its own name"
   else
-    fail "every host alert links to a runbook section that exists:$host_missing"
+    fail "every host alert carries a runbook_url anchored on its own name:$host_missing"
   fi
 fi
 

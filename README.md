@@ -866,7 +866,7 @@ it has no maintainer for partitions introduced by a migration it does not know,
 so once the pre-created months run out, audit rows land in the default
 partition, which then blocks creating those months on the way forward. Treat a
 rollback as bounded by `audit.pre_create_months` (three by default). See
-[docs/BACKUP.md](docs/BACKUP.md).
+[Backup and restore](https://easyp.tech/docs/api-service/backup).
 
 ### The licence trust anchor is your own configuration
 
@@ -915,14 +915,14 @@ planned, and is a change to `api`'s dependencies rather than to its API.
 ## Upgrading
 
 Releases that need more than a new image are described in
-[docs/UPGRADING.md](docs/UPGRADING.md), newest first. **v0.13.0 needs it**: two
+[Upgrading](https://easyp.tech/docs/api-service/upgrading), newest first. **v0.13.0 needs it**: two
 environment variables were renamed, a licence setting was removed, the MCP
 endpoint became opt-in, and an unfiltered plugin listing now returns one page
 rather than everything.
 
 Operational procedures for each alert are in
-[docs/RUNBOOKS.md](docs/RUNBOOKS.md); what a backup has to contain and how to
-restore it is in [docs/BACKUP.md](docs/BACKUP.md).
+[Runbooks](https://easyp.tech/docs/api-service/runbooks); what a backup has to contain and how to
+restore it is in [Backup and restore](https://easyp.tech/docs/api-service/backup).
 
 ## Troubleshooting
 

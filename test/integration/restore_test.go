@@ -17,7 +17,7 @@ import (
 	"github.com/easyp-tech/service/internal/database/goosemigrate"
 )
 
-// TestBackupRestoreRoundTrip is the drill docs/BACKUP.md describes and nobody
+// TestBackupRestoreRoundTrip is the drill https://easyp.tech/docs/api-service/backup describes and nobody
 // had ever run.
 //
 // Its own closing line — "a backup that has never been restored is a

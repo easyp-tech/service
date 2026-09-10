@@ -408,7 +408,7 @@ prometheusRule:
   # own name. Point this at your own copy if you keep runbooks internally —
   # an alert that arrives at 3am with no procedure attached is where most of the
   # time goes.
-  runbookBaseUrl: https://github.com/easyp-tech/service/blob/master/docs/RUNBOOKS.md
+  runbookBaseUrl: https://easyp.tech/docs/api-service/runbooks
   # How long before expiry to start warning. The token also carries its own
   # grace period, which runs after this; both exist so a renewal that slips
   # does not take a customer's pipeline down.

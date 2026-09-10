@@ -23,7 +23,7 @@ Centralized protobuf/gRPC plugin execution service. Accepts `CodeGeneratorReques
 1. **Start here** → this file, then [README.md](README.md) for setup and configuration
 2. **Before modifying code** → read the package you are changing; the code carries
    its reasoning in comments rather than in a parallel document that drifts
-3. **Operational procedures** → [docs/RUNBOOKS.md](docs/RUNBOOKS.md), one section per alert
+3. **Operational procedures** → [Runbooks](https://easyp.tech/docs/api-service/runbooks), one section per alert
 
 ## Project Map
 
@@ -116,7 +116,7 @@ go test ./...            # Standard tests
 
 ## Documentation
 
-Runbooks for every alert live in [docs/RUNBOOKS.md](docs/RUNBOOKS.md). Setup,
+Runbooks for every alert live in [Runbooks](https://easyp.tech/docs/api-service/runbooks). Setup,
 configuration and the deployment stack are in [README.md](README.md); everything
 else is documented next to the code it describes.
 
