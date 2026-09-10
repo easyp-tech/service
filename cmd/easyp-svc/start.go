@@ -20,6 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 
 	adapter_audit "github.com/easyp-tech/service/internal/adapters/audit"
 	adapter_metrics "github.com/easyp-tech/service/internal/adapters/metrics"
@@ -161,6 +162,43 @@ func checkConfiguredFiles(cfg config.Config, log *slog.Logger) error {
 	return preflight.Err() //nolint:wrapcheck // each diagnostic already names its setting and its reason
 }
 
+// requireBearer puts the same credential check in front of the MCP endpoint
+// that the gRPC interceptor puts in front of the RPCs.
+//
+// When required is false the handler is returned untouched, so the default costs
+// nothing and the public catalogue keeps serving MCP anonymously.
+//
+// The authenticator speaks gRPC metadata, which is a map of header names to
+// values — the same shape an HTTP header set has — so the adaptation is one
+// conversion rather than a second authenticator.
+func requireBearer(
+	next http.Handler, authenticator auth.Authenticator, required bool, log *slog.Logger,
+) http.Handler {
+	if !required {
+		return next
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		md := metadata.New(map[string]string{
+			"authorization": r.Header.Get("Authorization"),
+		})
+
+		actor, err := authenticator.Authenticate(r.Context(), md)
+		if err != nil {
+			// The same reticence the gRPC path shows: the reason is logged, not
+			// returned, so a caller learns nothing from the difference between a
+			// missing credential and a wrong one.
+			log.Warn("MCP request rejected", "error", err, "remote", r.RemoteAddr)
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			http.Error(w, "valid credentials are required", http.StatusUnauthorized)
+
+			return
+		}
+
+		next.ServeHTTP(w, r.WithContext(core.WithActor(r.Context(), actor.Name)))
+	})
+}
+
 // configSource names where the settings came from, for the startup summary.
 func configSource(cfgPath string) string {
 	if cfgPath == "" {
@@ -258,7 +296,8 @@ func run(ctx context.Context, cfg config.Config, reg *prometheus.Registry) error
 		return fmt.Errorf("buildLicenseClient: %w", err)
 	}
 
-	_, pool, _, grpcServer, apiSrv := initApp(ctx, cfg, repo, reg, namespace, auditWorker, grpcCreds, licenseClient)
+	_, pool, _, grpcServer, _, mcpHandler := initApp(
+		ctx, cfg, repo, reg, namespace, auditWorker, grpcCreds, licenseClient)
 
 	defer func() {
 		lost := pool.Shutdown(cfg.WorkerPool.ShutdownTimeout)
@@ -275,7 +314,7 @@ func run(ctx context.Context, cfg config.Config, reg *prometheus.Registry) error
 	// From here readiness reports the database rather than "starting".
 	readiness.Store(healthCheck)
 
-	serveErr := serveApp(ctx, log, cfg, reg, grpcServer, apiSrv.MCPHandler(), partitions.Run)
+	serveErr := serveApp(ctx, log, cfg, reg, grpcServer, mcpHandler, partitions.Run)
 	if serveErr != nil {
 		serveErr = fmt.Errorf("serveApp: %w", serveErr)
 	}
@@ -563,7 +602,7 @@ func initApp(
 	auditSink core.AuditSink,
 	grpcCreds credentials.TransportCredentials,
 	licenseClient core.LicenseClient,
-) (*core.Core, *core.WorkerPool, *license.FeatureGate, *grpc.Server, *api.API) {
+) (*core.Core, *core.WorkerPool, *license.FeatureGate, *grpc.Server, *api.API, http.Handler) {
 	log := monitor.FromContext(ctx)
 
 	lm, err := license.NewManager(ctx, licenseClient, license.Config{
@@ -617,9 +656,17 @@ func initApp(
 	// a new context is derived (as the auth interceptor does) and is empty
 	// ceremony when, as here, the stream's own context is merely read.
 	grpcSrv, apiSrv := buildGRPCServer( //nolint:contextcheck // limiter reads ss.Context(), derives nothing
-		log, reg, gate, rl, cl, tracedCore, grpcCreds, authenticator, cfg.Server)
+		log, reg, gate, rl, cl, tracedCore, grpcCreds, authenticator, cfg.Server,
+		cfg.Auth.RequireAuthentication)
 
-	return module, pool, gate, grpcSrv, apiSrv
+	// Wrapped here rather than at the listener, because this is where the
+	// authenticator is. The MCP endpoint is plain HTTP and sits outside the
+	// gRPC interceptor chain, so require_authentication has to reach it
+	// separately — otherwise closing the reads would close them everywhere
+	// except the one surface that carries no credential at all.
+	mcpHandler := requireBearer(apiSrv.MCPHandler(), authenticator, cfg.Auth.RequireAuthentication, log)
+
+	return module, pool, gate, grpcSrv, apiSrv, mcpHandler
 }
 
 func buildGRPCServer(
@@ -632,6 +679,7 @@ func buildGRPCServer(
 	creds credentials.TransportCredentials,
 	authenticator auth.Authenticator,
 	srvCfg config.Server,
+	requireAuth bool,
 ) (*grpc.Server, *api.API) {
 	serverMetrics := grpchelper.NewServerMetrics(reg, "easyp", "api")
 
@@ -642,7 +690,7 @@ func buildGRPCServer(
 	// wherever they happen, rather than only the ones a handler saw.
 	panicsCounter := safe.NewGuard(reg, serviceNamespace).Counter()
 
-	unaryExtra, streamExtra := buildExtraInterceptors(log, reg, gate, rl, cl, authenticator)
+	unaryExtra, streamExtra := buildExtraInterceptors(log, reg, gate, rl, cl, authenticator, requireAuth)
 
 	// Validate has already rejected an unparseable CIDR, so this cannot fail on
 	// a configuration that got this far.
@@ -708,8 +756,14 @@ func buildExtraInterceptors(
 	rl *ratelimiter.RateLimiter,
 	cl *ratelimiter.ConcurrencyLimiter,
 	authenticator auth.Authenticator,
+	requireAuth bool,
 ) ([]grpc.UnaryServerInterceptor, []grpc.StreamServerInterceptor) {
-	authInterceptor := api.NewAuthInterceptor(authenticator, log, reg, serviceNamespace)
+	var authOpts []api.AuthOption
+	if requireAuth {
+		authOpts = append(authOpts, api.WithRequiredAuthentication())
+	}
+
+	authInterceptor := api.NewAuthInterceptor(authenticator, log, reg, serviceNamespace, authOpts...)
 	licenseInterceptor := api.NewLicenseInterceptor(gate, log)
 
 	unary := []grpc.UnaryServerInterceptor{
