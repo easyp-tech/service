@@ -36,7 +36,6 @@ const (
 	reasonUnknownToken  = "unknown_token"
 )
 
-// NewAuthInterceptor builds the interceptor and registers its failure counter.
 // AuthOption adjusts an AuthInterceptor at construction.
 type AuthOption func(*AuthInterceptor)
 
@@ -61,6 +60,7 @@ func WithRequiredAuthentication() AuthOption {
 	}
 }
 
+// NewAuthInterceptor builds the interceptor and registers its failure counter.
 func NewAuthInterceptor(
 	authenticator auth.Authenticator,
 	logger *slog.Logger,
