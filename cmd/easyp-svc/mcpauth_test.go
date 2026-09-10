@@ -30,46 +30,60 @@ func (acceptGood) Authenticate(_ context.Context, md metadata.MD) (auth.Actor, e
 func TestRequireBearerGatesMCP(t *testing.T) {
 	t.Parallel()
 
-	reached := false
-	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		reached = true
-		w.WriteHeader(http.StatusOK)
-	})
+	cases := []struct {
+		name       string
+		credential string
+		wantCode   int
+		wantReach  bool
+	}{
+		{
+			name:      "no credential is refused",
+			wantCode:  http.StatusUnauthorized,
+			wantReach: false,
+		},
+		{
+			name:       "a wrong credential is refused",
+			credential: "Bearer wrong",
+			wantCode:   http.StatusUnauthorized,
+			wantReach:  false,
+		},
+		{
+			name:       "the right credential is served",
+			credential: "Bearer good",
+			wantCode:   http.StatusOK,
+			wantReach:  true,
+		},
+	}
 
-	guarded := requireBearer(inner, acceptGood{}, true, slog.New(slog.DiscardHandler))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	t.Run("no credential is refused", func(t *testing.T) {
-		reached = false
-		rec := httptest.NewRecorder()
-		guarded.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/mcp", nil))
+			reached := false
+			inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				reached = true
+				w.WriteHeader(http.StatusOK)
+			})
 
-		require.Equal(t, http.StatusUnauthorized, rec.Code)
-		require.Equal(t, "Bearer", rec.Header().Get("WWW-Authenticate"))
-		require.False(t, reached)
-	})
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/mcp", nil)
+			if tc.credential != "" {
+				req.Header.Set("Authorization", tc.credential)
+			}
 
-	t.Run("a wrong credential is refused, and says no more than that", func(t *testing.T) {
-		reached = false
-		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
-		req.Header.Set("Authorization", "Bearer wrong")
-		guarded.ServeHTTP(rec, req)
+			rec := httptest.NewRecorder()
+			requireBearer(inner, acceptGood{}, true, slog.New(slog.DiscardHandler)).ServeHTTP(rec, req)
 
-		require.Equal(t, http.StatusUnauthorized, rec.Code)
-		require.NotContains(t, rec.Body.String(), "wrong")
-		require.False(t, reached)
-	})
+			require.Equal(t, tc.wantCode, rec.Code)
+			require.Equal(t, tc.wantReach, reached)
 
-	t.Run("the right credential is served", func(t *testing.T) {
-		reached = false
-		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
-		req.Header.Set("Authorization", "Bearer good")
-		guarded.ServeHTTP(rec, req)
-
-		require.Equal(t, http.StatusOK, rec.Code)
-		require.True(t, reached)
-	})
+			if tc.wantCode == http.StatusUnauthorized {
+				// The same reticence the gRPC path shows: a caller learns
+				// nothing from the difference between missing and wrong.
+				require.Equal(t, "Bearer", rec.Header().Get("WWW-Authenticate"))
+				require.NotContains(t, rec.Body.String(), "wrong")
+			}
+		})
+	}
 }
 
 // TestRequireBearerIsInertByDefault pins that the default costs nothing: the
@@ -82,7 +96,7 @@ func TestRequireBearerIsInertByDefault(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	requireBearer(inner, acceptGood{}, false, slog.New(slog.DiscardHandler)).
-		ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/mcp", nil))
+		ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/mcp", nil))
 
 	require.Equal(t, http.StatusOK, rec.Code)
 }

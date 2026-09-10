@@ -889,6 +889,20 @@ write token's label, not the certificate's subject. So the CA named there is the
 entire check, and every certificate it issues for client authentication is a
 write credential for this installation.
 
+### The Go client's stability is the wire contract's stability
+
+`sdk.Client.ListPlugins` returns `[]*generator.PluginInfo` — the generated type
+from the `api` module, not a type the SDK owns. That is the usual shape for a
+gRPC client and it avoids a mirror of every message, but the consequence is
+permanent: a v2 of the wire contract is a v2 of the client, whatever else the
+client's own surface does. The two modules version separately and are released
+in lockstep for that reason.
+
+`ListPlugins` also walks every page and returns the whole registry. Each request
+gets its own timeout, so the walk finishes on a large registry, but there is no
+way to ask for one page — a caller that wants to stream results needs a method
+that does not exist yet.
+
 ### The Go client carries the MCP libraries
 
 `sdk` depends on `api`, and the generated MCP tool registration lives in the

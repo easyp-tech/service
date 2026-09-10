@@ -178,24 +178,24 @@ func requireBearer(
 		return next
 	}
 
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		md := metadata.New(map[string]string{
-			"authorization": r.Header.Get("Authorization"),
+			"authorization": request.Header.Get("Authorization"),
 		})
 
-		actor, err := authenticator.Authenticate(r.Context(), md)
+		actor, err := authenticator.Authenticate(request.Context(), md)
 		if err != nil {
 			// The same reticence the gRPC path shows: the reason is logged, not
 			// returned, so a caller learns nothing from the difference between a
 			// missing credential and a wrong one.
-			log.Warn("MCP request rejected", "error", err, "remote", r.RemoteAddr)
-			w.Header().Set("WWW-Authenticate", "Bearer")
-			http.Error(w, "valid credentials are required", http.StatusUnauthorized)
+			log.Warn("MCP request rejected", "error", err, "remote", request.RemoteAddr)
+			writer.Header().Set("WWW-Authenticate", "Bearer")
+			http.Error(writer, "valid credentials are required", http.StatusUnauthorized)
 
 			return
 		}
 
-		next.ServeHTTP(w, r.WithContext(core.WithActor(r.Context(), actor.Name)))
+		next.ServeHTTP(writer, request.WithContext(core.WithActor(request.Context(), actor.Name)))
 	})
 }
 
@@ -296,11 +296,10 @@ func run(ctx context.Context, cfg config.Config, reg *prometheus.Registry) error
 		return fmt.Errorf("buildLicenseClient: %w", err)
 	}
 
-	_, pool, _, grpcServer, _, mcpHandler := initApp(
-		ctx, cfg, repo, reg, namespace, auditWorker, grpcCreds, licenseClient)
+	application := initApp(ctx, cfg, repo, reg, namespace, auditWorker, grpcCreds, licenseClient)
 
 	defer func() {
-		lost := pool.Shutdown(cfg.WorkerPool.ShutdownTimeout)
+		lost := application.pool.Shutdown(cfg.WorkerPool.ShutdownTimeout)
 		if lost > 0 {
 			log.Warn("generation jobs lost on shutdown", "count", lost)
 		}
@@ -314,7 +313,7 @@ func run(ctx context.Context, cfg config.Config, reg *prometheus.Registry) error
 	// From here readiness reports the database rather than "starting".
 	readiness.Store(healthCheck)
 
-	serveErr := serveApp(ctx, log, cfg, reg, grpcServer, mcpHandler, partitions.Run)
+	serveErr := serveApp(ctx, log, cfg, reg, application.grpcServer, application.mcpHandler, partitions.Run)
 	if serveErr != nil {
 		serveErr = fmt.Errorf("serveApp: %w", serveErr)
 	}
@@ -593,6 +592,51 @@ func cappedByLicence(setting string, configured, licenseLimit int, log *slog.Log
 	return licenseLimit
 }
 
+// buildFeatureGate resolves the licence and returns the gate every ceiling is
+// read from.
+//
+// A failure here is not fatal: an installation with no licence, or one whose
+// licence cannot be read, is a community installation, which is a supported way
+// to run this and not an error state.
+func buildFeatureGate(
+	ctx context.Context,
+	cfg config.Config,
+	licenseClient core.LicenseClient,
+	log *slog.Logger,
+	reg *prometheus.Registry,
+	namespace string,
+) *license.FeatureGate {
+	lm, err := license.NewManager(ctx, licenseClient, license.Config{
+		CacheTTL: cfg.License.CacheTTL,
+	}, log, reg, namespace)
+	if err != nil {
+		log.Warn("license initialization error, continuing in community mode", "error", err)
+	}
+
+	lm.StartRefreshWatcher(ctx)
+
+	// Read through a closure rather than sampled once: the licence a deployment
+	// is running on changes while it runs — that is what the grace period is —
+	// and a tier compared at boot could never report the change.
+	checkServiceTier(cfg.Telemetry.ServiceTier, func() string { return lm.Claims().Tier }, log, reg, namespace)
+
+	return license.NewFeatureGate(lm)
+}
+
+// app is what initApp assembles. A struct rather than six return values: half
+// of them are unused at any given call site, and a positional list that long is
+// read by counting commas.
+type app struct {
+	core       *core.Core
+	pool       *core.WorkerPool
+	gate       *license.FeatureGate
+	grpcServer *grpc.Server
+	api        *api.API
+	// mcpHandler is already wrapped in whatever auth.require_authentication
+	// asked for; see requireBearer.
+	mcpHandler http.Handler
+}
+
 func initApp(
 	ctx context.Context,
 	cfg config.Config,
@@ -602,20 +646,10 @@ func initApp(
 	auditSink core.AuditSink,
 	grpcCreds credentials.TransportCredentials,
 	licenseClient core.LicenseClient,
-) (*core.Core, *core.WorkerPool, *license.FeatureGate, *grpc.Server, *api.API, http.Handler) {
+) app {
 	log := monitor.FromContext(ctx)
 
-	lm, err := license.NewManager(ctx, licenseClient, license.Config{
-		CacheTTL: cfg.License.CacheTTL,
-	}, log, reg, namespace)
-	if err != nil {
-		log.Warn("license initialization error, continuing in community mode", "error", err)
-	}
-	lm.StartRefreshWatcher(ctx)
-
-	gate := license.NewFeatureGate(lm)
-
-	checkServiceTier(cfg.Telemetry.ServiceTier, func() string { return lm.Claims().Tier }, log, reg, namespace)
+	gate := buildFeatureGate(ctx, cfg, licenseClient, log, reg, namespace)
 
 	rl, cl := buildLimiters(ctx, cfg, gate, log, reg, namespace)
 
@@ -664,9 +698,17 @@ func initApp(
 	// gRPC interceptor chain, so require_authentication has to reach it
 	// separately — otherwise closing the reads would close them everywhere
 	// except the one surface that carries no credential at all.
-	mcpHandler := requireBearer(apiSrv.MCPHandler(), authenticator, cfg.Auth.RequireAuthentication, log)
-
-	return module, pool, gate, grpcSrv, apiSrv, mcpHandler
+	return app{
+		core:       module,
+		pool:       pool,
+		gate:       gate,
+		grpcServer: grpcSrv,
+		api:        apiSrv,
+		// Already wrapped in whatever auth.require_authentication asked for: MCP
+		// is plain HTTP outside the interceptor chain, so the check has to be
+		// put in front of it here, where the authenticator is.
+		mcpHandler: requireBearer(apiSrv.MCPHandler(), authenticator, cfg.Auth.RequireAuthentication, log),
+	}
 }
 
 func buildGRPCServer(
