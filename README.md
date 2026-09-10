@@ -525,9 +525,22 @@ without downtime: add the new one, deploy, remove the old.
 
 ### Licensing
 
-Without a token the service runs in **community** mode: no audit log, at most 4
-workers and 10 registered plugins. Enterprise needs two things — a token and the
-public key it is verified against:
+Without a token the service runs in **community** mode: no audit log, and three
+ceilings that a licence lifts —
+
+| Setting | Community | Enterprise |
+|---|---|---|
+| `worker_pool.workers` | 4 | as configured |
+| `worker_pool.max_concurrent_generations` | 16 | as configured |
+| registered plugins | 10 | unlimited |
+
+Each community ceiling is the shipped default of the setting it caps, so a
+deployment that never changed one is not affected by the ceiling existing. A
+configuration above it is lowered at startup, and the service logs which setting
+was lowered and to what — it is a ceiling, not a substitution, so asking for
+less than the tier permits gives you less.
+
+Enterprise needs two things — a token and the public key it is verified against:
 
 ```bash
 LICENSE_PUBLIC_KEYS=<kid>:<hex> LICENSE_KEY=<paseto-token> task up

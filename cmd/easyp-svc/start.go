@@ -530,7 +530,7 @@ func checkServiceTier(configured string, actualTier func() string, log *slog.Log
 	}
 }
 
-// cappedWorkers applies the licence's worker ceiling to the configured number.
+// cappedByLicence applies a licence ceiling to a configured number.
 //
 // A ceiling, not a substitution. This used to assign the licence limit outright,
 // which made it a floor as well: a community deployment asking for two workers
@@ -540,13 +540,16 @@ func checkServiceTier(configured string, actualTier func() string, log *slog.Log
 //
 // A licence that imposes no limit of its own reports core.LicenseUnlimited (-1),
 // so anything non-positive leaves the configured value alone.
-func cappedWorkers(configured, licenseLimit int, log *slog.Logger) int {
+//
+// setting is the dotted name of the field being capped, so the log line names
+// what an operator would have to change rather than what the code calls it.
+func cappedByLicence(setting string, configured, licenseLimit int, log *slog.Logger) int {
 	if licenseLimit <= 0 || licenseLimit >= configured {
 		return configured
 	}
 
-	log.Info("worker_pool.workers lowered to the licence tier's limit",
-		"configured", configured, "licence_limit", licenseLimit)
+	log.Info(setting+" lowered to the licence tier's limit",
+		"setting", setting, "configured", configured, "licence_limit", licenseLimit)
 
 	return licenseLimit
 }
@@ -579,16 +582,20 @@ func initApp(
 
 	tracedRegistry := telemetry.NewTracingRegistry(repo)
 
-	wpWorkers := cappedWorkers(cfg.WorkerPool.Workers, gate.MaxWorkers(), log)
+	wpWorkers := cappedByLicence("worker_pool.workers", cfg.WorkerPool.Workers, gate.MaxWorkers(), log)
+	wpGenerations := cappedByLicence("worker_pool.max_concurrent_generations",
+		cfg.WorkerPool.MaxConcurrentGenerations, gate.MaxGenerations(), log)
 
 	metricsAdapter := adapter_metrics.New(reg, namespace)
 	pool := core.NewWorkerPool(tracedRegistry, core.WorkerPoolConfig{
 		Workers:   wpWorkers,
 		QueueSize: cfg.WorkerPool.QueueSize,
-		// Not capped by the licence: MaxWorkers bounds plugin lookups, and this
-		// bounds plugin processes. Tying the paid limit to it is a pricing
-		// decision, not a plumbing one.
-		MaxConcurrentGenerations: cfg.WorkerPool.MaxConcurrentGenerations,
+		// Capped separately from Workers, because the two bound different things:
+		// a worker is held only while a plugin is located — a database read, and
+		// on a miss a download — while a generation is the plugin process. On a
+		// warm cache the worker ceiling barely binds, so this is the number that
+		// decides throughput, and the one a tier is worth drawing on.
+		MaxConcurrentGenerations: wpGenerations,
 		GenerationTimeout:        cfg.WorkerPool.GenerationTimeout,
 		MaxRetries:               cfg.WorkerPool.MaxRetries,
 		ShutdownTimeout:          cfg.WorkerPool.ShutdownTimeout,

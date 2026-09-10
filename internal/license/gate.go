@@ -57,3 +57,8 @@ func (fg *FeatureGate) MaxWorkers() int {
 func (fg *FeatureGate) MaxPlugins() int {
 	return fg.manager.Claims().MaxPlugins
 }
+
+// MaxGenerations returns the licence's ceiling on concurrent plugin processes.
+func (fg *FeatureGate) MaxGenerations() int {
+	return fg.manager.Claims().MaxGenerations
+}

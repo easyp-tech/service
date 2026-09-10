@@ -270,6 +270,9 @@ type (
 		// MaxPlugins возвращает лимит плагинов из текущей лицензии.
 		// -1 означает отсутствие ограничения.
 		MaxPlugins() int
+		// MaxGenerations возвращает лимит одновременных запусков плагинов из
+		// текущей лицензии. -1 означает отсутствие ограничения.
+		MaxGenerations() int
 	}
 
 	// Service defines the business logic interface used by the API layer.
@@ -291,6 +294,14 @@ type (
 		MaxWorkers int
 		// MaxPlugins is the maximum number of registered plugins; -1 means unlimited.
 		MaxPlugins int
+		// MaxGenerations is the maximum number of plugin processes that may run
+		// at once; -1 means unlimited.
+		//
+		// Separate from MaxWorkers because the two bound different things: a
+		// worker is held only while a plugin is located, while a generation is
+		// the plugin process itself. Throughput is the second number, which is
+		// why it is the one a tier is drawn on.
+		MaxGenerations int
 		// ExpiresAt is when the licence stops being valid, zero in community mode.
 		// Carried out of verification so that it can be exported as a metric: a
 		// licence lapsing unnoticed downgrades the whole installation, and that
@@ -331,6 +342,11 @@ const (
 
 	communityMaxWorkers = 4
 	communityMaxPlugins = 10
+	// communityMaxGenerations is the shipped default of
+	// worker_pool.max_concurrent_generations, so a community deployment that
+	// never touched the setting is unaffected by the ceiling existing. Same
+	// relationship communityMaxWorkers has to worker_pool.workers.
+	communityMaxGenerations = 16
 
 	// LicenseUnlimited is what MaxWorkers and MaxPlugins hold when the licence
 	// imposes no ceiling of its own.
@@ -351,10 +367,11 @@ func CommunityLicenseClaims() LicenseClaims {
 	// ExpiresAt stays zero: a community installation has no licence to expire,
 	// and exporting a zero timestamp is what tells the alert rule to stay quiet.
 	return LicenseClaims{
-		Tier:       LicenseTierCommunity,
-		Features:   communityFeatures,
-		MaxWorkers: communityMaxWorkers,
-		MaxPlugins: communityMaxPlugins,
+		Tier:           LicenseTierCommunity,
+		Features:       communityFeatures,
+		MaxWorkers:     communityMaxWorkers,
+		MaxGenerations: communityMaxGenerations,
+		MaxPlugins:     communityMaxPlugins,
 	}
 }
 
@@ -376,11 +393,12 @@ func EnterpriseLicenseClaims(expiresAt time.Time, inGrace bool) LicenseClaims {
 	}
 
 	return LicenseClaims{
-		Tier:       LicenseTierEnterprise,
-		Features:   enterpriseFeatures,
-		MaxWorkers: LicenseUnlimited,
-		MaxPlugins: LicenseUnlimited,
-		ExpiresAt:  expiresAt,
-		InGrace:    inGrace,
+		Tier:           LicenseTierEnterprise,
+		Features:       enterpriseFeatures,
+		MaxWorkers:     LicenseUnlimited,
+		MaxPlugins:     LicenseUnlimited,
+		MaxGenerations: LicenseUnlimited,
+		ExpiresAt:      expiresAt,
+		InGrace:        inGrace,
 	}
 }
