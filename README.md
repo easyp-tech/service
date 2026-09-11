@@ -125,14 +125,14 @@ The S3 settings can also come from a config file: `plugins push --cfg` accepts a
 
 ```
 .
-├── api/                                 # API contracts (protobuf)
-│   └── generator/v1/                   # Main code generation API
+├── api/                                 # The wire contract — its own Go module, Apache-2.0
+│   └── easyp/generator/v1/            # Code generation API
 │       ├── generator.proto
 │       ├── generator.pb.go
 │       ├── generator_grpc.pb.go
 │       └── generator.mcp.go
 ├── cmd/
-│   ├── main.go                         # Server entry point
+│   ├── easyp-svc/                     # The service and its CLI
 │   └── mcp-smoke/main.go              # MCP smoke test client
 ├── internal/                           # Internal logic
 │   ├── adapters/                       # External system adapters
@@ -142,20 +142,22 @@ The S3 settings can also come from a config file: `plugins push --cfg` accepts a
 │   ├── api/                           # Transport layer (gRPC + MCP)
 │   ├── core/                          # Business logic + domain types
 │   ├── database/                      # DB abstraction (sqlx wrapper)
+│   │   └── goosemigrate/migrations/  # Embedded SQL migrations
 │   ├── grpchelper/                    # gRPC server/client factories
 │   ├── license/                       # PASETO v4 licensing
 │   ├── ratelimiter/                   # Per-IP rate limiting
 │   ├── telemetry/                     # OpenTelemetry + tracing decorators
 │   ├── monitor/                       # Context-aware logging
 │   └── flags/                         # CLI flag processing
-├── sdk/                               # Go client SDK
-├── migrate/                           # SQL migrations
+├── sdk/                               # Go client SDK — its own module, Apache-2.0
 ├── registry/                          # Plugin Dockerfiles (for building)
 │   ├── protocolbuffers/go/v1.36.10/
 │   ├── grpc/go/v1.5.1/
 │   ├── grpc-ecosystem/gateway/v2.27.3/
 │   └── grpc-ecosystem/openapiv2/v2.27.3/
 ├── plugins/                           # Built plugin binaries (gitignored)
+├── test/                              # Integration tests and CI helpers
+├── test_registry/                     # Plugin Dockerfiles the tests build against
 ├── deploy/                            # Everything that runs the service somewhere
 │   ├── docker-compose.yml            # Full dev stack
 │   ├── docker-compose.dev.yml        # Community and enterprise side by side
