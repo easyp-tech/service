@@ -135,7 +135,7 @@ services:
     # loader learned to supply defaults, with an error naming a key whose default
     # is documented. Set EASYP_SERVICE_VERSION to a release tag, to `edge` for
     # the tip of master, or to `sha-<short>` to pin the exact commit under test.
-    image: ghcr.io/easyp-tech/service:${EASYP_SERVICE_VERSION:-v0.13.0}
+    image: ghcr.io/easyp-tech/service:${EASYP_SERVICE_VERSION:-v1.0.0}
     container_name: easyp-api-community
     restart: always
     user: "${EASYP_UID:-65532}:${EASYP_GID:-65532}"
@@ -215,7 +215,7 @@ services:
     # loader learned to supply defaults, with an error naming a key whose default
     # is documented. Set EASYP_SERVICE_VERSION to a release tag, to `edge` for
     # the tip of master, or to `sha-<short>` to pin the exact commit under test.
-    image: ghcr.io/easyp-tech/service:${EASYP_SERVICE_VERSION:-v0.13.0}
+    image: ghcr.io/easyp-tech/service:${EASYP_SERVICE_VERSION:-v1.0.0}
     container_name: easyp-api-enterprise
     restart: always
     user: "${EASYP_UID:-65532}:${EASYP_GID:-65532}"
