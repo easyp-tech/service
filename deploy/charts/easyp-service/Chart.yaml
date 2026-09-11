@@ -51,14 +51,14 @@ type: application
 # YAML, an alert incapable of producing anything. tests/render.sh now runs
 # `promtool test rules` against real series rather than only `check rules`,
 # which reads expressions without knowing whether one can ever fire.
-version: 0.4.1
+version: 1.0.0
 # appVersion tracks the service release this chart was validated against and is
 # the default image tag — so it has to be a tag that exists. It was "0.9.0",
 # and the registry publishes "v0.9.0": a default install pulled a tag that has
 # never existed and stopped at ImagePullBackOff; `helm template` renders a
-# wrong tag as happily as a right one. v0.13.0 is the release this chart ships
+# wrong tag as happily as a right one. v1.0.0 is the release this chart ships
 # with — do not publish the chart before that tag exists.
-appVersion: "v0.14.0"
+appVersion: "v1.0.0"
 
 home: https://github.com/easyp-tech/service
 sources:
