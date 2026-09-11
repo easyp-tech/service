@@ -71,6 +71,14 @@ deploy/observability/traefik/traefik.public.yml
 # Claude Code session data and worktrees
 .claude/
 
+# Agent tooling that lives beside the code without being part of it. The skills
+# were removed from the repository in b356528; the directory stayed on disk, and
+# an untracked directory that nothing ignores is one `git add -A` away from
+# coming back — which it did, twice, into commits about other things.
+# .aiforopenide/sessions/ is worse than noise: it holds transcripts.
+.agents/
+.aiforopenide/
+
 # Secrets, by shape rather than by name. Every rule above names a path that had
 # already gone wrong once; these catch the next one. A live S3 key pair reached
 # a public repository through a file nobody thought to list, and git history
