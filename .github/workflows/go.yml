@@ -170,6 +170,21 @@ jobs:
 
       - name: Create cluster
         uses: helm/kind-action@v1
+        with:
+          cluster_name: easyp
+
+      # Built here and loaded into the cluster rather than pulled from the
+      # registry. The chart's default image tag is its appVersion, which names
+      # the release being prepared — an image that does not exist until this
+      # very pipeline publishes it, and this job runs before that. Pulling any
+      # already-published image does not work either: the chart and the binary
+      # are released together, so an older image rejects the configuration the
+      # current chart renders. Building it makes the job self-contained and, for
+      # the first time, a test of the code in front of it.
+      - name: Build the image under test
+        run: |
+          docker build -t easyp-service:ci .
+          kind load docker-image easyp-service:ci --name easyp
 
       # The chart demands a CA issuer: both certificates have to chain to
       # something the other side trusts, and cert-manager writes that CA into
@@ -241,6 +256,9 @@ jobs:
             --set ingress.enabled=true \
             --set ingress.host=easyp.example.com \
             --set 'config.server.trustedProxies={10.244.0.0/16}' \
+            --set image.repository=easyp-service \
+            --set image.tag=ci \
+            --set image.pullPolicy=Never \
             --wait --timeout 8m
 
       # An install that times out reports only "Available: 0/1", which says that
