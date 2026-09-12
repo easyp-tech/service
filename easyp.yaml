@@ -59,6 +59,16 @@ lint:
     - RPC_NO_CLIENT_STREAMING
     - RPC_NO_SERVER_STREAMING
 
+  # PACKAGE_DIRECTORY_MATCH wants package easyp.generator.v1 to sit in
+  # easyp/generator/v1. It does, relative to the import root — but the import
+  # root is api/, because the contract is its own Go module, and the rule sees
+  # the path from the repository instead. There is no root setting for lint the
+  # way there is for generate, so the rule is exempted here rather than dropped
+  # from `use`, where it still guards every proto added later.
+  ignore_only:
+    PACKAGE_DIRECTORY_MATCH:
+      - api
+
   enum_zero_value_suffix: NONE
 
   service_suffix: API
