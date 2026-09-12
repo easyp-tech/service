@@ -21,6 +21,13 @@ linters:
     # noise that trains you to skim past the output.
     - gomodguard
   settings:
+    gomoddirectives:
+      # The three modules in this repository build against each other from the
+      # working tree, not from the last tag: change a message in api/ and the
+      # service compiles against it immediately, rather than after a release.
+      # That is what the local replace directives are for, and they affect only
+      # builds of this module — a consumer of api/ or sdk/ never sees them.
+      replace-local: true
     lll:
       line-length: 140
     varnamelen:
