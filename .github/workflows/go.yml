@@ -243,6 +243,19 @@ jobs:
             --set 'config.server.trustedProxies={10.244.0.0/16}' \
             --wait --timeout 8m
 
+      # An install that times out reports only "Available: 0/1", which says that
+      # the pod did not become ready and nothing about why. Everything that would
+      # answer that — the image it could not pull, the probe it failed, the line
+      # it died on — lives in the cluster and is gone when the job ends.
+      - name: Why the pod is not ready
+        if: failure()
+        run: |
+          kubectl get pods -o wide
+          kubectl describe deploy/easyp-easyp-service | tail -40
+          kubectl describe pod -l app.kubernetes.io/name=easyp-service | tail -60
+          kubectl logs -l app.kubernetes.io/name=easyp-service --all-containers --tail=100 || true
+          kubectl get events --sort-by=.lastTimestamp | tail -30
+
       - name: The pod is ready and answering
         run: |
           kubectl wait --for=condition=Ready pod \
