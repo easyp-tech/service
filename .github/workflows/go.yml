@@ -117,7 +117,15 @@ jobs:
       - name: Test
         env:
           EASYP_TEST_DSN: postgres://postgres:postgres@localhost:5432/easyp?sslmode=disable
-        run: go test -tags integration -timeout 10m ./test/... ./internal/database/...
+        # -p 1: one package at a time. go test runs packages concurrently by
+        # default, and two of these — test/integration and goosemigrate — each
+        # drop and recreate the public schema of the one database the job
+        # provides. Run together, one's DROP SCHEMA lands under the other's
+        # migration, and the failure reads as "relation goose_db_version does
+        # not exist" in whichever test lost the race. It passed on the runs
+        # where the timing happened to work and failed on the ones where it did
+        # not, which is the definition of a flake and not a test.
+        run: go test -p 1 -tags integration -timeout 10m ./test/... ./internal/database/...
 
   vuln:
     name: Vulnerabilities
