@@ -44,7 +44,16 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # has to be the target's. Only the apt step is emulated, which is seconds.
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+# upgrade as well as install: bookworm-slim is cut at a point in time and its
+# libraries carry whatever advisories were open then. The release scan refuses
+# HIGH and CRITICAL findings in the OS layer, and it is right to — but a pinned
+# base means the same image is refused a week later for a CVE nobody here
+# introduced. Applying Debian's security updates at build time keeps the layer
+# current with the day the release is cut.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 # Fixed UID/GID (the distroless "nonroot" values) so a bind-mounted /plugins can
 # be chowned to a known owner on the host.
