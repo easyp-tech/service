@@ -84,7 +84,30 @@ jobs:
       - name: Install syft
         uses: anchore/sbom-action/download-syft@v0
 
-      - name: Create release
+      # Two goreleaser passes with the scan between them. The first builds
+      # everything and stops short of publishing — with buildx goreleaser always
+      # passes --load, so the per-arch images land in the local daemon where
+      # trivy can read them. Nothing has left the runner when the scan runs, so
+      # a finding here costs a fix and a re-tag, not a pull from the registry.
+      # The second pass publishes what the first built.
+      - name: Build the release
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          args: release --clean --skip=publish --timeout=90m
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Scan the image before it is published
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ghcr.io/easyp-tech/service:${{ github.ref_name }}-amd64
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+
+      - name: Publish the release
         uses: goreleaser/goreleaser-action@v6
         with:
           # A major-series pin, not `latest`: an unpinned tool is how the lint
@@ -95,10 +118,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # After publication rather than before: goreleaser builds and pushes in one
-      # step, so there is no local image to scan first. A finding here means
-      # pulling the tag, not that customers were spared it — treat a failure as
-      # a reason to cut a patch release, not as noise.
+      # A second scan, of the published manifest list this time. The pre-publish
+      # scan covers the layers; this one confirms what customers actually pull
+      # resolves to the same thing and nothing changed in the base between the
+      # two passes. It is a check, not a gate — publication already happened.
       - name: Scan the published image
         # The tags on this action carry a leading v. Referencing 0.28.0 without
         # it does not fail the step — it fails the whole job at set-up, before
@@ -107,7 +130,7 @@ jobs:
         with:
           image-ref: ghcr.io/easyp-tech/service:${{ github.ref_name }}
           format: table
-          exit-code: '1'
+          exit-code: '0'
           ignore-unfixed: true
           severity: HIGH,CRITICAL
 

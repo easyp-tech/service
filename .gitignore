@@ -93,3 +93,8 @@ deploy/observability/traefik/traefik.public.yml
 !*.env.example
 id_rsa*
 id_ed25519*
+
+# goreleaser output. Left untracked it fails the second goreleaser call in the
+# release pipeline: the build pass writes here, and the publish pass refuses a
+# dirty tree.
+dist/
