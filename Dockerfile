@@ -69,6 +69,8 @@ COPY --from=builder --chown=65532:65532 /app/easyp-svc /easyp-svc
 # downstream redistributor can satisfy that without hunting for the repository.
 COPY --from=builder /app/LICENSE /LICENSE
 
+HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 CMD ["/easyp-svc", "health"]
+
 VOLUME ["/plugins"]
 
 USER 65532:65532

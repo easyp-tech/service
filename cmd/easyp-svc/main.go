@@ -76,6 +76,7 @@ func getCommands() []*cli.Command {
 		getAuthCommand(),
 		getAPICommand(),
 		getConfigCommand(),
+		getHealthCommand(),
 	}
 }
 
