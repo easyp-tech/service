@@ -5,6 +5,9 @@ on:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
 
+env:
+  GOPROXY: https://proxy.golang.org,direct
+
 jobs:
   # The same checks master gets, run against the tagged commit before anything
   # is published. A tag usually points at a commit master has already tested,
