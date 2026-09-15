@@ -5,7 +5,7 @@
 # runs the whole Go toolchain under QEMU — the compiler, not just the output.
 # CGO is off, so cross-compiling is a matter of two environment variables and
 # the emulator is pure cost.
-FROM --platform=$BUILDPLATFORM golang:1.26-bookworm AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27-bookworm AS builder
 
 # Supplied by BuildKit from the requested platform. They default to the host's
 # when nothing is requested, so a plain `docker build` is unaffected.
