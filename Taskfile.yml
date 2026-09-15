@@ -44,6 +44,15 @@ tasks:
     cmds:
       - "{{.COMPOSE}} down --volumes"
 
+  deploy-dev:
+    desc: "Sync deploy/ to the dev stand and roll the two tiers (HOST=user@host)"
+    dir: "{{.USER_WORKING_DIR}}"
+    preconditions:
+      - sh: 'test -n "{{.HOST}}"'
+        msg: "HOST is required: task deploy-dev HOST=user@host"
+    cmds:
+      - deploy/scripts/deploy-dev.sh "{{.HOST}}"
+
   up-dev:
     desc: "Start community and enterprise side by side (8080-8083 / 9080-9083)"
     dir: "{{.USER_WORKING_DIR}}"
