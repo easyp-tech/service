@@ -35,11 +35,7 @@ func getHealthCommand() *cli.Command {
 				Usage: "host:port of the health listener; derived from --cfg or the default port when empty",
 				Value: "",
 			},
-			&cli.StringFlag{
-				Name:  flagCfg,
-				Usage: "path to config file, used only to learn the health port",
-				Value: "",
-			},
+			cfgFlag("path to config file, used only to learn the health port"),
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			addr, err := resolveHealthAddr(ctx, cmd.String(flagAddr), cmd.String(flagCfg))

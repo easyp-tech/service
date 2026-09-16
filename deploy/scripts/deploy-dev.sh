@@ -4,6 +4,8 @@ set -euo pipefail
 HOST="${1:?usage: deploy-dev.sh user@host}"
 REMOTE_DIR="${REMOTE_DIR:-easyp}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+VERSION="${VERSION:-$(sed -nE 's/.*service:\$\{EASYP_SERVICE_VERSION:-([^}]+)\}.*/\1/p' "$REPO/deploy/docker-compose.dev.yml" | head -1)}"
+[ -n "$VERSION" ] || { echo "cannot read the image version from deploy/docker-compose.dev.yml" >&2; exit 1; }
 
 rsync -az --delete \
   --exclude 'certs/' \
@@ -14,16 +16,21 @@ rsync -az --delete \
   --exclude 'charts/' \
   "$REPO/deploy/" "$HOST:$REMOTE_DIR/"
 
-ssh "$HOST" bash -s "$REMOTE_DIR" <<'REMOTE'
+ssh "$HOST" bash -s "$REMOTE_DIR" "$VERSION" <<'REMOTE'
 set -euo pipefail
 cd "$1"
+export EASYP_SERVICE_VERSION="$2"
+
+env_file=.env.dev
+[ -f "$env_file" ] || env_file=.env
+[ -f "$env_file" ] || { echo "neither .env.dev nor .env in $PWD" >&2; exit 1; }
 
 compose() {
   docker compose \
     -f docker-compose.dev.yml \
     -f docker-compose.observability.yml \
     -f docker-compose.public.yml \
-    --env-file .env.dev "$@"
+    --env-file "$env_file" "$@"
 }
 
 compose pull --quiet service-community service-enterprise

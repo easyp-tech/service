@@ -16,6 +16,7 @@ import (
 // Flag and argument names shared by several plugin subcommands.
 const (
 	flagCfg            = "cfg"
+	envCfg             = "EASYP_CONFIG"
 	flagFilter         = "filter"
 	flagPacked         = "packed"
 	flagParallel       = "parallel"
@@ -69,6 +70,15 @@ func main() {
 	}
 }
 
+func cfgFlag(usage string) *cli.StringFlag {
+	return &cli.StringFlag{
+		Name:    flagCfg,
+		Usage:   usage,
+		Value:   "",
+		Sources: cli.EnvVars(envCfg),
+	}
+}
+
 func getCommands() []*cli.Command {
 	return []*cli.Command{
 		getServiceCommand(),
@@ -93,11 +103,7 @@ func getConfigCommand() *cli.Command {
 				Name:  "validate",
 				Usage: "Check a configuration without starting the service",
 				Flags: []cli.Flag{
-					&cli.StringFlag{
-						Name:  flagCfg,
-						Usage: "path to config file; omit to check the environment alone",
-						Value: "",
-					},
+					cfgFlag("path to config file; omit to check the environment alone"),
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					return runConfigValidate(ctx, cmd.String(flagCfg))
@@ -107,11 +113,7 @@ func getConfigCommand() *cli.Command {
 				Name:  "print",
 				Usage: "Print the configuration the service would run with",
 				Flags: []cli.Flag{
-					&cli.StringFlag{
-						Name:  flagCfg,
-						Usage: "path to config file; omit to resolve from the environment alone",
-						Value: "",
-					},
+					cfgFlag("path to config file; omit to resolve from the environment alone"),
 					&cli.BoolFlag{
 						Name:  "origin",
 						Usage: "annotate each setting with the layer it came from",
@@ -200,11 +202,7 @@ func getServiceCommand() *cli.Command {
 				Name:  "start",
 				Usage: "Start the gRPC/MCP service",
 				Flags: []cli.Flag{
-					&cli.StringFlag{
-						Name:  flagCfg,
-						Usage: "path to config file",
-						Value: "",
-					},
+					cfgFlag("path to config file"),
 					&cli.StringFlag{
 						Name: "log-level",
 						// Every other flag in this tool is kebab-case
@@ -476,11 +474,7 @@ func pushFlags() []cli.Flag {
 // on a command line at all.
 func s3Flags() []cli.Flag {
 	return []cli.Flag{
-		&cli.StringFlag{
-			Name:  flagCfg,
-			Usage: "path to service config YAML; registry.s3 is used for settings not passed as flags",
-			Value: "",
-		},
+		cfgFlag("path to service config YAML; registry.s3 is used for settings not passed as flags"),
 		&cli.StringFlag{
 			Name:  "bucket",
 			Usage: "S3 bucket name (overrides registry.s3.bucket from --cfg)",
@@ -521,11 +515,7 @@ func registerFlags() []cli.Flag {
 			Usage: "gRPC server address (the chart publishes gRPC on 8080)",
 			Value: "localhost:23410",
 		},
-		&cli.StringFlag{
-			Name:  flagCfg,
-			Usage: "path to service config YAML; registry.plugins_dir is used as --plugins-prefix when that flag is not set",
-			Value: "",
-		},
+		cfgFlag("path to service config YAML; registry.plugins_dir is used as --plugins-prefix when that flag is not set"),
 		&cli.StringFlag{
 			Name:  flagFilter,
 			Usage: "glob filter pattern for plugins (e.g. 'connectrpc/*')",
