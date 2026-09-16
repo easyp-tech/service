@@ -1,4 +1,4 @@
-<!-- generated: 2026-05-24, template: agents-index.md -->
+<!-- generated: 2026-09-16, template: agents-index.md -->
 # EasyP API Service
 
 Centralized protobuf/gRPC plugin execution service. Accepts `CodeGeneratorRequest` via gRPC, executes the named plugin as a local process, returns `CodeGeneratorResponse`.
@@ -33,10 +33,36 @@ tidy. `api/` and `sdk/` carry their own `go.mod` and their own Apache-2.0
 before the split a client importing the SDK had its licence scanner report
 Elastic-2.0 on their own build.
 
-They are tagged separately — `v1.0.0`, `api/v1.0.0`, `sdk/v1.0.0` — and released
+They are tagged separately — `v1.0.2`, `api/v1.0.2`, `sdk/v1.0.2` — and released
 in lockstep, so that one version number means one thing. A change to the wire
 contract therefore touches a module whose version is a promise to people outside
 this repository.
+
+## What the licence tier actually changes
+
+Less than the two-tier scaffolding suggests, and worth knowing before adding a
+feature behind the gate.
+
+Audit is the only Enterprise-gated feature. `feature.IsEnterprise` returns true
+for exactly one constant, and constants for undeclared features were deliberately
+removed: they read as shipped capability when nothing stood behind them. Code
+generation, plugin listing, MCP tools, rate limiting and plugin CRUD are all in
+Community.
+
+The rest of the difference is ceilings, and Enterprise simply has none:
+
+| Ceiling | Community | Enterprise |
+|---|---|---|
+| `worker_pool.workers` | 4 | unlimited |
+| Plugins in the registry | 10 | unlimited |
+| Concurrent generations | 16 | unlimited |
+
+A ceiling caps the resolved configuration at startup rather than rejecting the
+request, so an over-ambitious Community config starts and logs what it got.
+
+A token names a tier and nothing else. Which features that tier unlocks is
+decided in `core.EnterpriseLicenseClaims`, in the release, so extending the
+offering ships as a version rather than as a licence reissue for every customer.
 
 ## Project Map
 
@@ -48,12 +74,17 @@ cmd/mcp-smoke/main.go   # MCP smoke test client
 internal/
   core/                 # Domain types, interfaces, sentinel errors, worker pool
   api/                  # gRPC handlers, audit & license interceptors, MCP handler
-  adapters/             # audit/ metrics/ registry/ — implement core interfaces
+  adapters/             # audit/ metrics/ registry/ storage/ — implement core interfaces
+  auth/                 # Authenticator interface, static write-token digests, Actor
+  config/               # Loader, diagnostics, env binding, retired keys, aliases
   database/             # sqlx wrapper (metrics/tracing), connectors
-    goosemigrate/       # Embedded SQL migrations (goose v3, Provider API)
+    goosemigrate/       # Embedded SQL migrations (goose v3, advisory-locked)
   grpchelper/           # gRPC server/client factories, middleware
   license/              # PASETO v4 management, FeatureGate, claims
-  ratelimiter/          # Per-IP token bucket with FeatureGate
+  plugarchive/          # tar.gz pack/unpack with the path and symlink rules
+  ratelimiter/          # Per-IP token bucket and concurrency cap, both gated
+  safe/                 # Panic-guarded goroutine helper
+  serve/                # HTTP and gRPC listener lifecycles
   telemetry/            # OTLP + Pyroscope, tracing decorators
   monitor/              # Context-aware slog logger
   flags/                # CLI flag types
@@ -68,7 +99,7 @@ deploy/                 # Everything that runs the service somewhere
   config/               # Service configs, one per way of running it
   observability/        # Alloy, Grafana, Loki, Tempo, Mimir, Pyroscope, Traefik
   charts/easyp-service/ # Helm chart
-  scripts/              # gen-dev-certs.sh
+  scripts/              # gen-dev-certs.sh, deploy-dev.sh
 ```
 
 ## Build & Test
@@ -80,12 +111,16 @@ task up                  # Full dev stack (postgres, grafana, loki, alloy, tempo
 task up-minimal          # Postgres only (port 5433)
 task down                # Stop and clean volumes
 task up-dev              # Community and enterprise side by side (needs deploy/.env.dev)
+task up-dev-full         # Same plus the observability overlay
 task tier-dev            # Assert the two dev tiers really are different tiers
+task logs-dev            # Tail the two-tier stack
 task down-dev            # Stop the two-tier stack
+task deploy-dev HOST=... # Ship deploy/ to a stand and roll it to the version this repo names
 task run                 # Full cycle: build-plugins → down → up → register-plugins → logs
 task setup               # Same as run but without tailing logs
 task run-local           # go run from source against minimal stack
 task build-plugins       # Build all plugin binaries from registry/ Dockerfiles (easyp-svc plugins build)
+task push-plugins        # Upload packed archives to S3 (easyp-svc plugins push)
 task register-plugins    # Register all built plugins via gRPC CreatePlugin API (easyp-svc plugins register)
 task generate            # easyp generate against running service (easyp.yaml)
 task generate-local      # easyp generate with local config (easyp.local.yaml)
@@ -109,7 +144,9 @@ go test ./...            # Standard tests
 - **Testing:** standard `go test` with `stretchr/testify` assertions (`assert`/`require`); mocks defined in test files
 - **Config priority:** environment > YAML file > `default=` struct tag. The only
   flags that take part are `--cfg`, which chooses the file, and `--log_level`,
-  which overrides `log.level`. An unrecognised YAML key refuses the start. See
+  which overrides `log.level`. `--cfg` also reads `EASYP_CONFIG`, which is how
+  the image's `HEALTHCHECK` finds the same file the service was started with.
+  An unrecognised YAML key refuses the start. See
   [Configuration](README.md#configuration) and `internal/config/config.go`.
 - **Comments:** English only; every exported symbol must have a godoc comment starting with its name; no inline comments on `if`/`for`/`return` lines unless genuinely non-obvious.
 
@@ -128,6 +165,7 @@ go test ./...            # Standard tests
 - **`easyp generate` needs running service** — the generate command calls localhost:8080 gRPC
 - **Migration order matters** — files are sorted by numeric prefix; never reorder
 - **Audit channel capacity** — `audit.buffer_size`, 1000 by default, not fixed. An entry that cannot be queued within `audit.enqueue_timeout` is dropped and counted in `easyp_audit_events_lost_total{reason="enqueue_timeout"}` — the alert exists because a silent drop is a gap in something Enterprise sells
+- **The image checks its own health** — `easyp-svc health` probes `/live` on the health port and backs the `HEALTHCHECK` in the Dockerfile. It has no command line of its own, so it finds the config through `EASYP_CONFIG`; without that variable it falls back to the default port and reports a container unhealthy while it serves normally. It deliberately probes liveness, not readiness: readiness checks Postgres, and restarting on a database blip turns an outage into a crash loop
 - **WorkerPool `Get()` is non-blocking** — returns `ErrServerOverloaded` immediately if queue is full
 
 ## Documentation
@@ -153,13 +191,20 @@ else is documented next to the code it describes.
 
 ## Ports
 
+These are the defaults the binary ships. Every deployment in `deploy/` overrides
+them, so a port seen in a compose file or a log line is not evidence of what the
+default is.
+
 | Port | Service | Protocol |
 |------|---------|----------|
-| 8080 | gRPC API | gRPC (H2) |
-| 8081 | Metrics | HTTP (`/metrics`) |
-| 8082 | Health | HTTP (`/health`) |
-| 8083 | MCP | HTTP (`/mcp`), served only when `mcp.enabled` |
+| 23410 | gRPC API | gRPC (H2) |
+| 23411 | Metrics | HTTP (`/metrics`) |
+| 23412 | Health | HTTP (`/live` liveness, `/` readiness) |
+| 23413 | MCP | HTTP (`/mcp`), served only when `mcp.enabled` |
 | 5432/5433 | PostgreSQL | TCP |
+
+The two-tier dev stack puts them on 8080 to 8083 instead, which is what
+`deploy/config/config.*.dev.yml` says and what the containers log.
 
 ## Before changing anything non-trivial
 
