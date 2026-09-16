@@ -98,3 +98,4 @@ id_ed25519*
 # release pipeline: the build pass writes here, and the publish pass refuses a
 # dirty tree.
 dist/
+.cache/
