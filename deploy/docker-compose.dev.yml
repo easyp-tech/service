@@ -135,7 +135,7 @@ services:
     # loader learned to supply defaults, with an error naming a key whose default
     # is documented. Set EASYP_SERVICE_VERSION to a release tag, to `edge` for
     # the tip of master, or to `sha-<short>` to pin the exact commit under test.
-    image: ghcr.io/easyp-tech/service:${EASYP_SERVICE_VERSION:-v1.0.1}
+    image: ghcr.io/easyp-tech/service:${EASYP_SERVICE_VERSION:-v1.0.2}
     container_name: easyp-api-community
     restart: always
     user: "${EASYP_UID:-65532}:${EASYP_GID:-65532}"
@@ -181,6 +181,7 @@ services:
       # already carry the same word as a label, put there by Alloy from the
       # service label below — keep the two spellings equal.
       TELEMETRY_SERVICE_TIER: community
+      EASYP_CONFIG: /config.community.dev.yml
     ports:
       - "${EASYP_BIND:-127.0.0.1}:8080:8080"
       - "${EASYP_BIND:-127.0.0.1}:8081:8081"
@@ -215,7 +216,7 @@ services:
     # loader learned to supply defaults, with an error naming a key whose default
     # is documented. Set EASYP_SERVICE_VERSION to a release tag, to `edge` for
     # the tip of master, or to `sha-<short>` to pin the exact commit under test.
-    image: ghcr.io/easyp-tech/service:${EASYP_SERVICE_VERSION:-v1.0.1}
+    image: ghcr.io/easyp-tech/service:${EASYP_SERVICE_VERSION:-v1.0.2}
     container_name: easyp-api-enterprise
     restart: always
     user: "${EASYP_UID:-65532}:${EASYP_GID:-65532}"
@@ -254,6 +255,7 @@ services:
       # enterprise — which is the useful reading: it says what this container was
       # meant to be, and the licence metrics say what it actually is.
       TELEMETRY_SERVICE_TIER: enterprise
+      EASYP_CONFIG: /config.enterprise.dev.yml
     ports:
       - "${EASYP_BIND:-127.0.0.1}:9080:8080"
       - "${EASYP_BIND:-127.0.0.1}:9081:8081"

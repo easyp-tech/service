@@ -321,6 +321,10 @@ without it:
 2. the environment, which **overrides** the file;
 3. the `default=` on the field, which fills only what neither supplied.
 
+The file can also be named by `EASYP_CONFIG` instead of `--cfg`. The image's
+`HEALTHCHECK` depends on that: the probe runs without a command line of its own
+and finds the health port through the same variable.
+
 A variable that is set but empty counts as not set, so the `"${VAR:-}"` form used
 throughout `deploy/` leaves the file's value alone when the variable is not
 exported. This is what lets a secret — `DB_POSTGRES_DSN`, `AUTH_WRITE_TOKENS`,

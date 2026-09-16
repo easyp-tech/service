@@ -1,8 +1,11 @@
 package main
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -65,4 +68,17 @@ func TestResolveHealthAddrFallsBackToDefaultPort(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, "127.0.0.1:23412", addr)
+}
+
+func TestHealthCommandReadsConfigPathFromEnvironment(t *testing.T) {
+	t.Setenv("DB_POSTGRES_DSN", "postgres://u:p@h:5432/d?sslmode=disable")
+
+	_, port, err := net.SplitHostPort(liveServer(t, http.StatusOK))
+	require.NoError(t, err)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.yml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte("server:\n  port:\n    health: "+port+"\n"), 0o600))
+	t.Setenv(envCfg, cfgPath)
+
+	require.NoError(t, getHealthCommand().Run(t.Context(), []string{"health"}))
 }
