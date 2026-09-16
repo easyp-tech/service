@@ -145,6 +145,12 @@ services:
       init-db:
         condition: service_completed_successfully
     command: ["service", "start", "--cfg=/config.community.dev.yml"]
+    healthcheck:
+      test: ["CMD", "/easyp-svc", "health", "--cfg=/config.community.dev.yml"]
+      interval: 10s
+      timeout: 3s
+      start_period: 15s
+      retries: 3
     volumes:
       - "./config/config.community.dev.yml:/config.community.dev.yml:ro"
       # The three files server.tls in the config names, and no more. This
@@ -226,6 +232,12 @@ services:
       init-db:
         condition: service_completed_successfully
     command: ["service", "start", "--cfg=/config.enterprise.dev.yml"]
+    healthcheck:
+      test: ["CMD", "/easyp-svc", "health", "--cfg=/config.enterprise.dev.yml"]
+      interval: 10s
+      timeout: 3s
+      start_period: 15s
+      retries: 3
     volumes:
       - "./config/config.enterprise.dev.yml:/config.enterprise.dev.yml:ro"
       # Same three as the community container above, and for the same reason.
