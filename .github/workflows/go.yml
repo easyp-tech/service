@@ -361,7 +361,7 @@ jobs:
       # than a race between whatever each machine happens to have installed.
       - name: Install easyp
         run: |
-          version="$(go list -m -f '{{.Version}}' github.com/easyp-tech/easyp 2>/dev/null || echo v0.16.6)"
+          version="$(go list -m -f '{{.Version}}' github.com/easyp-tech/easyp 2>/dev/null || echo v0.17.0)"
           go install "github.com/easyp-tech/easyp/cmd/easyp@${version}"
 
       # Both steps. easyp writes .pb.go and _grpc.pb.go; .mcp.go needs the
