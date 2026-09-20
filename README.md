@@ -105,16 +105,23 @@ Grafana is on [localhost:3000](http://localhost:3000) (`admin` / `admin`).
 ### From source, against Postgres alone
 
 For working on the service itself: no traefik, no TLS, no object store.
+`task run-local` starts the service from `deploy/config/config.local.yml`,
+plaintext on 8080, and registers whatever is in `plugins/` once it is ready.
 
 ```bash
 FILTER='protocolbuffers/go:v1.36.10' task build-plugins-filter
 FILTER='grpc/go:v1.6.2' task build-plugins-filter
 task up-minimal        # Postgres only; on 5433 if 5432 is taken (EASYP_POSTGRES_PORT)
-task run-local         # go run against deploy/config/config.local.yml, plaintext on 8080
-task register-plugins  # in another terminal
-easyp --cfg easyp.local.yaml generate
+task run-local
+easyp --cfg easyp.local.yaml generate       # in another terminal
 go run ./cmd/mcp-smoke --endpoint http://localhost:8083/mcp
 ```
+
+**On macOS this registers plugins but cannot run them.** `plugins build` is a
+Docker build, so the binaries it extracts are Linux binaries, and a service
+running natively on macOS gets `exec format error` from the first
+`GenerateCode`. Use the compose stack there — the service runs in a Linux
+container — and keep the from-source path for Linux hosts.
 
 ### Is it up?
 
@@ -995,7 +1002,11 @@ docker exec -it easyp-postgres psql -U easyp_svc -d easyp_db -c 'SELECT group_na
 ```
 
 A `CreatePlugin` that fails with `FAILED_PRECONDITION` means the archive was
-never pushed: `task push-plugins` comes before `task register-plugins`. A
+never pushed: `task push-plugins` comes before `task register-plugins`. A run
+of `plugins register` where most plugins fail with `RESOURCE_EXHAUSTED` is its
+default `--parallel` of 8 meeting a server's default
+`rate_limit.max_concurrent_per_ip` of 2 — the configs under `deploy/` raise the
+cap; against any other server pass `--parallel 2`. A
 `GenerateCode` that fails with `GENERATION_FAILED` and a plugin's stderr in the
 message is the plugin refusing the input — a proto without `go_package`, for
 instance — not the service.

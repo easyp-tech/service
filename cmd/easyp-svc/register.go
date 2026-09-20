@@ -31,9 +31,11 @@ const (
 	// pluginEntrypointName is the file a built plugin version directory is
 	// required to contain, and the one a scan of such a tree looks for.
 	pluginEntrypointName = "plugin"
-	// defaultRegisterParallel is how many plugins are registered at once. It
-	// sits at the lower of the two tiers' max_concurrent_per_ip so that the
-	// default does not spend its time being throttled and retried.
+	// defaultRegisterParallel is how many plugins are registered at once. The
+	// configs under deploy/ raise rate_limit.max_concurrent_per_ip to make
+	// room for it; a server left at that setting's default of 2 refuses the
+	// rest with ResourceExhausted, which the SDK deliberately does not retry,
+	// so against such a server pass --parallel 2.
 	defaultRegisterParallel = 8
 )
 
