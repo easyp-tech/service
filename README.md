@@ -70,11 +70,13 @@ is the server (`service start`) and the operator's CLI (`plugins`, `config`,
 
 Plugins are built from the Dockerfiles in `registry/`, pushed to the stack's
 object store, then registered with the service. The whole catalogue is 80
-plugins and takes a while; a filter builds a slice of it:
+plugins in several hundred versions and takes hours; a filter builds one:
 
 ```bash
-# 1. Build plugin binaries. `task build-plugins` builds all of them.
-FILTER='protocolbuffers/*' task build-plugins-filter
+# 1. Build plugin binaries — the two that easyp.local.yaml asks for.
+#    `task build-plugins` builds the whole registry.
+FILTER='protocolbuffers/go:v1.36.10' task build-plugins-filter
+FILTER='grpc/go:v1.6.2' task build-plugins-filter
 
 # 2. Generate development certificates and start everything.
 task up
@@ -105,7 +107,8 @@ Grafana is on [localhost:3000](http://localhost:3000) (`admin` / `admin`).
 For working on the service itself: no traefik, no TLS, no object store.
 
 ```bash
-task build-plugins-filter FILTER='protocolbuffers/*'
+FILTER='protocolbuffers/go:v1.36.10' task build-plugins-filter
+FILTER='grpc/go:v1.6.2' task build-plugins-filter
 task up-minimal        # Postgres only; on 5433 if 5432 is taken (EASYP_POSTGRES_PORT)
 task run-local         # go run against deploy/config/config.local.yml, plaintext on 8080
 task register-plugins  # in another terminal
