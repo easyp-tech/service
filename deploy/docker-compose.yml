@@ -85,7 +85,7 @@ services:
       - easyp_network
 
   init-buckets:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     container_name: easyp-init-buckets
     entrypoint: >
       /bin/sh -c "
