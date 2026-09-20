@@ -114,7 +114,8 @@ func TestReadmeUsesTheRenamedService(t *testing.T) {
 
 	text := string(readme)
 	require.Contains(t, text, generator.GeneratorAPI_ServiceDesc.ServiceName)
-	require.NotContains(t, text, "ServiceAPI", "renamed to GeneratorAPI in v0.14.0")
+	require.NotContains(t, text, "service ServiceAPI", "renamed to GeneratorAPI in v0.14.0")
+	require.NotContains(t, text, "ServiceAPI/", "no RPC path under the old name")
 	require.NotContains(t, text, "api.generator.v1", "the proto package is easyp.generator.v1")
 }
 
@@ -149,7 +150,7 @@ func TestReadmeNamesOnlyRealMetrics(t *testing.T) {
 	var unknown []string
 
 	for _, name := range metricMention.FindAllString(string(readme), -1) {
-		if known[name] || strings.HasPrefix(name, "easyp_api_grpc_") {
+		if known[name] || notMetrics[name] || strings.HasPrefix(name, "easyp_api_grpc_") {
 			continue
 		}
 
@@ -157,6 +158,18 @@ func TestReadmeNamesOnlyRealMetrics(t *testing.T) {
 	}
 
 	require.Empty(t, unknown, "the README names metrics the service does not export")
+}
+
+// notMetrics are easyp_-prefixed identifiers the README legitimately uses
+// that are not metrics: the database role, database names and the bucket.
+var notMetrics = map[string]bool{
+	"easyp_svc":           true,
+	"easyp_pass":          true,
+	"easyp_db":            true,
+	"easyp_community_db":  true,
+	"easyp_enterprise_db": true,
+	"easyp_plugins":       true,
+	"easyp_network":       true,
 }
 
 // metricMention matches an easyp_-prefixed metric name in prose or code.
@@ -243,6 +256,7 @@ func TestReadmeDescribesTheCurrentRegistryLayout(t *testing.T) {
 	text := string(readme)
 	require.Contains(t, text, "plugin.yaml")
 	require.Contains(t, text, "ARG VERSION")
-	require.NotContains(t, text, "{version}", "versions live in plugin.yaml, not in a directory")
+	require.NotContains(t, text, "{plugin-name}/{version}", "versions live in plugin.yaml, not in a directory")
+	require.NotRegexp(t, `registry/[a-z-]+/[a-z-]+/v\d`, text, "registry/ has no version directories")
 	require.NotContains(t, text, "upx", "no registry Dockerfile uses it")
 }

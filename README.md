@@ -1,262 +1,185 @@
 # EasyP API Service
 
-A service for executing protobuf/gRPC code generation plugins as isolated processes.
+[![Release](https://img.shields.io/github/v/release/easyp-tech/service?sort=semver)](https://github.com/easyp-tech/service/releases)
+[![Go](https://img.shields.io/github/go-mod/go-version/easyp-tech/service)](go.mod)
+[![License](https://img.shields.io/badge/license-Elastic--2.0-blue)](LICENSE)
 
-**Module:** `github.com/easyp-tech/service`
+A service that runs protobuf code-generation plugins so that developers and CI
+do not have to install them. A client sends a
+`google.protobuf.compiler.CodeGeneratorRequest` over gRPC and names a plugin;
+the service executes that plugin as a local child process — bounded in time,
+concurrency and output size, but not sandboxed — and returns the
+`CodeGeneratorResponse`. One registry of plugin versions replaces one
+installation per machine.
 
-## Why EasyP API Service?
+**Module:** `github.com/easyp-tech/service` · **Docs for operators:**
+[easyp.tech/docs/api-service](https://easyp.tech/docs/api-service/overview) ·
+**Client:** [easyp](https://github.com/easyp-tech/easyp) CLI, or the Go SDK in
+[`sdk/`](sdk/)
 
-### The Problem: Plugin Management Chaos
+## Install
 
-Managing protobuf/gRPC code generation across development teams becomes increasingly complex as organizations scale:
+Every release publishes an image, a Helm chart and the binaries. Pick one.
 
-**Version Inconsistencies**
-- Developers use different plugin versions locally, causing build failures and inconsistent generated code
-- "Works on my machine" syndrome when generated code differs between environments
-- Manual coordination required to keep entire teams synchronized on plugin versions
+**Image** — `ghcr.io/easyp-tech/service`, multi-arch (amd64, arm64):
 
-**Operational Overhead**
-- DevOps teams spend significant time managing plugin installations across developer machines
-- Each new team member requires manual setup of correct plugin versions
-- Plugin updates require coordinating with every developer individually
-- No centralized control over which plugin versions are approved for use
+| Tag | Meaning |
+|-----|---------|
+| `v1.0.2` | a release; immutable |
+| `latest` | the newest release — only moves on a release tag |
+| `edge` | the tip of `master`; moves on every push |
+| `sha-<short>` | one commit; immutable |
 
-**Security & Compliance Risks**
-- Developers install plugins from various sources without security validation
-- No audit trail of which plugins were used for which builds
-- Difficult to enforce security policies on code generation tools
-
-### The Solution: Centralized Plugin Execution
-
-EasyP API Service eliminates these operational headaches by centralizing plugin management:
-
-**🎯 Instant Version Control**
-- Deploy new plugin versions to entire team instantly
-- Operations team controls plugin rollouts without touching developer machines
-- Zero developer coordination required for plugin updates
-
-**🔒 Security & Consistency**
-- All plugins built from auditable Dockerfiles with security constraints
-- Centralized approval process for new plugins
-- Consistent execution environment regardless of developer's local setup
-
-**⚡ Developer Experience**
-- No local plugin installation or maintenance required
-- Works identically across all environments (local, CI/CD, production)
-- New team members productive immediately without plugin setup
-
-## Overview
-
-EasyP API Service provides centralized management and execution of protobuf/gRPC plugins. The service accepts `google.protobuf.compiler.CodeGeneratorRequest` via gRPC API and returns generated code by executing plugin binaries in an isolated environment with bounded concurrency.
-
-### Key Features
-
-- 🔧 **Plugin binary execution** with bounded worker pool
-- 📦 **Plugin registry** with PostgreSQL metadata storage
-- 🔄 **Plugin versioning** with "latest" support
-- 📊 **Full observability** with Prometheus, Grafana, OpenTelemetry, Pyroscope
-- 🗄️ **Persistence** with PostgreSQL
-- 🌐 **gRPC + MCP** API
-- 📈 **Health checks** and metrics
-- 🔑 **Two-tier licensing** (Community / Enterprise)
-- 🔐 **Token-authenticated writes**, anonymous reads
-- 📝 **Audit logging** for all operations
-
-## Architecture
-
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   gRPC Client   │───▶│   API Service   │───▶│  Plugin Binary   │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-                               │
-                               ▼
-                       ┌─────────────────┐
-                       │   PostgreSQL    │
-                       └─────────────────┘
-```
-
-The service executes plugins as local binaries, passing protobuf data through stdin/stdout.
-
-### Plugin Artifact Delivery
-
-The unit of delivery is the **plugin version directory**, not a single file: the contract requires `plugins/{group}/{name}/{version}/plugin` as the entrypoint and allows sidecars next to it (jars, shared libraries, scripts). It is packed as a `tar.gz` and stored at `{group}/{name}/{version}/plugin.tgz`.
-
-```
-build machine / CI                       service
-──────────────────                       ───────
-plugins build   → plugins/{g}/{n}/{v}/…
-plugins push    → s3://…/plugin.tgz
-plugins register ──── CreatePlugin ────→ streams the archive from S3,
-                      (metadata only)    computes sha256, stores it in the DB
-
-                      GenerateCode ────→ entrypoint missing locally?
-                                         download archive → verify sha256
-                                         → unpack → execute
-```
-
-Key properties:
-
-- **Push before register.** Registering a plugin whose archive is absent fails with `FAILED_PRECONDITION` — a registered plugin always has its artifact.
-- **The service computes the checksum**, reading the object itself, so a client cannot register a bogus hash. It is re-verified after every download, before anything is executed.
-- **Credentials split:** the build pipeline needs S3 write access; the service only needs read (plus delete for `DeletePlugin`). Clients of the gRPC API need no S3 access at all.
-- **Concurrent misses collapse** into a single download (singleflight); `plugins_dir` acts as a local cache.
-- With S3 disabled, nothing changes from the classic flow: artifacts are read straight from `plugins_dir`.
-
-#### Pushing a packed tree
-
-`plugins pack --out <dir>` writes the same `{group}/{name}/{version}/plugin.tgz` layout to disk, which `plugins push --packed <dir>` uploads as it is. Packing on the build machine and uploading later — or from elsewhere — is then two commands instead of one repeated:
+**Helm** — the chart is in the same registry. It refuses to install without a
+database DSN, so bring a secret first:
 
 ```bash
-# Build machine: pack once.
-easyp-svc plugins pack plugins --out plugin-archives
+kubectl create secret generic easyp-env \
+  --from-literal=DB_POSTGRES_DSN='postgres://user:pass@host:5432/easyp?sslmode=require'
 
-# Anywhere with the archives and S3 credentials.
-export AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=…
-easyp-svc plugins push plugin-archives --packed \
-  --endpoint https://storage.example.com --bucket easyp-plugins --force-path-style \
-  --parallel 24
+helm install easyp oci://ghcr.io/easyp-tech/charts/easyp-service \
+  --version 1.0.2 \
+  --set secrets.existingSecret=easyp-env \
+  --set tls.enabled=false
 ```
 
-Uploads run `--parallel` at a time (8 by default). Object storage commonly rate-limits a single connection far below the link it arrives on, so throughput comes from streams rather than from any one of them: measure one stream, then set `--parallel` to about the ratio between your uplink and that figure. An interrupted run is resumed by re-running it — archives already in storage are skipped without being re-read.
+That is a running service with no transport security and no writes enabled —
+enough to confirm it works, not enough to expose. The chart's
+[README](deploy/charts/easyp-service/README.md) covers TLS, mTLS, the licence,
+`ServiceMonitor`, `PrometheusRule` and what each secret key means.
 
-The S3 settings can also come from a config file: `plugins push --cfg` accepts a **full server configuration** and runs it through the same validation as `service start` — a fragment holding only `registry.s3` is refused. That is deliberate: a config the server would reject must not quietly keep working for push, or the two stop agreeing about which store they talk to. To push without a server config, pass the storage settings as flags, as above.
+**Compose** — `deploy/docker-compose.yml` is the full development stack:
+Postgres, an S3-compatible store, the observability suite and traefik in front
+of the service. [Quick start](#quick-start) walks through it.
 
-## Project Structure
+**Binaries** — `easyp-svc` for linux and darwin, amd64 and arm64, on the
+[releases page](https://github.com/easyp-tech/service/releases). The same binary
+is the server (`service start`) and the operator's CLI (`plugins`, `config`,
+`auth`, `api`, `health`).
 
-```
-.
-├── api/                                 # The wire contract — its own Go module, Apache-2.0
-│   └── easyp/generator/v1/            # Code generation API
-│       ├── generator.proto
-│       ├── generator.pb.go
-│       ├── generator_grpc.pb.go
-│       └── generator.mcp.go
-├── cmd/
-│   ├── easyp-svc/                     # The service and its CLI
-│   └── mcp-smoke/main.go              # MCP smoke test client
-├── internal/                           # Internal logic
-│   ├── adapters/                       # External system adapters
-│   │   ├── audit/                     # Async audit log writer
-│   │   ├── metrics/                   # Prometheus metrics collection
-│   │   └── registry/                  # DB + binary execution
-│   ├── api/                           # Transport layer (gRPC + MCP)
-│   ├── core/                          # Business logic + domain types
-│   ├── database/                      # DB abstraction (sqlx wrapper)
-│   │   └── goosemigrate/migrations/  # Embedded SQL migrations
-│   ├── grpchelper/                    # gRPC server/client factories
-│   ├── license/                       # PASETO v4 licensing
-│   ├── ratelimiter/                   # Per-IP rate limiting
-│   ├── telemetry/                     # OpenTelemetry + tracing decorators
-│   ├── monitor/                       # Context-aware logging
-│   └── flags/                         # CLI flag processing
-├── sdk/                               # Go client SDK — its own module, Apache-2.0
-├── registry/                          # Plugin Dockerfiles (for building)
-│   ├── protocolbuffers/go/v1.36.10/
-│   ├── grpc/go/v1.5.1/
-│   ├── grpc-ecosystem/gateway/v2.27.3/
-│   └── grpc-ecosystem/openapiv2/v2.27.3/
-├── plugins/                           # Built plugin binaries (gitignored)
-├── test/                              # Integration tests and CI helpers
-├── test_registry/                     # Plugin Dockerfiles the tests build against
-├── deploy/                            # Everything that runs the service somewhere
-│   ├── docker-compose.yml            # Full dev stack
-│   ├── docker-compose.dev.yml        # Community and enterprise side by side
-│   ├── .env.example                  # Template for the full stack
-│   ├── .env.dev.example              # Template for the two-tier stack
-│   ├── config/                       # Service configs, one per way of running it
-│   ├── observability/                # Alloy, Grafana, Loki, Tempo, Mimir, Pyroscope, Traefik
-│   ├── charts/easyp-service/         # Helm chart
-│   ├── scripts/                      # gen-dev-certs.sh
-│   └── certs/                        # Throwaway dev TLS material (gitignored)
-├── easyp.yaml                       # Protobuf lint + generation config
-├── easyp.local.yaml                 # Local easyp config
-└── Taskfile.yml                     # Task automation
-```
-
-## Quick Start
+## Quick start
 
 ### Prerequisites
 
-- Docker and docker-compose
-- [Task](https://taskfile.dev/) (optional, but recommended)
-- Go 1.26+ (for development)
-- [grpcurl](https://github.com/fullstorydev/grpcurl) (for plugin registration)
+- Docker with the compose plugin (`docker compose`, not `docker-compose`)
+- [Task](https://taskfile.dev/)
+- Go 1.26+ to run the CLI from source; otherwise a release binary on `PATH`
+- [easyp](https://github.com/easyp-tech/easyp) to generate code from the client side
 
-### Running with Full Stack
+### The compose stack
+
+Plugins are built from the Dockerfiles in `registry/`, pushed to the stack's
+object store, then registered with the service. The whole catalogue is 80
+plugins and takes a while; a filter builds a slice of it:
 
 ```bash
-# Build plugin binaries from Dockerfiles
-task build-plugins
+# 1. Build plugin binaries. `task build-plugins` builds all of them.
+FILTER='protocolbuffers/*' task build-plugins-filter
 
-# Start all services
+# 2. Generate development certificates and start everything.
 task up
 
-# Wait for service to be ready, then register plugins
+# 3. Upload the archives, then register them.
+task push-plugins
 task register-plugins
 
-# Or do it all at once:
+# Or all four in one go, tailing the service log at the end:
 task run
 ```
 
-### Minimal Local Run
-
-For local `easyp generate`, gRPC testing and MCP smoke you do not need the full observability stack.
+The gRPC port is not published on the host: the way in is traefik at
+`easyp.api.localhost:4443`, which terminates TLS and speaks mutual TLS to the
+service. `task register-plugins` already knows that. To see what got
+registered:
 
 ```bash
-# 1. Build plugin binaries
-task build-plugins
+easyp-svc api descriptor -o api.protoset
+grpcurl -protoset api.protoset -cacert deploy/certs/ca.crt \
+  easyp.api.localhost:4443 easyp.generator.v1.GeneratorAPI/Plugins
+```
 
-# 2. Start only postgres
-# If port 5432 is already occupied, the task uses 5433 by default.
-task up-minimal
+Grafana is on [localhost:3000](http://localhost:3000) (`admin` / `admin`).
 
-# 3. In a separate terminal run the service from source
-# config.local.yml is tuned for this mode.
-task run-local
+### From source, against Postgres alone
 
-# 4. Register plugins
-task register-plugins
+For working on the service itself: no traefik, no TLS, no object store.
 
-# 5. Generate code
+```bash
+task build-plugins-filter FILTER='protocolbuffers/*'
+task up-minimal        # Postgres only; on 5433 if 5432 is taken (EASYP_POSTGRES_PORT)
+task run-local         # go run against deploy/config/config.local.yml, plaintext on 8080
+task register-plugins  # in another terminal
 easyp --cfg easyp.local.yaml generate
-
-# 6. Optional MCP smoke check
 go run ./cmd/mcp-smoke --endpoint http://localhost:8083/mcp
 ```
 
-### One-Command Setup
+### Is it up?
 
 ```bash
-# Build plugins, start stack, register — no log tailing
-task setup
-```
-
-### Health Check
-
-```bash
-# Health check
-curl http://localhost:8082/health
-
-# Metrics
+curl -i http://localhost:8082/live    # liveness: 200 as soon as the listener is bound
+curl -i http://localhost:8082/        # readiness: 200 once Postgres answers, 503 before
+easyp-svc health --addr localhost:8082   # the same probe as a command; exit 0 or 1
 curl http://localhost:8081/metrics
-
-# MCP (streamable HTTP transport)
-curl -i http://localhost:8083/mcp
-
-# Grafana (admin/admin)
-open http://localhost:3000
 ```
 
-## API
+`easyp-svc health` is what the image's `HEALTHCHECK` runs. See
+[Health and probes](#health-and-probes) for why it asks `/live` and not `/`.
 
-### Generator API (Primary)
+## Using it
 
-**Endpoint:** `easyp.api.localhost:4443` (gRPC over TLS, through traefik) in the
-compose stack; `localhost:8080` (plaintext) when the service runs from source
-with `deploy/config/config.local.yml`. See [Transport security](#transport-security).
+### From `easyp.yaml`
+
+A plugin becomes remote by naming the service in front of it:
+
+```yaml
+generate:
+  plugins:
+    - remote: "plugins.example.com/protocolbuffers/go:v1.36.10"
+      out: gen/go
+      opts:
+        paths: source_relative
+    - remote: "plugins.example.com/grpc/go:latest"
+      out: gen/go
+      opts:
+        paths: source_relative
+```
+
+`easyp.local.yaml` in this repository does exactly that against a service run
+from source.
+
+### Go SDK
+
+```go
+import "github.com/easyp-tech/service/sdk"
+
+// The SDK defaults to TLS with the system trust store. Add
+// sdk.WithTransportCredentials for a private CA, or sdk.WithInsecure() for a
+// plaintext local service.
+client, err := sdk.NewClient(
+    "localhost:8080",
+    sdk.WithInsecure(),
+    sdk.WithMaxRetries(3),
+    sdk.WithRetryBaseDelay(time.Second),
+    sdk.WithHealthCheck(30*time.Second),
+)
+if err != nil {
+    return err
+}
+defer client.Close()
+
+// codeGenRequest is a *pluginpb.CodeGeneratorRequest.
+response, err := client.GenerateCode(ctx, "protocolbuffers/go:v1.36.10", codeGenRequest)
+```
+
+`sdk/` is its own module under Apache-2.0; see [License](#license) for why.
+
+### gRPC directly
+
+The contract is `easyp.generator.v1.GeneratorAPI` in
+[`api/easyp/generator/v1/generator.proto`](api/easyp/generator/v1/generator.proto):
 
 ```protobuf
-service ServiceAPI {
+service GeneratorAPI {
   rpc GenerateCode(GenerateCodeRequest) returns (GenerateCodeResponse);
   rpc Plugins(PluginsRequest) returns (PluginsResponse);
   rpc CreatePlugin(CreatePluginRequest) returns (CreatePluginResponse);
@@ -266,49 +189,45 @@ service ServiceAPI {
 
 message GenerateCodeRequest {
   google.protobuf.compiler.CodeGeneratorRequest code_generator_request = 1;
-  string plugin_name = 2;  // Format: "group/name:version"
-}
-
-message GenerateCodeResponse {
-  google.protobuf.compiler.CodeGeneratorResponse code_generator_response = 1;
+  string plugin_name = 2;  // "group/name:version" or "group/name:latest"
 }
 ```
 
-### MCP API (HTTP Transport)
+The server does not serve reflection. `easyp-svc api descriptor` writes a
+`FileDescriptorSet` for `grpcurl -protoset`, as in the quick start.
 
-**Endpoint:** `http://localhost:8083/mcp` (streamable MCP over HTTP)
+### Errors
 
-**Opt-in.** The listener is off unless `mcp.enabled: true` (env `MCP_ENABLED`)
-is set: it serves plain HTTP outside the gRPC interceptor chain — no TLS, no
-rate limit, no audit — so a deployment decides whether that surface exists.
-It is read-only and exposes nothing the anonymous gRPC reads do not.
-easyp-tech's own configs under `deploy/config/` enable it; the Helm chart
-ships it off (`mcp.enabled` value).
+Every non-OK status carries a `google.rpc.ErrorInfo` with domain `easyp.tech`
+and a `reason` a client can branch on — `NOT_FOUND`, `INVALID_PLUGIN_NAME`,
+`INVALID_CONFIG`, `GENERATION_FAILED`, `SERVER_OVERLOADED`, `ALREADY_EXISTS`,
+`MAX_PLUGINS_EXCEEDED`, `SHUTTING_DOWN`, `STORAGE_UNAVAILABLE`,
+`BINARY_NOT_UPLOADED`, `FEATURE_DENIED`, `DEADLINE_EXCEEDED`. The gRPC code is
+a category and the message is prose; the reason is the part that is promised
+to stay. They are documented in the proto next to the RPC that returns them.
 
-Implemented tools:
-- `plugins_list` — list available plugins with optional filters: `group`, `name`, `version`, `tags`, paginated (`pageSize`/`pageToken`)
-- `easyp_config_describe` — return structured `easyp.yaml` schema/docs/examples for full config or selected `path`
+### MCP
 
-Testing MCP:
-- Handler tests: `go test ./internal/api -count=1` (`task test-mcp`)
-- Live smoke check against running endpoint: `go run ./cmd/mcp-smoke --endpoint http://localhost:8083/mcp` (`task smoke-mcp`)
+An HTTP endpoint at `/mcp` (streamable transport) for AI tooling, with one tool:
+`plugins_list`, the catalogue with optional `group`, `name`, `version` and
+`tags` filters, paginated.
 
-## Plugin Naming Format
+**Opt-in.** The listener is off unless `mcp.enabled: true` (env `MCP_ENABLED`):
+it serves plain HTTP outside the gRPC interceptor chain — no TLS, no rate limit,
+no audit — so a deployment decides whether that surface exists. It is read-only
+and exposes nothing the anonymous gRPC reads do not. easyp-tech's own configs
+under `deploy/config/` enable it; the Helm chart ships it off.
 
-Plugins are identified in the format: `{group}/{name}:{version}`
+```json
+{
+  "mcpServers": {
+    "easyp": { "url": "http://localhost:8083/mcp" }
+  }
+}
+```
 
-### Examples:
-- `protocolbuffers/go:v1.36.10` - Go protobuf plugin
-- `grpc/go:v1.5.1` - Go gRPC plugin  
-- `grpc-ecosystem/gateway:v2.27.3` - gRPC Gateway
-- `grpc-ecosystem/openapiv2:v2.27.3` - OpenAPI v2 generator
-- `protocolbuffers/go:latest` - Latest version of Go plugin
-
-### Plugin Groups:
-- `protocolbuffers` - Core protobuf plugins
-- `grpc` - gRPC plugins 
-- `grpc-ecosystem` - gRPC ecosystem plugins
-- `community` - Community plugins
+Handler tests: `task test-mcp`. Live check against a running endpoint:
+`task smoke-mcp`.
 
 ## Configuration
 
@@ -396,6 +315,14 @@ before the chart began rendering a file.
 The service prints the same summary itself, at `info`, on every start — so the
 question is answerable inside a container where these commands are not to hand.
 
+### Ports
+
+The binary's defaults are `23410` (gRPC), `23411` (metrics), `23412` (health)
+and `23413` (MCP). Every configuration under `deploy/` moves them to
+`8080`–`8083`, and so do the examples in this file — a port seen in a compose
+file or a log line is a deployment's choice, not the default. `plugins register`
+dials `localhost:23410` unless told otherwise.
+
 ### Configuration Files
 
 | File | Purpose |
@@ -408,6 +335,9 @@ question is answerable inside a container where these commands are not to hand.
 The two tier configs ship no write tokens and no telemetry endpoints on purpose:
 that stack is what `deploy/docker-compose.public.yml` puts on the internet, and a
 committed credential is a published one. Supply them through `deploy/.env.dev`.
+
+An example, not the defaults — `config print --changed` against any of the
+files above prints exactly what that deployment changes:
 
 ```yaml
 server:
@@ -443,6 +373,8 @@ rate_limit:
   burst: 20
   cleanup_interval: 10m
 ```
+
+## Security
 
 ### Transport security
 
@@ -591,216 +523,305 @@ is checked against the configured public key, and a token that fails — expired
 signed by an unknown key, or malformed — leaves the deployment in community
 mode rather than stopping it.
 
-## Contributing Plugins
+## Plugins
 
-We welcome contributions of new plugins! Here's how to add your plugin to the registry:
+### Naming
 
-### 1. Create Plugin Structure
+A plugin is `{group}/{name}:{version}`: `protocolbuffers/go:v1.36.10`,
+`grpc/go:latest`. Group and name are `[a-z][a-z0-9-]*`; the version is `vX.Y`
+or `vX.Y.Z` — the patch is optional because protobuf ships versions like
+`v33.1` — or `latest`, which resolves to the newest registered version at
+call time.
 
-```bash
-# Create plugin directory structure
-mkdir -p registry/{group}/{plugin-name}/{version}
-cd registry/{group}/{plugin-name}/{version}
+### Plugin Artifact Delivery
+
+The unit of delivery is the **plugin version directory**, not a single file: the contract requires `plugins/{group}/{name}/{version}/plugin` as the entrypoint and allows sidecars next to it (jars, shared libraries, scripts). It is packed as a `tar.gz` and stored at `{group}/{name}/{version}/plugin.tgz`.
+
+```
+build machine / CI                       service
+──────────────────                       ───────
+plugins build   → plugins/{g}/{n}/{v}/…
+plugins push    → s3://…/plugin.tgz
+plugins register ──── CreatePlugin ────→ streams the archive from S3,
+                      (metadata only)    computes sha256, stores it in the DB
+
+                      GenerateCode ────→ entrypoint missing locally?
+                                         download archive → verify sha256
+                                         → unpack → execute
 ```
 
-### 2. Create Dockerfile
+Key properties:
 
-Your plugin must be packaged as a Dockerfile that produces a static binary:
-- Reads protobuf `CodeGeneratorRequest` from stdin
-- Writes protobuf `CodeGeneratorResponse` to stdout
-- Final stage should output the binary for extraction
+- **Push before register.** Registering a plugin whose archive is absent fails with `FAILED_PRECONDITION` — a registered plugin always has its artifact.
+- **The service computes the checksum**, reading the object itself, so a client cannot register a bogus hash. It is re-verified after every download, before anything is executed.
+- **Credentials split:** the build pipeline needs S3 write access; the service only needs read (plus delete for `DeletePlugin`). Clients of the gRPC API need no S3 access at all.
+- **Concurrent misses collapse** into a single download (singleflight); `plugins_dir` acts as a local cache.
+- With S3 disabled, nothing changes from the classic flow: artifacts are read straight from `plugins_dir`.
 
-#### Example: Go-based Plugin
+#### Pushing a packed tree
+
+`plugins pack --out <dir>` writes the same `{group}/{name}/{version}/plugin.tgz` layout to disk, which `plugins push --packed <dir>` uploads as it is. Packing on the build machine and uploading later — or from elsewhere — is then two commands instead of one repeated:
+
+```bash
+# Build machine: pack once.
+easyp-svc plugins pack plugins --out plugin-archives
+
+# Anywhere with the archives and S3 credentials.
+export AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=…
+easyp-svc plugins push plugin-archives --packed \
+  --endpoint https://storage.example.com --bucket easyp-plugins --force-path-style \
+  --parallel 24
+```
+
+Uploads run `--parallel` at a time (8 by default). Object storage commonly rate-limits a single connection far below the link it arrives on, so throughput comes from streams rather than from any one of them: measure one stream, then set `--parallel` to about the ratio between your uplink and that figure. An interrupted run is resumed by re-running it — archives already in storage are skipped without being re-read.
+
+The S3 settings can also come from a config file: `plugins push --cfg` accepts a **full server configuration** and runs it through the same validation as `service start` — a fragment holding only `registry.s3` is refused. That is deliberate: a config the server would reject must not quietly keep working for push, or the two stop agreeing about which store they talk to. To push without a server config, pass the storage settings as flags, as above.
+
+### The registry
+
+`registry/` holds the recipe for every plugin easyp-tech publishes: 80 plugins
+in ten groups — `protocolbuffers`, `grpc`, `grpc-ecosystem`, `connectrpc`,
+`bufbuild`, `pluginrpc`, `apple`, `anthropics`, `googlecloudplatform` and
+`community` for everything maintained outside those projects. `ls registry/` is
+the current list; the README does not repeat it.
+
+One directory per plugin, no version directories:
+
+```
+registry/grpc/go/
+├── Dockerfile      # takes ARG VERSION, produces /plugin
+├── plugin.yaml     # the versions to build, newest first
+└── .dockerignore
+```
+
+```yaml
+# registry/grpc/go/plugin.yaml
+versions:
+  - v1.6.2
+  - v1.6.1
+  - v1.5.1
+```
+
+`easyp-svc plugins build registry` reads every `plugin.yaml`, builds each listed
+version with `--build-arg VERSION=…`, and extracts the image's filesystem to
+`plugins/{group}/{name}/{version}/` — that directory is the artifact,
+`plugin` inside it the entrypoint. Optional keys: `build_args` (a map passed to
+every build), `dockerfile` (a different file), `args` (arguments the entrypoint
+is run with); a version may be a mapping that overrides any of those for itself
+or sets `skip: true`.
+
+Filters are globs on `group/name`, optionally with a version:
+`--filter 'protocolbuffers/*'`, `--filter 'grpc/go:v1.6.2'`. `--parallel` sets
+how many build at once, `--force` rebuilds what is already in `plugins/`, and
+`--dry-run` prints the plan. `task build-plugins` is the whole registry;
+`FILTER=… task build-plugins-filter` is a slice.
+
+### Contributing a plugin
+
+Add a directory under the group it belongs to — `community/<author>-<tool>` if
+the project is not one of the named groups — with a `Dockerfile` and a
+`plugin.yaml`. This is the `grpc/go` recipe, and it is the template:
 
 ```dockerfile
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine3.22 AS build
+# syntax=docker/dockerfile:1.23
+FROM --platform=$BUILDPLATFORM golang:1.26.3-trixie@sha256:d08bf3ed2bd263088ca8e23fefaf10f1b71769f6932f0a4017ba28d2a5baf001 AS build
+ARG VERSION
+ARG TARGETOS TARGETARCH
 
-ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
-
-# Install upx for binary compression (optional but recommended)
-RUN apk add upx=5.0.2-r0 --no-cache
-
-# Install your protoc plugin
+WORKDIR /tmp
+RUN git clone --depth 1 --branch cmd/protoc-gen-go-grpc/${VERSION} https://github.com/grpc/grpc-go.git
+WORKDIR /tmp/grpc-go/cmd/protoc-gen-go-grpc
 RUN --mount=type=cache,target=/go/pkg/mod \
-    go install -ldflags "-s -w" -trimpath example.com/protoc-gen-yourplugin@v1.0.0 \
- && mv /go/bin/${GOOS}_${GOARCH}/protoc-gen-yourplugin /go/bin/protoc-gen-yourplugin || true \
- && upx --best --lzma /go/bin/protoc-gen-yourplugin
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -o protoc-gen-go-grpc -ldflags "-s -w" -trimpath
 
 FROM scratch
-
-COPY --from=build --link /go/bin/protoc-gen-yourplugin /plugin
-
+ARG VERSION
+COPY --from=build --link /etc/passwd /etc/passwd
+COPY --from=build --link --chown=root:root /tmp/grpc-go/cmd/protoc-gen-go-grpc/protoc-gen-go-grpc /plugin
+USER nobody
 ENTRYPOINT ["/plugin"]
 ```
 
-### 3. Build and Test
+What the service needs from the result:
+
+- **The entrypoint is `/plugin`.** It reads a `CodeGeneratorRequest` on stdin,
+  writes a `CodeGeneratorResponse` on stdout, and exits non-zero on failure.
+  Sidecars next to it are fine — a jar, a `node_modules`, a shared library —
+  and are packed with it.
+- **`ARG VERSION` selects what to build.** The Dockerfile is one recipe for
+  every version in `plugin.yaml`; a version that needs a different recipe gets
+  its own `dockerfile:` entry.
+- **The final stage is `scratch` or distroless, and runs as `nobody`.** The
+  build stage's `/etc/passwd` is copied across for that. Interpreted plugins
+  (Node, Python, the JVM) use the distroless runtime images — `bufbuild/es`,
+  `community/nipunn1313-mypy` and `apple/servicetalk` show the shape.
+- **Base images are pinned by digest.** A tag moves; the digest is what was
+  built and reviewed.
+- **Static where the language allows it.** `CGO_ENABLED=0`, `-trimpath`,
+  `-ldflags "-s -w"` for Go.
+
+Then prove it:
 
 ```bash
-# Build plugin binary
-task build-plugins
-
-# Start service
+FILTER='grpc/go:v1.6.2' task build-plugins-filter
 task up-minimal && task run-local
-
-# Register plugin
 task register-plugins
-
-# Test with easyp generate
 easyp --cfg easyp.local.yaml generate
 ```
 
-### 4. Submit Pull Request
+Open a pull request with the two files. A request for a plugin someone else
+should package is the **plugin request** issue template.
 
-```bash
-git add registry/{group}/{plugin-name}/
-git commit -m "Add {group}/{plugin-name}:{version} plugin"
-```
+## Operations
 
-### Plugin Requirements
+### Health and probes
 
-**Build:**
-- ✅ Multi-stage Dockerfile (build → scratch or minimal)
-- ✅ Static binary (CGO_ENABLED=0)
-- ✅ UPX compression (recommended)
-- ✅ Supports standard protoc plugin protocol
-- ✅ Reads from stdin, writes to stdout
-- ✅ Returns proper exit codes
+The health listener (`server.port.health`) serves two paths:
 
-**Performance:**
-- ✅ Fast startup (< 5 seconds)
-- ✅ Small binary size
-- ✅ Efficient memory usage
+| Path | Answers | Use for |
+|------|---------|---------|
+| `/live` | 200 as soon as the listener is bound | liveness: restart the process if this fails |
+| `/` | 200 once Postgres answers, 503 while starting or while the database is unreachable | readiness: take the pod out of rotation |
+
+`easyp-svc health` probes `/live` and exits 0 or 1. It backs the image's
+`HEALTHCHECK` and, having no command line of its own, finds the health port
+through `EASYP_CONFIG` — set that on the container to the same file the
+service starts with, or the probe falls back to the default port and reports a
+container unhealthy while it serves normally. It deliberately probes liveness,
+not readiness: readiness checks the database, and restarting a container on
+every database blip turns a recoverable outage into a crash loop. The Helm
+chart wires its own probes to the two paths and ignores the `HEALTHCHECK`, as
+Kubernetes does.
+
+### Metrics
+
+Every metric carries the `easyp` namespace; the gRPC ones an `api` subsystem.
+The ones an operator watches:
+
+| Metric | What it says |
+|--------|--------------|
+| `easyp_api_grpc_server_handled_total{grpc_code}` | request count by outcome |
+| `easyp_generation_duration_seconds{plugin}` | how long plugins take |
+| `easyp_generation_errors_total{plugin,error_type}` | failed generations; the error-rate alert divides this by `easyp_pool_jobs_total` |
+| `easyp_pool_active_workers`, `easyp_pool_queue_depth`, `easyp_pool_rejected_total` | the worker pool: busy, waiting, turned away |
+| `easyp_plugin_cache_bytes`, `easyp_plugin_cache_limit_bytes`, `easyp_plugin_cache_evictions_total` | the local archive cache against `registry.cache_max_bytes` |
+| `easyp_audit_events_lost_total{reason}` | audit entries dropped — a gap in something Enterprise sells, hence its alert |
+| `easyp_license_valid`, `easyp_license_expiry_timestamp_seconds`, `easyp_license_in_grace` | the licence, and when it runs out |
+| `easyp_auth_failures_total{reason}`, `easyp_rate_limit_requests_total`, `easyp_concurrency_rejected_total` | who was refused, and why |
+| `easyp_panics_total` | recovered panics; any value but zero is a bug report |
+
+The chart's `PrometheusRule` alerts on these, and every alert has a section in
+the [Runbooks](https://easyp.tech/docs/api-service/runbooks).
+
+### Upgrading
+
+From v1.0.0 the wire contract, the configuration keys, the error reasons and
+the public API of the `api` and `sdk` modules are frozen: changing any of them
+is a major version. The full list, and what remains possible without one, is at
+the top of [Upgrading](https://easyp.tech/docs/api-service/upgrading).
+
+Releases that need more than a new image are described there, newest first.
+**v0.14.0 is the one to read** if you are coming from anything older: the gRPC
+service was renamed from `ServiceAPI` to `GeneratorAPI`, which broke every
+client at once — `easyp` before v0.17.0 included — and the `api` and `sdk`
+modules were split out. v0.13.0 renamed two environment variables and made the
+MCP endpoint opt-in; v1.0.2 added `EASYP_CONFIG` for the image's health probe.
+
+What a backup has to contain and how to restore it is in
+[Backup and restore](https://easyp.tech/docs/api-service/backup).
 
 ## Development
 
-### Building Service
+### Building and testing
 
 ```bash
-# Local build
 go build -o bin/easyp-svc ./cmd/easyp-svc
-
-# Run
 ./bin/easyp-svc service start --cfg deploy/config/config.local.yml
 
 # The level is a setting, so it needs no flag; --log_level still overrides it.
 LOG_LEVEL=debug ./bin/easyp-svc service start --cfg deploy/config/config.local.yml
+
+go test ./...                                   # unit tests, all three modules from the root
+go test -p 1 -tags integration ./test/... ./internal/database/...   # needs a Postgres; -p 1 as in CI
+golangci-lint run ./...                         # CI pins the latest v2
 ```
 
-### Generating Protobuf Code
+### The two-tier stack
+
+`deploy/docker-compose.dev.yml` runs a community container and an enterprise
+container side by side, from the same image, so a licence change can be seen
+rather than assumed. It needs `deploy/.env.dev` — copy `.env.dev.example` and
+fill in the licence and the storage keys it explains.
 
 ```bash
-# Generate from proto files (requires running service)
+task up-dev            # the two tiers
+task up-dev-full       # plus the observability overlay
+task tier-dev          # assert the two containers really are different tiers
+task logs-dev
+task down-dev
+```
+
+`task deploy-dev HOST=user@host` ships `deploy/` to a stand over rsync — never
+the certificates or env files — and rolls the stack to the version this
+repository's compose file names, waiting for both containers to report healthy.
+The stand keeps its own `.env` and certificates; it is not a git checkout.
+
+### Regenerating the API
+
+`api/` is generated from the proto by easyp itself, through the public stand,
+and CI fails if the committed code differs from a fresh run:
+
+```bash
 easyp --cfg easyp.yaml generate
-
-# Or with local config
-easyp --cfg easyp.local.yaml generate
+go run -tags mcpgen ./test/mcpgen
 ```
 
-## Monitoring
+The generator's version is part of the generated header, so bumping the `easyp`
+CI uses means regenerating even when the proto did not change.
 
-### Available Services
+### Project structure
 
-| Service | URL | Description |
-|---------|-----|-------------|
-| Grafana | http://localhost:3000 | Dashboards (admin/admin) |
-| Health | http://localhost:8082 | Health checks |
-| Metrics | http://localhost:8081 | Prometheus metrics |
-| MCP | http://localhost:8083/mcp | MCP streamable HTTP endpoint |
-
-### Key Metrics
-
-Every metric carries the `easyp` namespace, and the gRPC ones an `api`
-subsystem — the bare names below do not exist:
-
-- `easyp_api_grpc_server_handled_total` - gRPC request count
-- `easyp_pool_active_workers` - Active worker goroutines
-- `easyp_pool_queue_depth` - Jobs waiting in queue
-- `easyp_pool_rejected_total` - Jobs rejected (overloaded)
-- `easyp_pool_jobs_total` - Total jobs processed
-- `easyp_panics_total` - Recovered panics
-- `easyp_business_plugins_total` - Plugins registered
-- `easyp_license_valid` - 1 when the licence verifies
-
-## Client Usage
-
-### Go SDK
-
-```go
-import "github.com/easyp-tech/service/sdk"
-
-// Create client. The SDK defaults to TLS with the system trust store; add
-// sdk.WithTransportCredentials for a private CA, or sdk.WithInsecure() when
-// talking to a plaintext local service.
-client, err := sdk.NewClient(
-    "localhost:8080",
-    sdk.WithInsecure(),
-    sdk.WithMaxRetries(3),
-    sdk.WithRetryBaseDelay(time.Second),
-    sdk.WithHealthCheck(30*time.Second),
-)
-if err != nil {
-    return err
-}
-defer client.Close()
-
-// Generate code. codeGenRequest is a *pluginpb.CodeGeneratorRequest.
-response, err := client.GenerateCode(ctx, "protocolbuffers/go:v1.36.10", codeGenRequest)
 ```
-
-### CLI Usage with easyp
-
-```yaml
-# easyp.yaml
-generate:
-  plugins:
-    - remote: "localhost:8080/protocolbuffers/go:latest"
-      out: .
-      opts:
-        paths: source_relative
-    - remote: "localhost:8080/grpc/go:v1.5.1"  
-      out: .
-      opts:
-        paths: source_relative
-```
-
-### MCP Client Configuration
-
-```json
-{
-  "mcpServers": {
-    "easyp": {
-      "url": "http://localhost:8083/mcp"
-    }
-  }
-}
-```
-
-## Management Commands
-
-```bash
-# Build plugin binaries
-task build-plugins
-
-# Start infrastructure
-task up
-
-# Upload plugin archives to S3 storage
-task push-plugins
-
-# Upload an already packed archive tree to a remote store
-S3_ENDPOINT=https://storage.example.com AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… task push-archives
-
-# Register plugins
-task register-plugins
-
-# Full cycle
-task run
-
-# Stop with cleanup
-task down
-
-# Run from source
-task run-local
+api/                    # The wire contract. Its own Go module, Apache-2.0.
+  easyp/generator/v1/   # .proto, generated stubs, MCP bindings
+cmd/easyp-svc/          # The service and its CLI (service, plugins, auth, api, config, health)
+cmd/mcp-smoke/          # MCP smoke test client
+internal/
+  core/                 # Domain types, interfaces, sentinel errors, worker pool
+  api/                  # gRPC handlers, audit & license interceptors, MCP handler
+  adapters/             # audit/ metrics/ registry/ storage/ — implement core interfaces
+  auth/                 # Authenticator interface, static write-token digests, Actor
+  config/               # Loader, diagnostics, env binding, retired keys, aliases
+  database/             # sqlx wrapper (metrics/tracing), connectors
+    goosemigrate/       # Embedded SQL migrations (goose v3, advisory-locked)
+  grpchelper/           # gRPC server/client factories, middleware
+  license/              # PASETO v4 management, FeatureGate, claims
+  plugarchive/          # tar.gz pack/unpack with the path and symlink rules
+  ratelimiter/          # Per-IP token bucket and concurrency cap, both gated
+  safe/                 # Panic-guarded goroutine helper
+  serve/                # HTTP and gRPC listener lifecycles
+  telemetry/            # OTLP + Pyroscope, tracing decorators
+  monitor/              # Context-aware slog logger
+  flags/                # CLI flag types
+sdk/                    # Go client SDK. Its own module, Apache-2.0.
+registry/               # Plugin recipes: one directory per plugin, Dockerfile + plugin.yaml
+plugins/                # Built plugin binaries (gitignored)
+test/                   # Integration tests (build tag `integration`) and CI helpers
+test_registry/          # Plugin recipes the tests build against
+deploy/
+  docker-compose.yml               # Full dev stack
+  docker-compose.dev.yml           # Community and enterprise side by side
+  docker-compose.observability.yml # Overlay for the two-tier stack
+  docker-compose.public.yml        # Overlay that puts the two-tier stack on the internet
+  .env.example, .env.dev.example   # Templates for the two stacks
+  config/                          # Service configs, one per way of running it
+  observability/                   # Alloy, Grafana, Loki, Tempo, Mimir, Pyroscope, Traefik
+  charts/easyp-service/            # Helm chart
+  scripts/                         # gen-dev-certs.sh, check-tiers.sh, deploy-dev.sh
+  certs/                           # Throwaway dev TLS material (gitignored)
+easyp.yaml, easyp.local.yaml, easyp.*.dev.yaml   # easyp configs: CI, from-source, the two tiers
+Taskfile.yml
 ```
 
 ## Known limitations
@@ -918,81 +939,63 @@ SDK, a JSON-schema library and OAuth2 whether or not they use any of it. Moving
 that registration into a library both this service and `easyp` can depend on is
 planned, and is a change to `api`'s dependencies rather than to its API.
 
-## Upgrading
+## Releases and versioning
 
-Releases that need more than a new image are described in
-[Upgrading](https://easyp.tech/docs/api-service/upgrading), newest first. **v0.13.0 needs it**: two
-environment variables were renamed, a licence setting was removed, the MCP
-endpoint became opt-in, and an unfiltered plugin listing now returns one page
-rather than everything.
+The repository holds three Go modules — the service, `api/` and `sdk/` — tagged
+in lockstep as `vX.Y.Z`, `api/vX.Y.Z` and `sdk/vX.Y.Z`, so that one version
+number means one state of all three. Only the service module is under the
+Elastic License; see [License](#license).
 
-Operational procedures for each alert are in
-[Runbooks](https://easyp.tech/docs/api-service/runbooks); what a backup has to contain and how to
-restore it is in [Backup and restore](https://easyp.tech/docs/api-service/backup).
+A release tag produces, in this order:
+
+1. binaries for linux and darwin, amd64 and arm64, each with an SBOM
+   (`*.sbom.json`) beside it;
+2. the image, built for both architectures and **scanned by Trivy before
+   anything is pushed** — a HIGH or CRITICAL finding stops the release rather
+   than getting pulled after the fact;
+3. the image and its manifest list, signed with cosign in keyless mode — the
+   signature names the workflow that produced it, not a key anyone holds;
+4. the Helm chart, pushed to `oci://ghcr.io/easyp-tech/charts/easyp-service`;
+5. the GitHub release with `checksums.txt`.
+
+To verify an image before running it:
+
+```bash
+cosign verify ghcr.io/easyp-tech/service:v1.0.2 \
+  --certificate-identity-regexp '^https://github.com/easyp-tech/service/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+`edge` and `sha-<short>` tags come from a separate workflow on every push to
+`master`; they are built, not released — no SBOM, no signature, no chart.
 
 ## Troubleshooting
 
-### Service Issues
-
 ```bash
-# Check running containers  
-docker ps
+# The stack
+docker compose -f deploy/docker-compose.yml ps
+docker compose -f deploy/docker-compose.yml logs service
 
-# Service logs
-docker compose logs service
+# What the service resolved its configuration to, and from where
+easyp-svc config print --cfg deploy/config/config.yml --origin
 
-# Restart with rebuild
-task down && task up
-```
-
-### Plugin Issues
-
-```bash
-# Check built plugins
-ls -la plugins/
-
-# Rebuild plugins
-task build-plugins
-# or directly, with a filter:
-# go run ./cmd/easyp-svc/ plugins build registry --filter 'protocolbuffers/*'
-
-# Re-register plugins
-task register-plugins
-
-# Check registered plugins via grpcurl. The server does not serve reflection, so
-# the schema comes from a descriptor set. Generate it once:
+# Plugins: what is built, what is registered
+ls plugins/
 easyp-svc api descriptor -o api.protoset
-
-# Compose stack (TLS through traefik):
 grpcurl -protoset api.protoset -cacert deploy/certs/ca.crt \
-  easyp.api.localhost:4443 api.generator.v1.ServiceAPI/Plugins
-# Service run from source with config.local.yml (plaintext):
+  easyp.api.localhost:4443 easyp.generator.v1.GeneratorAPI/Plugins
 grpcurl -protoset api.protoset -plaintext \
-  localhost:8080 api.generator.v1.ServiceAPI/Plugins
+  localhost:8080 easyp.generator.v1.GeneratorAPI/Plugins        # from-source service
+
+# The database
+docker exec -it easyp-postgres psql -U easyp_svc -d easyp_db -c 'SELECT group_name, name, version FROM plugins;'
 ```
 
-### Database Issues
-
-```bash
-# Connect to PostgreSQL
-docker exec -it easyp-postgres psql -U easyp_svc -d easyp_db
-
-# Check plugins in database
-SELECT * FROM plugins;
-
-# Check schema
-\d plugins
-```
-
-## Available Plugins
-
-### Core Plugins
-- `protocolbuffers/go:v1.36.10` - Go Protocol Buffers compiler
-- `grpc/go:v1.5.1` - Go gRPC compiler
-
-### Ecosystem Plugins  
-- `grpc-ecosystem/gateway:v2.27.3` - gRPC-Gateway HTTP transcoding
-- `grpc-ecosystem/openapiv2:v2.27.3` - OpenAPI v2 documentation generator
+A `CreatePlugin` that fails with `FAILED_PRECONDITION` means the archive was
+never pushed: `task push-plugins` comes before `task register-plugins`. A
+`GenerateCode` that fails with `GENERATION_FAILED` and a plugin's stderr in the
+message is the plugin refusing the input — a proto without `go_package`, for
+instance — not the service.
 
 ## License
 
@@ -1011,8 +1014,9 @@ license key mechanism that gates Enterprise features (see [Licensing](#licensing
 and removing license notices.
 
 Community mode needs no license key and stays free under those terms. What
-Enterprise adds today is the audit log and the removal of the community limits
-(4 workers, 10 registered plugins).
+Enterprise adds today is the audit log and the removal of the three community
+ceilings — 4 workers, 16 concurrent generations, 10 registered plugins — as
+the [Licensing](#licensing) table says.
 
 The client SDK and the API contract it is generated from are both Apache 2.0, so
 they can be imported into your own code without inheriting any of the above. The
@@ -1026,4 +1030,9 @@ release onward.
 
 ## Support
 
-For questions and suggestions, please create Issues in the repository.
+Issues in this repository, with a template for each kind: a
+[bug](https://github.com/easyp-tech/service/issues/new?template=bug_report.yml)
+(it asks for the version, the licence tier and how the service is deployed —
+the three things every diagnosis starts with), a
+[feature](https://github.com/easyp-tech/service/issues/new?template=feature_request.yml),
+or a [plugin you would like packaged](https://github.com/easyp-tech/service/issues/new?template=plugin_request.yml).
