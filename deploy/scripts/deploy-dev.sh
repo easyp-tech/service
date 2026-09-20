@@ -7,10 +7,17 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VERSION="${VERSION:-$(sed -nE 's/.*service:\$\{EASYP_SERVICE_VERSION:-([^}]+)\}.*/\1/p' "$REPO/deploy/docker-compose.dev.yml" | head -1)}"
 [ -n "$VERSION" ] || { echo "cannot read the image version from deploy/docker-compose.dev.yml" >&2; exit 1; }
 
+# Everything the stand holds that the repository does not is excluded here,
+# which also protects it from --delete. traefik.public.yml was missing from
+# this list once: the first deploy removed it, traefik kept serving from the
+# already-mounted inode, and the next reboot recreated the container against a
+# path Docker had turned into an empty directory — the stand's public entry
+# was down for two days before anyone noticed.
 rsync -az --delete \
   --exclude 'certs/' \
   --exclude '.env' \
   --exclude '.env.dev' \
+  --exclude 'observability/traefik/traefik.public.yml' \
   --exclude 'plugins-community/' \
   --exclude 'plugins-enterprise/' \
   --exclude 'charts/' \
