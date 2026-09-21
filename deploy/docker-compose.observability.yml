@@ -31,7 +31,7 @@ services:
   # No rustfs here: the backends use the shared object store, so the only setup
   # left is making sure the buckets exist.
   init-buckets:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     container_name: easyp-init-buckets
     entrypoint: >
       /bin/sh -c "
