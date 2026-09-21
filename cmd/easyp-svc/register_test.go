@@ -2,13 +2,17 @@ package main
 
 import (
 	"errors"
-	"github.com/easyp-tech/service/internal/core"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"github.com/easyp-tech/service/internal/core"
 )
 
 func TestResolvePluginsPrefix(t *testing.T) {
@@ -58,18 +62,11 @@ func TestResolvePluginsPrefix(t *testing.T) {
 
 		cfgPath := writeTempConfig(t, "")
 		got, err := resolvePluginsPrefix(cfgPath, defaultPluginsPrefix, false)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		require.NoError(t, err)
 
 		want, ok := declaredDefault("registry", "plugins_dir")
-		if !ok {
-			t.Fatal("registry.plugins_dir declares no default")
-		}
-
-		if got != filepath.Clean(want) {
-			t.Fatalf("expected %q, got %q", want, got)
-		}
+		require.True(t, ok, "registry.plugins_dir declares no default")
+		require.Equal(t, filepath.Clean(want), got)
 	})
 
 	t.Run("missing cfg file", func(t *testing.T) {
@@ -152,7 +149,7 @@ func TestWithThrottleBackoffRetriesThrottleButNotTheCap(t *testing.T) {
 	t.Parallel()
 
 	throttle := status.Error(codes.ResourceExhausted, "rejected by grpc_ratelimit")
-	cap := status.Error(codes.ResourceExhausted, core.ErrMaxPluginsExceeded.Error())
+	ceiling := status.Error(codes.ResourceExhausted, core.ErrMaxPluginsExceeded.Error())
 
 	t.Run("a throttled call succeeds once the server lets it through", func(t *testing.T) {
 		t.Parallel()
@@ -161,17 +158,13 @@ func TestWithThrottleBackoffRetriesThrottleButNotTheCap(t *testing.T) {
 		err := withThrottleBackoff(t.Context(), time.Millisecond, func() error {
 			calls++
 			if calls < 4 {
-				return throttle
+				return fmt.Errorf("attempt %d: %w", calls, throttle)
 			}
 
 			return nil
 		})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if calls != 4 {
-			t.Fatalf("expected 4 attempts, got %d", calls)
-		}
+		require.NoError(t, err)
+		require.Equal(t, 4, calls)
 	})
 
 	t.Run("the plugin cap is not retried", func(t *testing.T) {
@@ -181,14 +174,10 @@ func TestWithThrottleBackoffRetriesThrottleButNotTheCap(t *testing.T) {
 		err := withThrottleBackoff(t.Context(), time.Millisecond, func() error {
 			calls++
 
-			return cap
+			return fmt.Errorf("attempt %d: %w", calls, ceiling)
 		})
-		if !errors.Is(err, cap) {
-			t.Fatalf("expected the cap error back, got %v", err)
-		}
-		if calls != 1 {
-			t.Fatalf("expected 1 attempt, got %d", calls)
-		}
+		require.ErrorIs(t, err, ceiling)
+		require.Equal(t, 1, calls)
 	})
 
 	t.Run("a server that never relents is given up on", func(t *testing.T) {
@@ -198,13 +187,9 @@ func TestWithThrottleBackoffRetriesThrottleButNotTheCap(t *testing.T) {
 		err := withThrottleBackoff(t.Context(), time.Millisecond, func() error {
 			calls++
 
-			return throttle
+			return fmt.Errorf("attempt %d: %w", calls, throttle)
 		})
-		if !errors.Is(err, throttle) {
-			t.Fatalf("expected the throttle error back, got %v", err)
-		}
-		if calls != registerRetries+1 {
-			t.Fatalf("expected %d attempts, got %d", registerRetries+1, calls)
-		}
+		require.ErrorIs(t, err, throttle)
+		require.Equal(t, registerRetries+1, calls)
 	})
 }
