@@ -1001,12 +1001,17 @@ grpcurl -protoset api.protoset -plaintext \
 docker exec -it easyp-postgres psql -U easyp_svc -d easyp_db -c 'SELECT group_name, name, version FROM plugins;'
 ```
 
+`task up` failing with `ports are not available … 9001` means something on the
+host already listens there; `EASYP_RUSTFS_CONSOLE_PORT=9011 task up` moves the
+object store's console aside. Nothing on the host needs it.
+
 A `CreatePlugin` that fails with `FAILED_PRECONDITION` means the archive was
-never pushed: `task push-plugins` comes before `task register-plugins`. A run
-of `plugins register` where most plugins fail with `RESOURCE_EXHAUSTED` is its
-default `--parallel` of 8 meeting a server's default
-`rate_limit.max_concurrent_per_ip` of 2 — the configs under `deploy/` raise the
-cap; against any other server pass `--parallel 2`. A
+never pushed: `task push-plugins` comes before `task register-plugins`.
+`plugins register` paces itself when the server's rate limit refuses a burst,
+but its default `--parallel` of 8 against a server left at the default
+`rate_limit.max_concurrent_per_ip` of 2 still loses most of the batch — the
+configs under `deploy/` raise the cap; against any other server pass
+`--parallel 2`. A
 `GenerateCode` that fails with `GENERATION_FAILED` and a plugin's stderr in the
 message is the plugin refusing the input — a proto without `go_package`, for
 instance — not the service.

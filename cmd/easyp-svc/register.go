@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/term"
@@ -389,7 +390,11 @@ func registerSinglePlugin(ctx context.Context, client *sdk.Client, plg pluginInf
 		"command": []any{targetPath},
 	}
 
-	_, registerErr := client.CreatePlugin(ctx, plg.group, plg.name, plg.version, configMap, nil)
+	registerErr := withThrottleBackoff(ctx, registerRetryBase, func() error {
+		_, err := client.CreatePlugin(ctx, plg.group, plg.name, plg.version, configMap, nil)
+
+		return err
+	})
 	if registerErr == nil {
 		return false, nil
 	}
@@ -399,17 +404,57 @@ func registerSinglePlugin(ctx context.Context, client *sdk.Client, plg pluginInf
 		return true, nil
 	}
 
-	// ResourceExhausted covers three different things: a rate limit, a
-	// concurrency limit and a licence tier's plugin cap. Only the first two are
-	// worth waiting out — the cap will refuse every retry just as firmly — and
-	// the SDK retries all three alike, so an unqualified message here leaves a
-	// hard limit looking like a busy server that went quiet for a while.
-	if ok && st.Code() == codes.ResourceExhausted &&
-		strings.Contains(st.Message(), core.ErrMaxPluginsExceeded.Error()) {
+	if ok && st.Code() == codes.ResourceExhausted && isPluginCap(st) {
 		return false, fmt.Errorf("%w: %s", ErrPluginLimitReached, st.Message())
 	}
 
 	return false, fmt.Errorf("sdk.Client.CreatePlugin: %w", registerErr)
+}
+
+const (
+	// registerRetries bounds how many times one plugin is retried after the
+	// server throttles it. Six doublings from the base is about half a minute,
+	// which outlasts any burst the default rate limit refuses.
+	registerRetries   = 6
+	registerRetryBase = 500 * time.Millisecond
+)
+
+// isPluginCap tells a licence tier's plugin ceiling apart from the two other
+// things ResourceExhausted means. The ceiling refuses every retry just as
+// firmly; the rate and concurrency limits pass once the caller slows down.
+func isPluginCap(st *status.Status) bool {
+	return strings.Contains(st.Message(), core.ErrMaxPluginsExceeded.Error())
+}
+
+// withThrottleBackoff runs attempt, and runs it again after a growing pause
+// each time the server answers ResourceExhausted for a reason that waiting
+// cures. The SDK deliberately does not retry that code — overload is a
+// refusal the service means — but a batch of thirty-five CreatePlugin calls
+// is exactly the caller the default rate limit is sized to slow down, and a
+// tool whose job is that batch should pace itself rather than report each
+// refusal as a failure.
+func withThrottleBackoff(ctx context.Context, base time.Duration, attempt func() error) error {
+	delay := base
+
+	for i := 0; ; i++ {
+		err := attempt()
+		if err == nil || i == registerRetries {
+			return err
+		}
+
+		st, ok := status.FromError(err)
+		if !ok || st.Code() != codes.ResourceExhausted || isPluginCap(st) {
+			return err
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+
+		delay *= 2
+	}
 }
 
 // parsePluginPath splits {base}/{group}/{name}/{version}/{leafName} into its

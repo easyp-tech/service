@@ -2,9 +2,13 @@ package main
 
 import (
 	"errors"
+	"github.com/easyp-tech/service/internal/core"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestResolvePluginsPrefix(t *testing.T) {
@@ -142,4 +146,65 @@ func writeTempConfig(t *testing.T, pluginsDir string) string {
 	}
 
 	return path
+}
+
+func TestWithThrottleBackoffRetriesThrottleButNotTheCap(t *testing.T) {
+	t.Parallel()
+
+	throttle := status.Error(codes.ResourceExhausted, "rejected by grpc_ratelimit")
+	cap := status.Error(codes.ResourceExhausted, core.ErrMaxPluginsExceeded.Error())
+
+	t.Run("a throttled call succeeds once the server lets it through", func(t *testing.T) {
+		t.Parallel()
+
+		calls := 0
+		err := withThrottleBackoff(t.Context(), time.Millisecond, func() error {
+			calls++
+			if calls < 4 {
+				return throttle
+			}
+
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if calls != 4 {
+			t.Fatalf("expected 4 attempts, got %d", calls)
+		}
+	})
+
+	t.Run("the plugin cap is not retried", func(t *testing.T) {
+		t.Parallel()
+
+		calls := 0
+		err := withThrottleBackoff(t.Context(), time.Millisecond, func() error {
+			calls++
+
+			return cap
+		})
+		if !errors.Is(err, cap) {
+			t.Fatalf("expected the cap error back, got %v", err)
+		}
+		if calls != 1 {
+			t.Fatalf("expected 1 attempt, got %d", calls)
+		}
+	})
+
+	t.Run("a server that never relents is given up on", func(t *testing.T) {
+		t.Parallel()
+
+		calls := 0
+		err := withThrottleBackoff(t.Context(), time.Millisecond, func() error {
+			calls++
+
+			return throttle
+		})
+		if !errors.Is(err, throttle) {
+			t.Fatalf("expected the throttle error back, got %v", err)
+		}
+		if calls != registerRetries+1 {
+			t.Fatalf("expected %d attempts, got %d", registerRetries+1, calls)
+		}
+	})
 }
