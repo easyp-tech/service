@@ -76,7 +76,9 @@ services:
       - rustfs-data:/data
     ports:
       - "${EASYP_BIND:-127.0.0.1}:9000:9000"
-      - "${EASYP_BIND:-127.0.0.1}:9001:9001"
+      # The console. Nothing on the host needs it — traefik reaches it on the
+      # network — so it moves aside when something else already holds 9001.
+      - "${EASYP_BIND:-127.0.0.1}:${EASYP_RUSTFS_CONSOLE_PORT:-9001}:9001"
     labels:
       traefik.enable: "true"
       traefik.http.routers.rustfs.rule: "Host(`easyp.s3.localhost`)"
@@ -280,6 +282,12 @@ services:
       init-buckets:
         condition: service_completed_successfully
     command: ["service", "start", "--cfg=/config.yml"]
+    healthcheck:
+      test: ["CMD", "/easyp-svc", "health", "--cfg=/config.yml"]
+      interval: 10s
+      timeout: 3s
+      start_period: 15s
+      retries: 3
     volumes:
       - "./config/config.yml:/config.yml:ro"
       # Server key pair and the CA that signs the certificates it accepts —
@@ -299,6 +307,7 @@ services:
     # telemetry section and so needs its prefix, and the service name is fixed in
     # the binary. Changing them looked like it did something and did not.
     environment:
+      EASYP_CONFIG: /config.yml
       # The level is a setting now, not a command-line argument, so it can be
       # changed without editing this committed file: LOG_LEVEL=info docker compose up.
       LOG_LEVEL: "${LOG_LEVEL:-debug}"

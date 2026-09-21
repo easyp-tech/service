@@ -49,13 +49,22 @@ func TestResolvePluginsPrefix(t *testing.T) {
 		}
 	})
 
-	t.Run("empty plugins_dir in cfg", func(t *testing.T) {
+	t.Run("cfg that omits plugins_dir resolves to the declared default", func(t *testing.T) {
 		t.Parallel()
 
 		cfgPath := writeTempConfig(t, "")
-		_, err := resolvePluginsPrefix(cfgPath, defaultPluginsPrefix, false)
-		if err == nil {
-			t.Fatal("expected error for empty plugins_dir")
+		got, err := resolvePluginsPrefix(cfgPath, defaultPluginsPrefix, false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		want, ok := declaredDefault("registry", "plugins_dir")
+		if !ok {
+			t.Fatal("registry.plugins_dir declares no default")
+		}
+
+		if got != filepath.Clean(want) {
+			t.Fatalf("expected %q, got %q", want, got)
 		}
 	})
 
