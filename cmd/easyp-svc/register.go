@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"golang.org/x/sync/errgroup"
@@ -63,6 +64,24 @@ type pluginInfo struct {
 	version string
 }
 
+// declaredDefault returns the default= the configuration declares for the
+// dotted key, so that a command reading a file without the loader resolves an
+// omitted key the way the service does.
+func declaredDefault(path ...string) (string, bool) {
+	leaves, err := config.Leaves()
+	if err != nil {
+		return "", false
+	}
+
+	for _, leaf := range leaves {
+		if slices.Equal(leaf.YAMLPath, path) {
+			return leaf.Default, leaf.HasDefault
+		}
+	}
+
+	return "", false
+}
+
 // resolvePluginsPrefix picks the server-side plugins root for CreatePlugin command paths.
 // Priority: explicit --plugins-prefix > registry.plugins_dir from --cfg > defaultPluginsPrefix.
 func resolvePluginsPrefix(cfgPath string, prefixFlag string, prefixExplicit bool) (string, error) {
@@ -86,7 +105,17 @@ func resolvePluginsPrefix(cfgPath string, prefixFlag string, prefixExplicit bool
 	}
 
 	if cfg.Registry.PluginsDir == "" {
-		return "", fmt.Errorf("%w: %s", ErrEmptyPluginsDir, cfgPath)
+		// The file is read raw, without the loader, so a key the file leaves
+		// out is empty here even though the service would fill it from the
+		// field's default. deploy/config/config.yml omits it on purpose — it
+		// holds only what differs from the defaults — and register must agree
+		// with the service about where the plugins are.
+		dir, ok := declaredDefault("registry", "plugins_dir")
+		if !ok {
+			return "", fmt.Errorf("%w: %s", ErrEmptyPluginsDir, cfgPath)
+		}
+
+		return filepath.Clean(dir), nil
 	}
 
 	return filepath.Clean(cfg.Registry.PluginsDir), nil
