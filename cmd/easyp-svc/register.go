@@ -392,8 +392,11 @@ func registerSinglePlugin(ctx context.Context, client *sdk.Client, plg pluginInf
 
 	registerErr := withThrottleBackoff(ctx, registerRetryBase, func() error {
 		_, err := client.CreatePlugin(ctx, plg.group, plg.name, plg.version, configMap, nil)
+		if err != nil {
+			return fmt.Errorf("sdk.Client.CreatePlugin: %w", err)
+		}
 
-		return err
+		return nil
 	})
 	if registerErr == nil {
 		return false, nil
@@ -408,7 +411,7 @@ func registerSinglePlugin(ctx context.Context, client *sdk.Client, plg pluginInf
 		return false, fmt.Errorf("%w: %s", ErrPluginLimitReached, st.Message())
 	}
 
-	return false, fmt.Errorf("sdk.Client.CreatePlugin: %w", registerErr)
+	return false, registerErr
 }
 
 const (
@@ -449,7 +452,7 @@ func withThrottleBackoff(ctx context.Context, base time.Duration, attempt func()
 
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return fmt.Errorf("waiting to retry: %w", ctx.Err())
 		case <-time.After(delay):
 		}
 
