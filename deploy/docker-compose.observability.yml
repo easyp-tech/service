@@ -31,23 +31,24 @@ services:
   # No rustfs here: the backends use the shared object store, so the only setup
   # left is making sure the buckets exist.
   init-buckets:
-    image: quay.io/minio/mc:latest
+    # The AWS CLI rather than MinIO's mc, which is no longer anonymously
+    # pullable from Docker Hub or quay.io. See docker-compose.yml.
+    image: amazon/aws-cli:2.37.4
     container_name: easyp-init-buckets
+    environment:
+      AWS_ACCESS_KEY_ID: "${OBS_S3_ACCESS_KEY_ID:?OBS_S3_ACCESS_KEY_ID is required}"
+      AWS_SECRET_ACCESS_KEY: "${OBS_S3_SECRET_ACCESS_KEY:?OBS_S3_SECRET_ACCESS_KEY is required}"
+      AWS_DEFAULT_REGION: "${OBS_S3_REGION:-us-east-1}"
+      AWS_ENDPOINT_URL: "${OBS_S3_URL:?OBS_S3_URL is required, e.g. https://storage.example.com}"
+      OBS_BUCKET_PREFIX: "${OBS_BUCKET_PREFIX:-easyp-dev-telemetry-}"
     entrypoint: >
       /bin/sh -c "
-      until /usr/bin/mc alias set store ${OBS_S3_URL:?OBS_S3_URL is required, e.g. https://storage.example.com} $$OBS_S3_ACCESS_KEY_ID $$OBS_S3_SECRET_ACCESS_KEY; do echo '...waiting for S3...'; sleep 1; done;
-      /usr/bin/mc mb --ignore-existing store/${OBS_BUCKET_PREFIX:-easyp-dev-telemetry-}tempo;
-      /usr/bin/mc mb --ignore-existing store/${OBS_BUCKET_PREFIX:-easyp-dev-telemetry-}mimir-blocks;
-      /usr/bin/mc mb --ignore-existing store/${OBS_BUCKET_PREFIX:-easyp-dev-telemetry-}mimir-ruler;
-      /usr/bin/mc mb --ignore-existing store/${OBS_BUCKET_PREFIX:-easyp-dev-telemetry-}mimir-alertmanager;
-      /usr/bin/mc mb --ignore-existing store/${OBS_BUCKET_PREFIX:-easyp-dev-telemetry-}loki-chunks;
-      /usr/bin/mc mb --ignore-existing store/${OBS_BUCKET_PREFIX:-easyp-dev-telemetry-}loki-ruler;
-      /usr/bin/mc mb --ignore-existing store/${OBS_BUCKET_PREFIX:-easyp-dev-telemetry-}pyroscope;
-      exit 0;
+      aws configure set default.s3.addressing_style path;
+      until aws s3api list-buckets >/dev/null 2>&1; do echo '...waiting for S3...'; sleep 1; done;
+      for b in tempo mimir-blocks mimir-ruler mimir-alertmanager loki-chunks loki-ruler pyroscope; do
+      aws s3api head-bucket --bucket $$OBS_BUCKET_PREFIX$$b 2>/dev/null || aws s3api create-bucket --bucket $$OBS_BUCKET_PREFIX$$b || exit 1;
+      done
       "
-    environment:
-      OBS_S3_ACCESS_KEY_ID: "${OBS_S3_ACCESS_KEY_ID:?OBS_S3_ACCESS_KEY_ID is required}"
-      OBS_S3_SECRET_ACCESS_KEY: "${OBS_S3_SECRET_ACCESS_KEY:?OBS_S3_SECRET_ACCESS_KEY is required}"
     networks:
       - easyp_network
 
