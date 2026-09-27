@@ -25,7 +25,7 @@ Every release publishes an image, a Helm chart and the binaries. Pick one.
 
 | Tag | Meaning |
 |-----|---------|
-| `v1.0.2` | a release; immutable |
+| `v1.0.3` | a release; immutable |
 | `latest` | the newest release — only moves on a release tag |
 | `edge` | the tip of `master`; moves on every push |
 | `sha-<short>` | one commit; immutable |
@@ -38,7 +38,7 @@ kubectl create secret generic easyp-env \
   --from-literal=DB_POSTGRES_DSN='postgres://user:pass@host:5432/easyp?sslmode=require'
 
 helm install easyp oci://ghcr.io/easyp-tech/charts/easyp-service \
-  --version 1.0.2 \
+  --version 1.0.3 \
   --set secrets.existingSecret=easyp-env \
   --set tls.enabled=false
 ```
@@ -971,7 +971,7 @@ A release tag produces, in this order:
 To verify an image before running it:
 
 ```bash
-cosign verify ghcr.io/easyp-tech/service:v1.0.2 \
+cosign verify ghcr.io/easyp-tech/service:v1.0.3 \
   --certificate-identity-regexp '^https://github.com/easyp-tech/service/\.github/workflows/release\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
