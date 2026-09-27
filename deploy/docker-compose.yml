@@ -87,20 +87,24 @@ services:
       - easyp_network
 
   init-buckets:
-    image: quay.io/minio/mc:latest
+    # The AWS CLI rather than MinIO's mc: MinIO stopped publishing mc anonymously,
+    # first on Docker Hub and then on quay.io, and a dev stack that cannot pull
+    # its bucket initialiser does not start at all. Pinned, so the next time a
+    # publisher changes its mind this fails on a bump rather than on a Monday.
+    image: amazon/aws-cli:2.37.4
     container_name: easyp-init-buckets
+    environment:
+      AWS_ACCESS_KEY_ID: rustfsadmin
+      AWS_SECRET_ACCESS_KEY: rustfsadmin
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://rustfs:9000
     entrypoint: >
       /bin/sh -c "
-      until /usr/bin/mc alias set rustfs http://rustfs:9000 rustfsadmin rustfsadmin; do echo '...waiting for S3...'; sleep 1; done;
-      /usr/bin/mc mb --ignore-existing rustfs/tempo;
-      /usr/bin/mc mb --ignore-existing rustfs/mimir-blocks;
-      /usr/bin/mc mb --ignore-existing rustfs/mimir-ruler;
-      /usr/bin/mc mb --ignore-existing rustfs/mimir-alertmanager;
-      /usr/bin/mc mb --ignore-existing rustfs/loki-chunks;
-      /usr/bin/mc mb --ignore-existing rustfs/loki-ruler;
-      /usr/bin/mc mb --ignore-existing rustfs/pyroscope;
-      /usr/bin/mc mb --ignore-existing rustfs/easyp-plugins;
-      exit 0;
+      aws configure set default.s3.addressing_style path;
+      until aws s3api list-buckets >/dev/null 2>&1; do echo '...waiting for S3...'; sleep 1; done;
+      for b in tempo mimir-blocks mimir-ruler mimir-alertmanager loki-chunks loki-ruler pyroscope easyp-plugins; do
+      aws s3api head-bucket --bucket $$b 2>/dev/null || aws s3api create-bucket --bucket $$b || exit 1;
+      done
       "
     networks:
       - easyp_network
