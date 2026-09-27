@@ -90,3 +90,10 @@ auth:
   write_tokens:
     - name: "local-dev"
       sha256: "0cd48eed49739dfdd99efaef37d251aae5a80866e5954763c6597943fff5ce9b"
+
+rate_limit:
+  # Room for `plugins register --parallel`, whose default is 8. The binary's
+  # default per-address cap is 2, and behind traefik every registration
+  # arrives from one address; past the cap the server answers
+  # ResourceExhausted, which the SDK does not retry.
+  max_concurrent_per_ip: 10

@@ -84,3 +84,10 @@ mcp:
 
 auth:
   write_tokens: []
+
+rate_limit:
+  # The same room for `plugins register --parallel` as the enterprise tier,
+  # so the two containers differ only in what the licence changes. The
+  # binary's default of 2 refuses a default register run with
+  # ResourceExhausted, which the SDK does not retry.
+  max_concurrent_per_ip: 10

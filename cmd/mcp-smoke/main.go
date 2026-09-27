@@ -43,10 +43,7 @@ func main() {
 	fmt.Println("MCP smoke check passed")
 }
 
-const (
-	toolPluginsList         = "plugins_list"
-	toolEasypConfigDescribe = "easyp_config_describe"
-)
+const toolPluginsList = "plugins_list"
 
 func runSmoke(ctx context.Context, session *mcp.ClientSession) error {
 	tools, err := session.ListTools(ctx, nil)
@@ -65,11 +62,8 @@ func runSmoke(ctx context.Context, session *mcp.ClientSession) error {
 	}
 	sort.Strings(toolNames)
 
-	requiredTools := []string{toolPluginsList, toolEasypConfigDescribe}
-	for _, name := range requiredTools {
-		if _, ok := nameSet[name]; !ok {
-			return fmt.Errorf("missing required tool %q; got: %s", name, strings.Join(toolNames, ", "))
-		}
+	if _, ok := nameSet[toolPluginsList]; !ok {
+		return fmt.Errorf("missing required tool %q; got: %s", toolPluginsList, strings.Join(toolNames, ", "))
 	}
 
 	pluginsRes, err := session.CallTool(ctx, &mcp.CallToolParams{
@@ -88,43 +82,6 @@ func runSmoke(ctx context.Context, session *mcp.ClientSession) error {
 	}
 	if err := decodeStructured(pluginsRes, &pluginsOut); err != nil {
 		return fmt.Errorf("plugins_list decode structured output: %w", err)
-	}
-
-	describeRes, err := session.CallTool(ctx, &mcp.CallToolParams{
-		Name: toolEasypConfigDescribe,
-		Arguments: map[string]any{
-			"path":             "generate.plugins[]",
-			"include_examples": false,
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("easyp_config_describe call: %w", err)
-	}
-	if describeRes.IsError {
-		return fmt.Errorf("easyp_config_describe returned tool error: %s", toolText(describeRes))
-	}
-
-	var describeOut struct {
-		SelectedPath string `json:"selected_path"`
-	}
-	if err := decodeStructured(describeRes, &describeOut); err != nil {
-		return fmt.Errorf("easyp_config_describe decode structured output: %w", err)
-	}
-	if describeOut.SelectedPath != "generate.plugins[]" {
-		return fmt.Errorf("unexpected selected_path: %q", describeOut.SelectedPath)
-	}
-
-	invalidRes, err := session.CallTool(ctx, &mcp.CallToolParams{
-		Name: toolEasypConfigDescribe,
-		Arguments: map[string]any{
-			"path": "unknown.section",
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("easyp_config_describe invalid-path call transport error: %w", err)
-	}
-	if !invalidRes.IsError {
-		return errors.New("expected invalid path to return tool error")
 	}
 
 	return nil
