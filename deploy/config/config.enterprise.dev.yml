@@ -64,8 +64,8 @@ rate_limit:
   requests_per_second: 50.0
   burst: 100
   # Also the ceiling for `plugins register --parallel`: past this the server
-  # refuses with ResourceExhausted, which the SDK retries rather than reports,
-  # so overshooting shows up as slowness and not as an error.
+  # refuses with ResourceExhausted, which the SDK does not retry — overload is
+  # a refusal the service means — so register reports each one as an error.
   max_concurrent_per_ip: 10
 
 # See config.community.dev.yml for why this is written down empty rather than

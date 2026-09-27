@@ -7,7 +7,9 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/term"
@@ -31,9 +33,11 @@ const (
 	// pluginEntrypointName is the file a built plugin version directory is
 	// required to contain, and the one a scan of such a tree looks for.
 	pluginEntrypointName = "plugin"
-	// defaultRegisterParallel is how many plugins are registered at once. It
-	// sits at the lower of the two tiers' max_concurrent_per_ip so that the
-	// default does not spend its time being throttled and retried.
+	// defaultRegisterParallel is how many plugins are registered at once. The
+	// configs under deploy/ raise rate_limit.max_concurrent_per_ip to make
+	// room for it; a server left at that setting's default of 2 refuses the
+	// rest with ResourceExhausted, which the SDK deliberately does not retry,
+	// so against such a server pass --parallel 2.
 	defaultRegisterParallel = 8
 )
 
@@ -61,6 +65,24 @@ type pluginInfo struct {
 	version string
 }
 
+// declaredDefault returns the default= the configuration declares for the
+// dotted key, so that a command reading a file without the loader resolves an
+// omitted key the way the service does.
+func declaredDefault(path ...string) (string, bool) {
+	leaves, err := config.Leaves()
+	if err != nil {
+		return "", false
+	}
+
+	for _, leaf := range leaves {
+		if slices.Equal(leaf.YAMLPath, path) {
+			return leaf.Default, leaf.HasDefault
+		}
+	}
+
+	return "", false
+}
+
 // resolvePluginsPrefix picks the server-side plugins root for CreatePlugin command paths.
 // Priority: explicit --plugins-prefix > registry.plugins_dir from --cfg > defaultPluginsPrefix.
 func resolvePluginsPrefix(cfgPath string, prefixFlag string, prefixExplicit bool) (string, error) {
@@ -84,7 +106,17 @@ func resolvePluginsPrefix(cfgPath string, prefixFlag string, prefixExplicit bool
 	}
 
 	if cfg.Registry.PluginsDir == "" {
-		return "", fmt.Errorf("%w: %s", ErrEmptyPluginsDir, cfgPath)
+		// The file is read raw, without the loader, so a key the file leaves
+		// out is empty here even though the service would fill it from the
+		// field's default. deploy/config/config.yml omits it on purpose — it
+		// holds only what differs from the defaults — and register must agree
+		// with the service about where the plugins are.
+		dir, ok := declaredDefault("registry", "plugins_dir")
+		if !ok {
+			return "", fmt.Errorf("%w: %s", ErrEmptyPluginsDir, cfgPath)
+		}
+
+		return filepath.Clean(dir), nil
 	}
 
 	return filepath.Clean(cfg.Registry.PluginsDir), nil
@@ -358,7 +390,14 @@ func registerSinglePlugin(ctx context.Context, client *sdk.Client, plg pluginInf
 		"command": []any{targetPath},
 	}
 
-	_, registerErr := client.CreatePlugin(ctx, plg.group, plg.name, plg.version, configMap, nil)
+	registerErr := withThrottleBackoff(ctx, registerRetryBase, func() error {
+		_, err := client.CreatePlugin(ctx, plg.group, plg.name, plg.version, configMap, nil)
+		if err != nil {
+			return fmt.Errorf("sdk.Client.CreatePlugin: %w", err)
+		}
+
+		return nil
+	})
 	if registerErr == nil {
 		return false, nil
 	}
@@ -368,17 +407,57 @@ func registerSinglePlugin(ctx context.Context, client *sdk.Client, plg pluginInf
 		return true, nil
 	}
 
-	// ResourceExhausted covers three different things: a rate limit, a
-	// concurrency limit and a licence tier's plugin cap. Only the first two are
-	// worth waiting out — the cap will refuse every retry just as firmly — and
-	// the SDK retries all three alike, so an unqualified message here leaves a
-	// hard limit looking like a busy server that went quiet for a while.
-	if ok && st.Code() == codes.ResourceExhausted &&
-		strings.Contains(st.Message(), core.ErrMaxPluginsExceeded.Error()) {
+	if ok && st.Code() == codes.ResourceExhausted && isPluginCap(st) {
 		return false, fmt.Errorf("%w: %s", ErrPluginLimitReached, st.Message())
 	}
 
-	return false, fmt.Errorf("sdk.Client.CreatePlugin: %w", registerErr)
+	return false, registerErr
+}
+
+const (
+	// registerRetries bounds how many times one plugin is retried after the
+	// server throttles it. Six doublings from the base is about half a minute,
+	// which outlasts any burst the default rate limit refuses.
+	registerRetries   = 6
+	registerRetryBase = 500 * time.Millisecond
+)
+
+// isPluginCap tells a licence tier's plugin ceiling apart from the two other
+// things ResourceExhausted means. The ceiling refuses every retry just as
+// firmly; the rate and concurrency limits pass once the caller slows down.
+func isPluginCap(st *status.Status) bool {
+	return strings.Contains(st.Message(), core.ErrMaxPluginsExceeded.Error())
+}
+
+// withThrottleBackoff runs attempt, and runs it again after a growing pause
+// each time the server answers ResourceExhausted for a reason that waiting
+// cures. The SDK deliberately does not retry that code — overload is a
+// refusal the service means — but a batch of thirty-five CreatePlugin calls
+// is exactly the caller the default rate limit is sized to slow down, and a
+// tool whose job is that batch should pace itself rather than report each
+// refusal as a failure.
+func withThrottleBackoff(ctx context.Context, base time.Duration, attempt func() error) error {
+	delay := base
+
+	for i := 0; ; i++ {
+		err := attempt()
+		if err == nil || i == registerRetries {
+			return err
+		}
+
+		st, ok := status.FromError(err)
+		if !ok || st.Code() != codes.ResourceExhausted || isPluginCap(st) {
+			return err
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("waiting to retry: %w", ctx.Err())
+		case <-time.After(delay):
+		}
+
+		delay *= 2
+	}
 }
 
 // parsePluginPath splits {base}/{group}/{name}/{version}/{leafName} into its

@@ -206,7 +206,7 @@ tasks:
       - task: build-plugins
       - task: down
       - task: up
-      - "echo 'Waiting for service to be ready...' && until curl -sf http://localhost:8082/health >/dev/null 2>&1; do sleep 2; done && echo 'Service is ready!'"
+      - "echo 'Waiting for service to be ready...' && until curl -sf http://localhost:8082/ >/dev/null 2>&1; do sleep 2; done && echo 'Service is ready!'"
       - task: push-plugins
       - task: register-plugins
 
@@ -217,7 +217,7 @@ tasks:
       - task: build-plugins
       - task: down
       - task: up
-      - "echo 'Waiting for service to be ready...' && until curl -sf http://localhost:8082/health >/dev/null 2>&1; do sleep 2; done && echo 'Service is ready!'"
+      - "echo 'Waiting for service to be ready...' && until curl -sf http://localhost:8082/ >/dev/null 2>&1; do sleep 2; done && echo 'Service is ready!'"
       - task: push-plugins
       - task: register-plugins
 
@@ -230,7 +230,7 @@ tasks:
       - |
         (
           echo "Waiting for local service to be ready..."
-          until curl -sf http://localhost:8082/health >/dev/null 2>&1; do
+          until curl -sf http://localhost:8082/ >/dev/null 2>&1; do
             sleep 1
           done
           echo "Service is ready! Running plugin migration..."
