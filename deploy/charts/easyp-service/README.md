@@ -34,7 +34,7 @@ checkout is not required:
 
 ```bash
 helm install easyp oci://ghcr.io/easyp-tech/charts/easyp-service \
-  --version 1.0.4 \
+  --version 1.0.5 \
   --set secrets.existingSecret=easyp-env \
   --set tls.enabled=false
 ```
