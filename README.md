@@ -500,6 +500,14 @@ configuration above it is lowered at startup, and the service logs which setting
 was lowered and to what — it is a ceiling, not a substitution, so asking for
 less than the tier permits gives you less.
 
+The two worker-pool ceilings are read **once, at startup**. A licence that lapses
+past its grace period while the service runs turns audit off and the plugin cap
+on at the next licence refresh, but the pool keeps the capacity it started with
+until the process restarts — and the restart then lowers it. The service logs
+`licence tier changed while running; the worker pool keeps the ceilings it
+started with and applies the new ones on restart` at the moment the tier changes,
+so the drop does not arrive unannounced with an unrelated deploy.
+
 Enterprise needs two things — a token and the public key it is verified against:
 
 ```bash
