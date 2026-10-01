@@ -33,7 +33,7 @@ tidy. `api/` and `sdk/` carry their own `go.mod` and their own Apache-2.0
 before the split a client importing the SDK had its licence scanner report
 Elastic-2.0 on their own build.
 
-They are tagged separately — `v1.0.4`, `api/v1.0.4`, `sdk/v1.0.4` — and released
+They are tagged separately — `v1.0.5`, `api/v1.0.5`, `sdk/v1.0.5` — and released
 in lockstep, so that one version number means one thing. A change to the wire
 contract therefore touches a module whose version is a promise to people outside
 this repository.
@@ -59,6 +59,9 @@ The rest of the difference is ceilings, and Enterprise simply has none:
 
 A ceiling caps the resolved configuration at startup rather than rejecting the
 request, so an over-ambitious Community config starts and logs what it got.
+The pool ceilings are only read then: a licence lapsing mid-run moves audit and
+the plugin cap at once, the pool on the next restart, and `license.Manager` logs
+a Warn when that gap opens.
 
 A token names a tier and nothing else. Which features that tier unlocks is
 decided in `core.EnterpriseLicenseClaims`, in the release, so extending the

@@ -27,6 +27,11 @@ func GRPC(log *slog.Logger, host string, port uint16, srv *grpc.Server) func(con
 
 		select {
 		case err = <-errc:
+			// Serve returning on its own stops accepting, not serving: the
+			// connections it already holds keep running handlers. Draining them
+			// here keeps them from outliving the worker pool and the database,
+			// which the caller closes as soon as this returns.
+			srv.GracefulStop()
 		case <-ctx.Done():
 			srv.GracefulStop()
 		}

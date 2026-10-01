@@ -25,7 +25,7 @@ Every release publishes an image, a Helm chart and the binaries. Pick one.
 
 | Tag | Meaning |
 |-----|---------|
-| `v1.0.4` | a release; immutable |
+| `v1.0.5` | a release; immutable |
 | `latest` | the newest release — only moves on a release tag |
 | `edge` | the tip of `master`; moves on every push |
 | `sha-<short>` | one commit; immutable |
@@ -38,7 +38,7 @@ kubectl create secret generic easyp-env \
   --from-literal=DB_POSTGRES_DSN='postgres://user:pass@host:5432/easyp?sslmode=require'
 
 helm install easyp oci://ghcr.io/easyp-tech/charts/easyp-service \
-  --version 1.0.4 \
+  --version 1.0.5 \
   --set secrets.existingSecret=easyp-env \
   --set tls.enabled=false
 ```
@@ -499,6 +499,14 @@ deployment that never changed one is not affected by the ceiling existing. A
 configuration above it is lowered at startup, and the service logs which setting
 was lowered and to what — it is a ceiling, not a substitution, so asking for
 less than the tier permits gives you less.
+
+The two worker-pool ceilings are read **once, at startup**. A licence that lapses
+past its grace period while the service runs turns audit off and the plugin cap
+on at the next licence refresh, but the pool keeps the capacity it started with
+until the process restarts — and the restart then lowers it. The service logs
+`licence tier changed while running; the worker pool keeps the ceilings it
+started with and applies the new ones on restart` at the moment the tier changes,
+so the drop does not arrive unannounced with an unrelated deploy.
 
 Enterprise needs two things — a token and the public key it is verified against:
 
@@ -971,7 +979,7 @@ A release tag produces, in this order:
 To verify an image before running it:
 
 ```bash
-cosign verify ghcr.io/easyp-tech/service:v1.0.4 \
+cosign verify ghcr.io/easyp-tech/service:v1.0.5 \
   --certificate-identity-regexp '^https://github.com/easyp-tech/service/\.github/workflows/release\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```

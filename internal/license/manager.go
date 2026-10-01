@@ -30,6 +30,12 @@ type Manager struct {
 	logger  *slog.Logger
 	metrics *Metrics
 	guard   *safe.Guard
+
+	// startup is what the first fetch returned, nil until it has. The worker
+	// pool reads its ceilings once, right after that fetch, and never again; a
+	// later tier change moves every other limit at once but leaves the pool
+	// where it started until the process restarts. Kept so refresh can say so.
+	startup *core.LicenseClaims
 }
 
 // NewManager creates a Manager backed by the given LicenseClient.
@@ -63,6 +69,9 @@ func NewManager(
 
 	// Perform initial fetch so claims are populated before the first request.
 	lm.refresh(ctx)
+
+	startup := lm.Claims()
+	lm.startup = &startup
 
 	return lm, nil
 }
@@ -119,6 +128,7 @@ func (lm *Manager) refresh(ctx context.Context) {
 	changed := lm.claims.Tier != claims.Tier ||
 		lm.claims.MaxWorkers != claims.MaxWorkers ||
 		lm.claims.MaxPlugins != claims.MaxPlugins ||
+		lm.claims.MaxGenerations != claims.MaxGenerations ||
 		len(lm.claims.Features) != len(claims.Features)
 	lm.claims = claims
 	lm.mu.Unlock()
@@ -134,8 +144,41 @@ func (lm *Manager) refresh(ctx context.Context) {
 		"tier", claims.Tier,
 		"max_workers", claims.MaxWorkers,
 		"max_plugins", claims.MaxPlugins,
+		"max_generations", claims.MaxGenerations,
 		"features_count", len(claims.Features),
 	)
 
+	if changed {
+		lm.warnPoolKeepsStartupCeilings(ctx, claims)
+	}
+
 	lm.metrics.observe(claims)
+}
+
+// warnPoolKeepsStartupCeilings reports a tier change the worker pool will not
+// follow until restart.
+//
+// The case that matters is a licence lapsing past its grace period: audit and
+// the plugin cap switch to community on this refresh, while the pool keeps
+// running with the capacity it was started with. Without this line the drop
+// arrives silently with the next deploy, weeks after the licence that caused it.
+func (lm *Manager) warnPoolKeepsStartupCeilings(ctx context.Context, claims core.LicenseClaims) {
+	if lm.startup == nil {
+		return
+	}
+
+	if claims.MaxWorkers == lm.startup.MaxWorkers && claims.MaxGenerations == lm.startup.MaxGenerations {
+		return
+	}
+
+	lm.logger.WarnContext(ctx,
+		"licence tier changed while running; the worker pool keeps the ceilings it started with "+
+			"and applies the new ones on restart",
+		"tier", claims.Tier,
+		"startup_tier", lm.startup.Tier,
+		"max_workers", claims.MaxWorkers,
+		"startup_max_workers", lm.startup.MaxWorkers,
+		"max_generations", claims.MaxGenerations,
+		"startup_max_generations", lm.startup.MaxGenerations,
+	)
 }
