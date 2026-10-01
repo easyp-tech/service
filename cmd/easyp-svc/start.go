@@ -581,6 +581,11 @@ func checkServiceTier(configured string, actualTier func() string, log *slog.Log
 //
 // setting is the dotted name of the field being capped, so the log line names
 // what an operator would have to change rather than what the code calls it.
+//
+// The cap is taken once, here: the pool is sized from it and never resized. A
+// tier change while running — a licence lapsing past its grace period — moves
+// audit and the plugin cap at once but reaches the pool only on restart, which
+// license.Manager announces at Warn when it happens.
 func cappedByLicence(setting string, configured, licenseLimit int, log *slog.Logger) int {
 	if licenseLimit <= 0 || licenseLimit >= configured {
 		return configured

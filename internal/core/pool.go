@@ -65,7 +65,6 @@ type WorkerPool struct {
 	logger        *slog.Logger
 	metrics       Metrics
 	wg            sync.WaitGroup
-	closed        atomic.Bool
 	activeWorkers prometheus.Gauge
 	rejectedTotal prometheus.Counter
 	jobsTotal     prometheus.Counter
@@ -76,6 +75,14 @@ type WorkerPool struct {
 	// этого не годятся: воркер освобождается, отдав plugin в канал, а Generate
 	// вызывается уже горутиной вызывающего.
 	gen *genLimiter
+
+	// mu and closed make "not shut down yet" and "send the job" one step.
+	// An atomic flag checked before the send left a gap in which Shutdown
+	// could close the channel, and the send then panicked. Get holds the read
+	// lock across a send that never blocks, so Shutdown's write lock waits at
+	// most for a channel operation.
+	mu     sync.RWMutex
+	closed bool
 }
 
 // genLimiter пропускает не более cap одновременных генераций, держит очередь
@@ -325,10 +332,6 @@ func (p *WorkerPool) Get(ctx context.Context, pluginGroup, pluginName, pluginVer
 		))
 	defer span.End()
 
-	if p.closed.Load() {
-		return nil, ErrShuttingDown
-	}
-
 	resultCh := make(chan jobResult, 1)
 	jobItem := job{
 		ctx:           ctx,
@@ -338,16 +341,13 @@ func (p *WorkerPool) Get(ctx context.Context, pluginGroup, pluginName, pluginVer
 		result:        resultCh,
 	}
 
-	select {
-	case p.jobs <- jobItem:
-		// Job принят в очередь
-		p.jobsTotal.Inc()
-	default:
-		p.logger.Warn("job queue full, rejecting request")
-		p.rejectedTotal.Inc()
-		span.AddEvent("pool.rejected")
+	err := p.enqueue(jobItem)
+	if err != nil {
+		if errors.Is(err, ErrServerOverloaded) {
+			span.AddEvent("pool.rejected")
+		}
 
-		return nil, ErrServerOverloaded
+		return nil, err
 	}
 
 	queueStart := time.Now()
@@ -482,11 +482,45 @@ func isTransient(err error) bool {
 	return false
 }
 
+// enqueue hands a job to the workers without waiting for room, refusing it
+// once Shutdown has started.
+func (p *WorkerPool) enqueue(work job) error { //nolint:funcorder // helper for Get above
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	if p.closed {
+		return ErrShuttingDown
+	}
+
+	select {
+	case p.jobs <- work:
+		p.jobsTotal.Inc()
+
+		return nil
+	default:
+		p.logger.Warn("job queue full, rejecting request")
+		p.rejectedTotal.Inc()
+
+		return ErrServerOverloaded
+	}
+}
+
 // Shutdown закрывает канал заданий и ожидает завершения воркеров.
 // Возвращает количество потерянных заданий.
+//
+// A second call returns 0 and does nothing: closing the channel twice would
+// panic, and Shutdown is reached from a defer.
 func (p *WorkerPool) Shutdown(timeout time.Duration) int {
-	p.closed.Store(true)
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+
+		return 0
+	}
+
+	p.closed = true
 	close(p.jobs)
+	p.mu.Unlock()
 
 	done := make(chan struct{})
 	go func() {

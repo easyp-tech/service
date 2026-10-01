@@ -59,6 +59,9 @@ The rest of the difference is ceilings, and Enterprise simply has none:
 
 A ceiling caps the resolved configuration at startup rather than rejecting the
 request, so an over-ambitious Community config starts and logs what it got.
+The pool ceilings are only read then: a licence lapsing mid-run moves audit and
+the plugin cap at once, the pool on the next restart, and `license.Manager` logs
+a Warn when that gap opens.
 
 A token names a tier and nothing else. Which features that tier unlocks is
 decided in `core.EnterpriseLicenseClaims`, in the release, so extending the

@@ -272,3 +272,74 @@ func TestMaxRetriesIsHonouredIncludingZero(t *testing.T) {
 		})
 	}
 }
+
+// TestGetRacingShutdownNeverPanics pins the shutdown handshake between Get and
+// Shutdown. Get used to check an atomic flag and then send on the job channel,
+// and Shutdown to set the flag and then close the channel; a Get that passed the
+// check before the flag was set sent on a closed channel and panicked. Nothing
+// in the pool prevented it — only the order of the deferred calls in
+// cmd/easyp-svc, which a failing listener skips.
+//
+// Each round races a burst of callers against one Shutdown. Panics are
+// recovered and counted so the failure is an assertion, not a crashed binary.
+func TestGetRacingShutdownNeverPanics(t *testing.T) {
+	t.Parallel()
+
+	const (
+		rounds  = 200
+		callers = 16
+	)
+
+	var panics atomic.Int64
+
+	for range rounds {
+		pool := newTestPool(t, &countingPlugin{}, WorkerPoolConfig{
+			Workers:   2,
+			QueueSize: callers,
+		})
+
+		start := make(chan struct{})
+
+		var wg sync.WaitGroup
+
+		for range callers {
+			wg.Go(func() {
+				defer func() {
+					if recover() != nil {
+						panics.Add(1)
+					}
+				}()
+
+				<-start
+
+				for range 4 {
+					_, err := pool.Get(t.Context(), "test", "plugin", "v1.0.0")
+					if err != nil && !errors.Is(err, ErrShuttingDown) && !errors.Is(err, ErrServerOverloaded) {
+						t.Errorf("unexpected error from Get during shutdown: %v", err)
+					}
+				}
+			})
+		}
+
+		close(start)
+		pool.Shutdown(5 * time.Second)
+		wg.Wait()
+	}
+
+	require.Zero(t, panics.Load(), "Get sent on the job channel after Shutdown closed it")
+}
+
+// TestShutdownIsIdempotent covers a second Shutdown, which used to close the
+// job channel twice and panic. Shutdown sits in a defer; a caller reaching it
+// along two paths must not turn a clean stop into a crash.
+func TestShutdownIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	pool := newTestPool(t, &countingPlugin{}, WorkerPoolConfig{Workers: 1})
+
+	require.Zero(t, pool.Shutdown(time.Second))
+	require.NotPanics(t, func() { require.Zero(t, pool.Shutdown(time.Second)) })
+
+	_, err := pool.Get(t.Context(), "test", "plugin", "v1.0.0")
+	require.ErrorIs(t, err, ErrShuttingDown)
+}
