@@ -11,7 +11,10 @@ ARG VERSION
 COPY --link --from=build /app /app
 COPY --chmod=0755 <<"EOF" /plugin
 #!/bin/sh
-exec /app/node_modules/.bin/protoc-gen-connect-web "$@"
+# Paths are relative to this script: the service runs the bundle from its
+# plugins directory, not from the image it was built in.
+DIR=${0%/*}
+exec "$DIR/nodejs/bin/node" "$DIR/app/node_modules/.bin/protoc-gen-connect-web" "$@"
 EOF
 USER nobody
 ENTRYPOINT ["/plugin"]

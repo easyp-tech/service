@@ -22,7 +22,10 @@ COPY --link --from=build --chmod=0755 /app/protoc-gen-connect-es.js /app/protoc-
 COPY --link --from=build /app/node_modules/typescript /app/node_modules/typescript
 COPY --chmod=0755 <<"EOF" /plugin
 #!/bin/sh
-exec /nodejs/bin/node /app/protoc-gen-connect-es.js "$@"
+# Paths are relative to this script: the service runs the bundle from its
+# plugins directory, not from the image it was built in.
+DIR=${0%/*}
+exec "$DIR/nodejs/bin/node" "$DIR/app/protoc-gen-connect-es.js" "$@"
 EOF
 USER nobody
 ENTRYPOINT ["/plugin"]

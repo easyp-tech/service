@@ -19,7 +19,12 @@ COPY --link --from=base / /
 COPY --link --from=build /protoc-gen-scala.jar .
 COPY --chmod=0755 <<"EOF" /plugin
 #!/bin/sh
-exec /usr/bin/java -jar /protoc-gen-scala.jar "$@"
+# Paths are relative to this script: the service runs the bundle from its
+# plugins directory, not from the image it was built in.
+DIR=${0%/*}
+for JAVA in "$DIR"/usr/lib/jvm/*/bin/java; do exec "$JAVA" -jar "$DIR/protoc-gen-scala.jar" "$@"; done
+echo "no JRE in $DIR/usr/lib/jvm" >&2
+exit 127
 EOF
 USER nobody
 ENTRYPOINT ["/plugin"]
