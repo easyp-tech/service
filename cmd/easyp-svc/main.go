@@ -426,6 +426,10 @@ func getPluginsBuildCommand() *cli.Command {
 				cmd.Bool(flagDryRun),
 				cmd.Bool(flagNonInteractive),
 				cmd.Bool("keep-going"),
+				verifyOptions{
+					runtimeImage: cmd.String("runtime-image"),
+					smoke:        !cmd.Bool("no-smoke"),
+				},
 			)
 		},
 	}
@@ -627,6 +631,18 @@ func buildFlags() []cli.Flag {
 			Name:  "keep-going",
 			Usage: "continue building remaining plugins after a failure",
 			Value: true,
+		},
+		&cli.StringFlag{
+			Name: "runtime-image",
+			Usage: "image each built plugin is smoke-tested in; must match the base of the " +
+				"service image the plugins will run under",
+			Value: defaultRuntimeImage,
+		},
+		&cli.BoolFlag{
+			Name: "no-smoke",
+			Usage: "skip running each built plugin in the runtime image; the archive is still " +
+				"checked to unpack the way the service unpacks it",
+			Value: false,
 		},
 	}
 }
