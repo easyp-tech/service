@@ -22,7 +22,12 @@ COPY --from=build --link --chmod=0755 --chown=root:root /app/protoc-gen-connect-
 COPY --from=maven-deps /root/.m2/repository /maven-repository
 COPY --chmod=0755 <<"EOF" /plugin
 #!/bin/sh
-exec /usr/bin/java -jar /protoc-gen-connect-kotlin.jar "$@"
+# Paths are relative to this script: the service runs the bundle from its
+# plugins directory, not from the image it was built in.
+DIR=${0%/*}
+for JAVA in "$DIR"/usr/lib/jvm/*/bin/java; do exec "$JAVA" -jar "$DIR/protoc-gen-connect-kotlin.jar" "$@"; done
+echo "no JRE in $DIR/usr/lib/jvm" >&2
+exit 127
 EOF
 USER nobody
 ENTRYPOINT ["/plugin"]

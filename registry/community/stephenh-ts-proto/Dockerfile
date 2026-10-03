@@ -20,7 +20,10 @@ COPY --link --from=node --chmod=0755 /nodejs/bin/node /nodejs/bin/node
 COPY --link --from=build /app /app
 COPY --chmod=0755 <<"EOF" /plugin
 #!/bin/sh
-exec /nodejs/bin/node /app/node_modules/.bin/protoc-gen-ts_proto "$@"
+# Paths are relative to this script: the service runs the bundle from its
+# plugins directory, not from the image it was built in.
+DIR=${0%/*}
+exec "$DIR/nodejs/bin/node" "$DIR/app/node_modules/.bin/protoc-gen-ts_proto" "$@"
 EOF
 USER nobody
 ENTRYPOINT ["/plugin"]

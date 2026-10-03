@@ -1,8 +1,10 @@
 # syntax=docker/dockerfile:1.4
-FROM debian:bullseye-20230814 AS build
+# The bullseye snapshot this stage used to pin no longer installs anything: its
+# security pool moved, every fetch returned 404. The stage only downloads a jar.
+FROM debian:trixie-slim AS build
 ARG VERSION
 RUN apt-get update \
- && apt-get install -y curl
+ && apt-get install -y --no-install-recommends ca-certificates curl
 WORKDIR /app
 RUN curl -fsSL -o /app/protoc-gen-connect-kotlin.jar https://repo1.maven.org/maven2/build/buf/protoc-gen-connect-kotlin/${VERSION#v}/protoc-gen-connect-kotlin-${VERSION#v}.jar
 
@@ -18,5 +20,10 @@ COPY --from=build /app/protoc-gen-connect-kotlin.jar /app
 COPY --from=maven-deps /root/.m2/repository /maven-repository
 COPY --chmod=0755 <<"EOF" /plugin
 #!/bin/sh
-exec /app/protoc-gen-connect-kotlin.jar "$@"
+# Paths are relative to this script: the service runs the bundle from its
+# plugins directory, not from the image it was built in.
+DIR=${0%/*}
+for JAVA in "$DIR"/usr/lib/jvm/*/bin/java; do exec "$JAVA" -jar "$DIR/app/protoc-gen-connect-kotlin.jar" "$@"; done
+echo "no JRE in $DIR/usr/lib/jvm" >&2
+exit 127
 EOF
