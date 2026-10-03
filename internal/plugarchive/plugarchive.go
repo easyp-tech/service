@@ -218,6 +218,11 @@ func extractTo(archivePath string, destDir string) error {
 			return err
 		}
 
+		err = checkParentContained(destDir, target)
+		if err != nil {
+			return err
+		}
+
 		err = extractEntry(tarReader, header, destDir, target)
 		if err != nil {
 			return err
@@ -275,7 +280,6 @@ func extractRegular(tarReader *tar.Reader, header *tar.Header, target string) er
 	return nil
 }
 
-// extractSymlink recreates a symlink entry verbatim.
 // extractSymlink materialises a symlink entry, refusing one that points outside
 // the directory being unpacked into.
 //
@@ -290,7 +294,20 @@ func extractRegular(tarReader *tar.Reader, header *tar.Header, target string) er
 // archive is being written out right now, so intermediate links may not resolve
 // yet, and a link to a path that does not exist is still a link that will
 // resolve once something creates it.
+//
+// An absolute link anywhere but the entrypoint is skipped rather than refused.
+// `plugins build` dumps a whole image filesystem, and base images are full of
+// them — /etc/localtime, the dynamic loader under lib64, fontconfig — none of
+// which a plugin reaches through its own directory. Refusing them refused the
+// archive, which is how 47 of the 80 catalogue plugins never unpacked. The link
+// cannot be created safely either: it would point into the service's own
+// filesystem. The entrypoint stays refused, because skipping it would turn a
+// hostile archive into a merely broken one without saying why.
 func extractSymlink(root string, header *tar.Header, target string) error {
+	if filepath.IsAbs(filepath.FromSlash(header.Linkname)) && target != filepath.Join(root, EntrypointName) {
+		return nil
+	}
+
 	err := checkSymlinkTarget(root, target, header.Linkname)
 	if err != nil {
 		return err
@@ -308,7 +325,70 @@ func extractSymlink(root string, header *tar.Header, target string) error {
 		return fmt.Errorf("os.Symlink: %w", err)
 	}
 
+	// The lexical check above trusts every link it walks through to be what its
+	// name says. One that is itself a link breaks that: `x -> .` then
+	// `l1 -> x/..` reads as "." but resolves to the parent of root. Once the
+	// link exists it can be resolved for real; a dangling one is left to the
+	// lexical check, since nothing can be written through it.
+	resolved, err := filepath.EvalSymlinks(target)
+	if err == nil && !isWithin(resolvedRoot(root), resolved) {
+		_ = os.Remove(target)
+
+		return fmt.Errorf("%w: symlink %s resolves outside the archive: %s", ErrUnsafePath, target, resolved)
+	}
+
 	return nil
+}
+
+// checkParentContained refuses an entry whose directory, as it exists on disk
+// right now, resolves outside root.
+//
+// safeJoin only judges the entry's name, and the name is not where the bytes
+// go: a directory component that an earlier entry made a symlink sends them
+// wherever that link points. The deepest existing ancestor is resolved because
+// the rest of the path does not exist yet and will be created as plain
+// directories beneath it.
+func checkParentContained(root, target string) error {
+	dir := filepath.Dir(target)
+
+	for {
+		resolved, err := filepath.EvalSymlinks(dir)
+		if err == nil {
+			if !isWithin(resolvedRoot(root), resolved) {
+				return fmt.Errorf("%w: %s would be written outside the archive, through %s", ErrUnsafePath, target, resolved)
+			}
+
+			return nil
+		}
+
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("resolving %s: %w", dir, err)
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return fmt.Errorf("%w: no existing ancestor for %s", ErrUnsafePath, target)
+		}
+
+		dir = parent
+	}
+}
+
+// resolvedRoot is root with its own symlinks resolved, so that it compares
+// equal to paths EvalSymlinks returns beneath it. A temp directory routinely
+// sits behind one — /var is /private/var on macOS.
+func resolvedRoot(root string) string {
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return filepath.Clean(root)
+	}
+
+	return resolved
+}
+
+// isWithin reports whether path is root or lies beneath it.
+func isWithin(root, path string) bool {
+	return path == root || strings.HasPrefix(path, root+string(filepath.Separator))
 }
 
 // checkSymlinkTarget reports whether linkname, resolved from the directory
