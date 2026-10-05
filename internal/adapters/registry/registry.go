@@ -110,6 +110,8 @@ type (
 		maxOutputSize int64        `db:"-"`
 		pluginConfig  PluginConfig `db:"-"`
 		guard         *safe.Guard  `db:"-"`
+		// workRoot holds one private working directory per run; see Generate.
+		workRoot string `db:"-"`
 	}
 )
 
@@ -260,6 +262,7 @@ func (r *Registry) Get(ctx context.Context, pluginGroup, pluginName, pluginVersi
 
 	dbFormat.maxOutputSize = r.maxOutputSize
 	dbFormat.guard = r.guard
+	dbFormat.workRoot = r.tmpDir
 
 	return &dbFormat, nil
 }
@@ -468,20 +471,11 @@ func (p *plugin) Generate(ctx context.Context, req *pluginpb.CodeGeneratorReques
 	}
 
 	// 2. Prepare command execution
-	//nolint:gosec // The command is validated by ValidateConfig and retrieved from the registry database.
-	cmd := exec.CommandContext(ctx, p.pluginConfig.Command[0], p.pluginConfig.Command[1:]...)
-
-	// Clean env, only propagate configured env variables
-	cmd.Env = make([]string, 0, len(p.pluginConfig.Env))
-	for k, v := range p.pluginConfig.Env {
-		cmd.Env = append(cmd.Env, k+"="+v)
+	cmd, cleanup, err := p.command(ctx, requestData)
+	if err != nil {
+		return nil, err
 	}
-
-	// Stdin setup
-	cmd.Stdin = bytes.NewReader(requestData)
-
-	// Process group isolation (Unix-specific pgid setup)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	defer cleanup()
 
 	// Stdout and stderr pipes
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -565,6 +559,40 @@ func (p *plugin) Generate(ctx context.Context, req *pluginpb.CodeGeneratorReques
 	}
 
 	return &response, nil
+}
+
+// command builds the plugin process: its configured command line, only its
+// configured environment, the request on stdin and a process group of its own.
+// The returned cleanup removes the run's working directory.
+//
+// The working directory is private, writable and removed after the run. Without
+// one the plugin inherited the service's cwd, which is / in the image and not
+// writable by its user — and some plugins write there: betterproto creates its
+// output package directories relative to cwd and failed on every request. It
+// also keeps whatever a plugin leaves behind out of the service's way and out of
+// the next run's.
+func (p *plugin) command(ctx context.Context, requestData []byte) (*exec.Cmd, func(), error) { //nolint:funcorder,lll // helper for Generate above
+	workDir, err := os.MkdirTemp(p.workRoot, "run-*")
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: creating a working directory: %w", core.ErrGenerationFailed, err)
+	}
+
+	//nolint:gosec // The command is validated by ValidateConfig and retrieved from the registry database.
+	cmd := exec.CommandContext(ctx, p.pluginConfig.Command[0], p.pluginConfig.Command[1:]...)
+
+	// Clean env, only propagate configured env variables
+	cmd.Env = make([]string, 0, len(p.pluginConfig.Env))
+	for k, v := range p.pluginConfig.Env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+
+	cmd.Stdin = bytes.NewReader(requestData)
+	cmd.Dir = workDir
+
+	// Process group isolation (Unix-specific pgid setup)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	return cmd, func() { _ = os.RemoveAll(workDir) }, nil
 }
 
 // Create implements core.Registry.

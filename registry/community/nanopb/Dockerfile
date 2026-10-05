@@ -19,7 +19,15 @@ COPY --link --from=base / /
 COPY --link --from=build --chmod=0755 /app /app
 COPY --chmod=0755 <<"EOF" /plugin
 #!/bin/sh
-exec /app/bin/protoc-gen-nanopb "$@"
+# Paths are relative to this script: the service runs the bundle from its
+# plugins directory, not from the image it was built in.
+DIR=${0%/*}
+# Run under the bundle's own loader and libraries: the interpreter needs
+# libexpat and friends the service image does not have, and must not mix its
+# glibc with the host's.
+for L in "$DIR"/lib/*-linux-gnu; do :; done
+PYTHONHOME="$DIR/usr" PYTHONPATH="$DIR/app/lib/python3.11/site-packages" \
+  exec "$L"/ld-linux-*.so.* --library-path "$L:$DIR/usr/lib/${L##*/}" "$DIR/usr/bin/python3.11" "$DIR/app/bin/protoc-gen-nanopb" "$@"
 EOF
 USER nobody
 ENTRYPOINT ["/plugin"]

@@ -253,3 +253,50 @@ func TestUnpackAllowsSymlinkIntoSubdirectory(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "../plugin", link)
 }
+
+// TestUnpackSkipsAbsoluteSymlinks pins what made 47 of the 80 catalogue plugins
+// unusable: an image dump carries absolute links like /etc/localtime and the
+// loader under lib64, and refusing them refused the whole archive. They are
+// dropped now, and everything else in the archive still lands.
+func TestUnpackSkipsAbsoluteSymlinks(t *testing.T) {
+	t.Parallel()
+
+	archive := writeArchive(t, []*tar.Header{
+		{Name: EntrypointName, Typeflag: tar.TypeReg, Mode: 0o755, Size: 2},
+		{Name: "usr/share/zoneinfo/localtime", Typeflag: tar.TypeSymlink, Linkname: "/etc/localtime", Mode: 0o777},
+		{Name: "lib64/ld-linux-x86-64.so.2", Typeflag: tar.TypeSymlink, Linkname: "/lib/x86_64-linux-gnu/ld.so", Mode: 0o777},
+		{Name: "lib/real", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1},
+	}, map[string][]byte{EntrypointName: []byte("hi"), "lib/real": []byte("x")})
+
+	dest := filepath.Join(t.TempDir(), "v1.0.0")
+	require.NoError(t, Unpack(archive, dest))
+
+	assert.NoFileExists(t, filepath.Join(dest, "usr/share/zoneinfo/localtime"))
+	assert.NoFileExists(t, filepath.Join(dest, "lib64/ld-linux-x86-64.so.2"))
+	assert.FileExists(t, filepath.Join(dest, "lib/real"))
+	assert.FileExists(t, filepath.Join(dest, EntrypointName))
+}
+
+// TestUnpackRefusesWriteThroughSymlinkChain is the escape the lexical check
+// missed. `x -> .` is harmless and `l1 -> x/..` reads as ".", but on disk it is
+// the parent of the unpack root, so `l1/evil` was written beside the version
+// directory rather than inside it.
+func TestUnpackRefusesWriteThroughSymlinkChain(t *testing.T) {
+	t.Parallel()
+
+	archive := writeArchive(t, []*tar.Header{
+		{Name: "x", Typeflag: tar.TypeSymlink, Linkname: ".", Mode: 0o777},
+		{Name: "l1", Typeflag: tar.TypeSymlink, Linkname: "x/..", Mode: 0o777},
+		{Name: "l1/evil", Typeflag: tar.TypeReg, Mode: 0o644, Size: 7},
+		{Name: EntrypointName, Typeflag: tar.TypeReg, Mode: 0o755, Size: 2},
+	}, map[string][]byte{"l1/evil": []byte("escaped"), EntrypointName: []byte("hi")})
+
+	parent := filepath.Join(t.TempDir(), "group", "name")
+	dest := filepath.Join(parent, "v1.0.0")
+
+	err := Unpack(archive, dest)
+
+	require.ErrorIs(t, err, ErrUnsafePath)
+	assert.NoFileExists(t, filepath.Join(parent, "evil"))
+	assert.NoDirExists(t, dest)
+}
