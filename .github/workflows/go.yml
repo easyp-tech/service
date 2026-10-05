@@ -300,7 +300,7 @@ jobs:
         if: failure()
         run: |
           kubectl get pods -o wide
-          kubectl describe deploy/easyp-easyp-service | tail -40
+          kubectl describe statefulset/easyp-easyp-service | tail -40
           kubectl describe pod -l app.kubernetes.io/name=easyp-service | tail -60
           kubectl logs -l app.kubernetes.io/name=easyp-service --all-containers --tail=100 || true
           kubectl get events --sort-by=.lastTimestamp | tail -30
@@ -315,14 +315,17 @@ jobs:
       # Chart 0.3.1 fixed exactly this and nothing tested it: the secret was not
       # hashed into the pod template, so rotating a write token left the old pod
       # running and the new token rejected until someone restarted by hand.
+      # By UID, not name: a StatefulSet's replacement pod is named exactly like
+      # the one it replaced, so comparing names would report a pod that was
+      # rolled as one that was not.
       - name: Rotating a write token rolls the pod
         run: |
-          before="$(kubectl get pod -l app.kubernetes.io/name=easyp-service -o jsonpath='{.items[0].metadata.name}')"
+          before="$(kubectl get pod -l app.kubernetes.io/name=easyp-service -o jsonpath='{.items[0].metadata.uid}')"
           helm upgrade easyp deploy/charts/easyp-service --reuse-values \
             --set secrets.data.AUTH_WRITE_TOKENS="ci=$(printf 'rotated' | sha256sum | cut -d' ' -f1)" \
             --wait --timeout 5m
           kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=easyp-service --timeout=5m
-          after="$(kubectl get pod -l app.kubernetes.io/name=easyp-service -o jsonpath='{.items[0].metadata.name}')"
+          after="$(kubectl get pod -l app.kubernetes.io/name=easyp-service -o jsonpath='{.items[0].metadata.uid}')"
           if [[ "$before" == "$after" ]]; then
             echo "::error::the pod was not replaced; the secret is not hashed into the pod template"
             exit 1
