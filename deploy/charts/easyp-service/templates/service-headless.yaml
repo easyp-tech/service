@@ -1,0 +1,23 @@
+{{/*
+The governing Service a StatefulSet has to name. Nothing is meant to call it —
+clients use the regular Service — so it publishes the gRPC port alone.
+Specifically not metrics: the ServiceMonitor selects Services by the same labels,
+and a second Service carrying the metrics port would have every pod scraped
+twice, doubling every counter summed across targets.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "easyp-service.fullname" . }}-headless
+  labels:
+    {{- include "easyp-service.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "easyp-service.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: grpc
+      port: {{ .Values.ports.grpc }}
+      targetPort: grpc
+      protocol: TCP
+      appProtocol: h2c

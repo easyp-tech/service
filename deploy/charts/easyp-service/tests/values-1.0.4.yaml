@@ -1,3 +1,15 @@
+# The chart's values.yaml as released in 1.0.4, unchanged below this header.
+#
+# `helm upgrade --reuse-values` does not merge a new chart's defaults: it
+# replaces them with the previous release's values. So on an upgrade from 1.0.4
+# the templates see exactly this file plus whatever the release overrode, and
+# every key added since is simply absent. tests/render.sh renders the current
+# templates against this file alone; a template that reads a newer key without
+# tolerating its absence fails there instead of in a customer's upgrade.
+#
+# Do not edit it to make a check pass. When the oldest release worth upgrading
+# from moves, replace it with that release's values.yaml, verbatim.
+#
 # Default values for easyp-service.
 #
 # Three things have no working default and must be decided before the chart will
@@ -19,28 +31,7 @@
 #      together — see the comment on trustedProxies for why the second one is
 #      not optional.
 
-# Ignored while autoscaling.enabled: the HPA owns the count then, and a
-# `replicas` field in the template would reset it on every `helm upgrade`.
-# More than one needs config.registry.s3 — see persistence.
 replicaCount: 1
-
-# CPU is the signal because every generation is a plugin process charged to this
-# container. Needs metrics-server. Each replica runs its own worker pool and
-# limits, so capacity scales with it: maxReplicas × maxConcurrentGenerations
-# generations at once, cluster-wide. The per-client limits (rateLimit) are per
-# pod too, so a client spread across N pods gets up to N times its limit.
-autoscaling:
-  enabled: false
-  minReplicas: 2
-  maxReplicas: 6
-  targetCPUUtilizationPercentage: 70
-  targetMemoryUtilizationPercentage: null
-  # Passed through to the HPA as-is. Scale-down is worth slowing: a replica
-  # removed stops serving from its warm cache. Its claim is kept under
-  # retentionPolicy.whenScaled=Retain, an emptyDir is not.
-  behavior:
-    scaleDown:
-      stabilizationWindowSeconds: 600
 
 image:
   repository: ghcr.io/easyp-tech/service
@@ -67,7 +58,7 @@ topologySpreadConstraints: []
 
 # The service reads its certificate and key once, at startup, so a rotated
 # certificate is not picked up until the pod restarts. With stakater/Reloader
-# installed this annotation restarts the pods when the secret changes.
+# installed this annotation restarts the deployment when the secret changes.
 # Without it, rotation is a manual `kubectl rollout restart`.
 reloader:
   enabled: true
@@ -391,38 +382,13 @@ ingress:
 # chart refuses to install when it does not: eviction starts at the limit, so
 # storage sized exactly to it is already full by the time the cache first needs
 # headroom.
-#
-# The workload is a StatefulSet, and where the cache goes is one of two:
-#
-#   enabled=true         (default) a ReadWriteOnce claim per replica from
-#                        volumeClaimTemplates, plugins-<fullname>-N. Kept across
-#                        restarts, upgrades and — by retentionPolicy — scale-down.
-#   enabled=false        an emptyDir per pod on node disk, lost with the pod.
-#
-# Replicas never share a volume, so there is no ReadWriteMany option: unpacking
-# a plugin is serialised by an in-process lock only, and two pods on one volume
-# corrupt the cache on a concurrent miss for the same plugin.
-#
-# More than one replica needs config.registry.s3. Each replica's volume starts
-# empty and object storage is the only thing that fills it.
 # ---------------------------------------------------------------------------
 persistence:
   enabled: true
+  existingClaim: ""
   storageClass: ""
-  # ReadWriteOnce or ReadWriteOncePod; anything shared is refused, see above.
   accessMode: ReadWriteOnce
-  # Per replica, so the total is replicas × this. It cannot be changed by
-  # `helm upgrade`: a StatefulSet's claim templates are immutable. See the
-  # README's "Resizing the plugin volumes".
   size: 25Gi
-  # What happens to a replica's claim when the StatefulSet is scaled down or
-  # deleted. Retain keeps the warm cache for the next scale-up and survives
-  # `helm uninstall`, as the single claim of earlier releases did; Delete stops
-  # an autoscaler from leaving a trail of idle disks. Honoured from Kubernetes
-  # 1.27; older API servers ignore it and retain.
-  retentionPolicy:
-    whenDeleted: Retain
-    whenScaled: Retain
   # Used when enabled=false, where the cache lives in an emptyDir on the node
   # instead of a volume of its own. Without a limit here the cache grows into
   # the node's ephemeral storage, and disk pressure there is resolved by the

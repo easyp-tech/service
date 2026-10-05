@@ -89,9 +89,26 @@ what a cert-manager CA issuer produces.
 {{- end }}
 {{- end }}
 
+{{/*
+Whether autoscaling is on, read so that an absent autoscaling map means off.
+
+`helm upgrade --reuse-values` replaces this chart's defaults with the previous
+release's values, so a release installed before a key existed arrives without
+it — and `.Values.autoscaling.enabled` on a missing map is a nil-pointer
+failure that stops the upgrade. Absent is what an older release was: off.
+
+Every value added after 1.0.4 is read this way or through `with`, which skips a
+missing one. tests/values-1.0.4.yaml pins it: the templates must render against
+that release's values alone.
+*/}}
+{{- define "easyp-service.autoscalingEnabled" -}}
+{{- dig "autoscaling" "enabled" false .Values.AsMap -}}
+{{- end }}
+
 {{- define "easyp-service.mutualTLS" -}}
 {{- and .Values.tls.enabled (ne .Values.tls.clientCASecret "-") -}}
 {{- end }}
+
 
 {{/*
 Converts a Kubernetes quantity like "25Gi" to plain bytes, so that the volume
@@ -168,9 +185,84 @@ nothing but a log line to say so.
 {{- fail "easyp-service: secrets.create is true but secrets.data.DB_POSTGRES_DSN is empty." }}
 {{- end }}
 
-{{- if gt (int .Values.replicaCount) 1 }}
-{{- if and .Values.persistence.enabled (eq .Values.persistence.accessMode "ReadWriteOnce") }}
-{{- fail "easyp-service: replicaCount > 1 needs persistence.accessMode=ReadWriteMany, otherwise only one pod can mount the plugin cache and the rest stay Pending." }}
+{{- /*
+Replicas never share a volume. Unpacking a plugin is serialised by an in-process
+lock only, so two pods on one ReadWriteMany claim race on a concurrent miss for
+the same plugin and corrupt it — and each applies cacheMaxBytes to the same
+bytes on its own. Refused rather than documented, because it appears to work.
+*/}}
+{{- /*
+persistence.existingClaim was a value until the chart moved to a StatefulSet,
+and Helm ignores values nothing reads. Ignored, an upgrade carrying it would
+mount a fresh, empty claim while the one named here — without S3, the only copy
+of every plugin — sat unmounted, and nothing would say so.
+*/}}
+{{- if .Values.persistence.existingClaim }}
+{{- fail (printf "easyp-service: persistence.existingClaim was removed; every replica now gets a claim of its own from the StatefulSet's volumeClaimTemplates, named plugins-%s-N. To keep the data in %q, rebind its PersistentVolume to plugins-%s-0 (see the chart README, \"Upgrading from a release that rendered a Deployment\"), then unset persistence.existingClaim." (include "easyp-service.fullname" .) .Values.persistence.existingClaim (include "easyp-service.fullname" .)) }}
+{{- end }}
+
+{{- if not (has .Values.persistence.accessMode (list "ReadWriteOnce" "ReadWriteOncePod")) }}
+{{- fail (printf "easyp-service: persistence.accessMode must be ReadWriteOnce or ReadWriteOncePod, got %q. Replicas must not share a plugin cache: pods unpacking the same plugin at once corrupt it. Each replica gets a claim of its own instead." .Values.persistence.accessMode) }}
+{{- end }}
+
+{{- /*
+With autoscaling the ceiling is what counts: a pod the HPA adds under load has
+to be able to start.
+*/}}
+{{- $autoscaling := eq (include "easyp-service.autoscalingEnabled" .) "true" }}
+{{- /* Not ternary: it evaluates both branches, and the HPA's may not exist. */}}
+{{- $maxReplicas := int .Values.replicaCount }}
+{{- if $autoscaling }}
+{{- $maxReplicas = int .Values.autoscaling.maxReplicas }}
+{{- end }}
+{{- if gt $maxReplicas 1 }}
+{{- /*
+Every replica's volume starts empty. Without S3 the plugins directory is the one
+copy of every plugin, so a second replica would have none and fail every
+generation with NotFound.
+*/}}
+{{- if not .Values.config.registry.s3.bucket }}
+{{- fail "easyp-service: more than one replica needs config.registry.s3.bucket. Each replica's cache starts empty and object storage is the only thing that fills it; without S3 the plugins directory is the sole copy of every plugin, and only one replica can hold it." }}
+{{- end }}
+{{- end }}
+
+{{- if $autoscaling }}
+{{- /*
+Present but partial: `--reuse-values --set autoscaling.enabled=true` on a release
+from before autoscaling existed carries that one key and none of the defaults.
+Refused rather than guessed, so the numbers live in values.yaml alone.
+*/}}
+{{- if not (and (hasKey .Values.autoscaling "minReplicas") (hasKey .Values.autoscaling "maxReplicas")) }}
+{{- fail "easyp-service: autoscaling.enabled needs autoscaling.minReplicas and autoscaling.maxReplicas. A --reuse-values upgrade from a release that predates autoscaling carries none of its defaults; upgrade with --reset-then-reuse-values, or set both." }}
+{{- end }}
+{{- if gt (int .Values.autoscaling.minReplicas) (int .Values.autoscaling.maxReplicas) }}
+{{- fail (printf "easyp-service: autoscaling.minReplicas (%d) exceeds autoscaling.maxReplicas (%d)." (int .Values.autoscaling.minReplicas) (int .Values.autoscaling.maxReplicas)) }}
+{{- end }}
+{{- if not (or .Values.autoscaling.targetCPUUtilizationPercentage .Values.autoscaling.targetMemoryUtilizationPercentage) }}
+{{- fail "easyp-service: autoscaling.enabled needs targetCPUUtilizationPercentage or targetMemoryUtilizationPercentage; an HPA with no metric never scales." }}
+{{- end }}
+{{- /*
+Utilisation is a percentage of the request. Without one the HPA reports
+<unknown> and holds at whatever it last had, which looks like a quiet day.
+*/}}
+{{- if .Values.autoscaling.targetCPUUtilizationPercentage }}
+{{- if not (and .Values.resources.requests .Values.resources.requests.cpu) }}
+{{- fail "easyp-service: autoscaling.targetCPUUtilizationPercentage needs resources.requests.cpu; utilisation is measured against the request." }}
+{{- end }}
+{{- end }}
+{{- if .Values.autoscaling.targetMemoryUtilizationPercentage }}
+{{- if not (and .Values.resources.requests .Values.resources.requests.memory) }}
+{{- fail "easyp-service: autoscaling.targetMemoryUtilizationPercentage needs resources.requests.memory; utilisation is measured against the request." }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- with .Values.persistence.retentionPolicy }}
+{{- range $when := list "whenDeleted" "whenScaled" }}
+{{- /* A key left out means Retain, as the StatefulSet renders it. */}}
+{{- if and (hasKey $.Values.persistence.retentionPolicy $when) (not (has (index $.Values.persistence.retentionPolicy $when) (list "Retain" "Delete"))) }}
+{{- fail (printf "easyp-service: persistence.retentionPolicy.%s must be Retain or Delete." $when) }}
+{{- end }}
 {{- end }}
 {{- end }}
 
