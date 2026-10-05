@@ -18,7 +18,10 @@ COPY --link --from=base / /
 COPY --link --from=build --chmod=0755 /build/grpc_node_plugin .
 COPY --chmod=0755 <<"EOF" /plugin
 #!/bin/sh
-exec /grpc_node_plugin "$@"
+# Paths are relative to this script: the service runs the bundle from its
+# plugins directory, not from the image it was built in.
+DIR=${0%/*}
+exec "$DIR/grpc_node_plugin" "$@"
 EOF
 USER nobody
 ENTRYPOINT ["/plugin"]

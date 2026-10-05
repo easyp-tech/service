@@ -31,7 +31,10 @@ COPY --link --from=build --chmod=0755 --chown=root:root /build/protoc-gen-grpc-j
 COPY --from=maven-deps /root/.m2/repository /maven-repository
 COPY --chmod=0755 <<"EOF" /plugin
 #!/bin/sh
-exec /protoc-gen-grpc-java "$@"
+# Paths are relative to this script: the service runs the bundle from its
+# plugins directory, not from the image it was built in.
+DIR=${0%/*}
+exec "$DIR/protoc-gen-grpc-java" "$@"
 EOF
 USER nobody
 ENTRYPOINT ["/plugin"]

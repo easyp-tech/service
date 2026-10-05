@@ -42,9 +42,17 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # No --platform here on purpose: this stage is the image being shipped, so it
 # has to be the target's. Only the apt step is emulated, which is seconds.
-FROM debian:bookworm-slim
+#
+# trixie, not bookworm, for the plugins rather than for the service: the binary
+# above is static and does not care. Plugins are dynamically linked and run on
+# this image's glibc, and protoc's own plugins (cpp, python, java, ruby…) are
+# built against 2.38; bookworm ships 2.36, so 15 catalogue plugins failed with
+# "GLIBC_2.38 not found". glibc is backward compatible, so everything that ran on
+# bookworm runs here unchanged — checked plugin by plugin across the catalogue.
+# `plugins build` smoke-tests against this same base; keep the two in step.
+FROM debian:trixie-slim
 
-# upgrade as well as install: bookworm-slim is cut at a point in time and its
+# upgrade as well as install: trixie-slim is cut at a point in time and its
 # libraries carry whatever advisories were open then. The release scan refuses
 # HIGH and CRITICAL findings in the OS layer, and it is right to — but a pinned
 # base means the same image is refused a week later for a CVE nobody here

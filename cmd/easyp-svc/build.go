@@ -60,6 +60,7 @@ type pluginConfig struct {
 	Dockerfile string            `yaml:"dockerfile"`
 	Args       []string          `yaml:"args"`
 	Versions   []versionEntry    `yaml:"versions"`
+	Smoke      smokeConfig       `yaml:"smoke"`
 }
 
 // versionEntry accepts both scalar (`- v1.2.3`) and mapping forms. The mapping
@@ -119,6 +120,7 @@ type buildJob struct {
 	args       []string
 	pluginDir  string
 	outputDir  string
+	smoke      smokeConfig
 }
 
 func (j buildJob) key() string {
@@ -144,6 +146,7 @@ func runPluginsBuild(
 	dryRun bool,
 	nonInteractive bool,
 	keepGoing bool,
+	verify verifyOptions,
 ) error {
 	err := validateRegistryDir(registryPath)
 	if err != nil {
@@ -178,7 +181,7 @@ func runPluginsBuild(
 	tracker := newBuildTracker(len(toBuild), interactive)
 
 	stop := startTicker(tracker)
-	executeBuilds(ctx, toBuild, parallel, keepGoing, tracker)
+	executeBuilds(ctx, toBuild, parallel, keepGoing, verify, tracker)
 	stop()
 
 	printBuildSummary(tracker, total, cached, skipped)
@@ -320,6 +323,7 @@ func jobsFromConfig(
 			args:       mergeArgs(cfg.Args, ver.args),
 			pluginDir:  pluginDir,
 			outputDir:  filepath.Join(outputDir, group, name, ver.version),
+			smoke:      cfg.Smoke,
 		})
 	}
 
@@ -397,21 +401,23 @@ func checkDocker(ctx context.Context) error {
 	return nil
 }
 
-func executeBuilds(ctx context.Context, jobs []buildJob, parallel int, keepGoing bool, tracker *buildTracker) {
+func executeBuilds(
+	ctx context.Context, jobs []buildJob, parallel int, keepGoing bool, verify verifyOptions, tracker *buildTracker,
+) {
 	group, ctx := errgroup.WithContext(ctx)
 	group.SetLimit(parallel)
 
 	for _, j := range jobs {
 		job := j
 		group.Go(func() error {
-			return buildOne(ctx, job, keepGoing, tracker)
+			return buildOne(ctx, job, keepGoing, verify, tracker)
 		})
 	}
 
 	_ = group.Wait()
 }
 
-func buildOne(ctx context.Context, job buildJob, keepGoing bool, tracker *buildTracker) error {
+func buildOne(ctx context.Context, job buildJob, keepGoing bool, verify verifyOptions, tracker *buildTracker) error {
 	start := time.Now()
 
 	err := os.MkdirAll(job.outputDir, dirPermissions)
@@ -438,6 +444,15 @@ func buildOne(ctx context.Context, job buildJob, keepGoing bool, tracker *buildT
 		tracker.finish(job.key(), false, normErr.Error(), dur)
 
 		return keepOrFail(keepGoing, fmt.Errorf("build %s: %w", job.key(), normErr))
+	}
+
+	smokeOut, verifyErr := verifyBundle(ctx, job, verify)
+	if verifyErr != nil {
+		discardErr := discardFailedBuild(job)
+		writeBuildLog(job, append(out, smokeOut...), errors.Join(verifyErr, discardErr))
+		tracker.finish(job.key(), false, verifyErr.Error(), time.Since(start).Round(time.Second))
+
+		return keepOrFail(keepGoing, fmt.Errorf("build %s: %w", job.key(), verifyErr))
 	}
 
 	// A log left over from an earlier failure would otherwise outlive the

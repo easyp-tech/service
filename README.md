@@ -25,7 +25,7 @@ Every release publishes an image, a Helm chart and the binaries. Pick one.
 
 | Tag | Meaning |
 |-----|---------|
-| `v1.0.5` | a release; immutable |
+| `v1.1.0` | a release; immutable |
 | `latest` | the newest release — only moves on a release tag |
 | `edge` | the tip of `master`; moves on every push |
 | `sha-<short>` | one commit; immutable |
@@ -38,7 +38,7 @@ kubectl create secret generic easyp-env \
   --from-literal=DB_POSTGRES_DSN='postgres://user:pass@host:5432/easyp?sslmode=require'
 
 helm install easyp oci://ghcr.io/easyp-tech/charts/easyp-service \
-  --version 1.0.5 \
+  --version 1.1.0 \
   --set secrets.existingSecret=easyp-env \
   --set tls.enabled=false
 ```
@@ -628,6 +628,22 @@ every build), `dockerfile` (a different file), `args` (arguments the entrypoint
 is run with); a version may be a mapping that overrides any of those for itself
 or sets `skip: true`.
 
+Each built version is then checked the way the service will run it, and a
+version that fails is emptied down to its `build.log` so that nothing ships it:
+
+1. absolute symlinks that point at a file the bundle carries are rewritten as
+   relative ones, the rest removed — the service would skip them;
+2. the bundle is packed and unpacked with the service's own unpacker;
+3. `plugin` is run in the service's base image (`--runtime-image`, default
+   `debian:trixie-slim`) as uid 65532, with an empty environment, on a small
+   synthetic request. Any `CodeGeneratorResponse` passes, even one carrying an
+   error.
+
+A plugin that will not answer without options takes them from a `smoke` block in
+`plugin.yaml` — `smoke: {parameter: "extern_path=.=crate::proto"}` — and
+`smoke: {skip: true}` turns the run off for one that cannot be exercised that
+way. `--no-smoke` skips step 3 for a whole build; steps 1 and 2 always run.
+
 Filters are globs on `group/name`, optionally with a version:
 `--filter 'protocolbuffers/*'`, `--filter 'grpc/go:v1.6.2'`. `--parallel` sets
 how many build at once, `--force` rebuilds what is already in `plugins/`, and
@@ -667,6 +683,23 @@ What the service needs from the result:
   writes a `CodeGeneratorResponse` on stdout, and exits non-zero on failure.
   Sidecars next to it are fine — a jar, a `node_modules`, a shared library —
   and are packed with it.
+- **Nothing outside the bundle.** The service does not run the image: it
+  unpacks its filesystem into `plugins/{group}/{name}/{version}/` and runs
+  `plugin` there as a plain process on its own base image. A wrapper script
+  therefore resolves every path from its own location, never from `/`:
+
+  ```sh
+  #!/bin/sh
+  DIR=${0%/*}
+  exec "$DIR/nodejs/bin/node" "$DIR/app/protoc-gen-es.js" "$@"
+  ```
+
+  The JVM recipes find their JRE with
+  `for JAVA in "$DIR"/usr/lib/jvm/*/bin/java; do exec "$JAVA" -jar …; done`, and
+  the Python ones run under the bundle's own dynamic loader so the interpreter
+  never mixes its libraries with the service's — `community/nanopb` for glibc,
+  `community/danielgtaylor-betterproto` for musl. A plugin may write to its
+  working directory; the service gives each run a fresh one.
 - **`ARG VERSION` selects what to build.** The Dockerfile is one recipe for
   every version in `plugin.yaml`; a version that needs a different recipe gets
   its own `dockerfile:` entry.
@@ -979,7 +1012,7 @@ A release tag produces, in this order:
 To verify an image before running it:
 
 ```bash
-cosign verify ghcr.io/easyp-tech/service:v1.0.5 \
+cosign verify ghcr.io/easyp-tech/service:v1.1.0 \
   --certificate-identity-regexp '^https://github.com/easyp-tech/service/\.github/workflows/release\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
