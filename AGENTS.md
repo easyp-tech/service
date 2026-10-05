@@ -33,7 +33,7 @@ tidy. `api/` and `sdk/` carry their own `go.mod` and their own Apache-2.0
 before the split a client importing the SDK had its licence scanner report
 Elastic-2.0 on their own build.
 
-They are tagged separately — `v1.0.5`, `api/v1.0.5`, `sdk/v1.0.5` — and released
+They are tagged separately — `v1.1.0`, `api/v1.1.0`, `sdk/v1.1.0` — and released
 in lockstep, so that one version number means one thing. A change to the wire
 contract therefore touches a module whose version is a promise to people outside
 this repository.
