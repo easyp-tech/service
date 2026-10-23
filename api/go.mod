@@ -11,7 +11,7 @@
 // limitations.
 module github.com/easyp-tech/service/api
 
-go 1.26.6
+go 1.26.9
 
 require (
 	github.com/easyp-tech/protoc-gen-easydoc v0.4.0

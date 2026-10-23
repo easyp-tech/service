@@ -1,10 +1,10 @@
 module github.com/easyp-tech/service
 
-// 1.26.6 rather than 1.26.0: three vulnerabilities in the standard library
-// (net/url, html/template, crypto/tls) are fixed there, and CI installs the
-// toolchain named here — so the version in this line is what the govulncheck
-// job reports against.
-go 1.26.6
+// 1.26.9 rather than 1.26.0: vulnerabilities in the standard library are fixed
+// there (net/url, html/template and crypto/tls by 1.26.6, net/http by 1.26.9),
+// and CI installs the toolchain named here — so the version in this line is
+// what the govulncheck job reports against.
+go 1.26.9
 
 // api/ and sdk/ are separate modules so that a client importing them does not
 // inherit this module's Elastic License 2.0 through the module it lives in.
