@@ -1,6 +1,18 @@
 {{- include "easyp-service.validate" . }}
+{{/*
+A StatefulSet for its volumeClaimTemplates rather than for identity: the pods
+are interchangeable and nothing addresses one by name. A claim template is the
+one way to give each replica a ReadWriteOnce volume of its own that outlives the
+pod, which is what lets the service scale out on plain block storage. Replicas
+never share one volume — see the accessMode check in _helpers.tpl.
+
+Upgrades roll. A StatefulSet deletes a pod before starting its replacement, so a
+ReadWriteOnce claim is released before the next pod asks for it; the Deployment
+this replaced needed Recreate for that, or waited on a Multi-Attach error
+forever.
+*/}}
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: {{ include "easyp-service.fullname" . }}
   labels:
@@ -13,19 +25,26 @@ metadata:
     reloader.stakater.com/auto: "true"
   {{- end }}
 spec:
+  {{- if ne (include "easyp-service.autoscalingEnabled" .) "true" }}
   replicas: {{ .Values.replicaCount }}
-  {{- if and .Values.persistence.enabled (ne .Values.persistence.accessMode "ReadWriteMany") }}
-  # Recreate, because a ReadWriteOnce volume can be attached to one node at a
-  # time. A rolling update starts the replacement pod before retiring the old
-  # one, and if the scheduler picks a different node that pod waits on a
-  # Multi-Attach error forever — the rollout never completes and never fails.
-  # The choice is not between downtime and none; it is between a short gap and
-  # a stuck upgrade. Give the pod a ReadWriteMany volume to roll instead.
-  strategy:
-    type: Recreate
-  {{- else }}
-  strategy:
+  {{- end }}
+  serviceName: {{ include "easyp-service.fullname" . }}-headless
+  # Replicas share nothing but the database, and migrations are serialised by
+  # an advisory lock, so there is no reason to start them one at a time. Ordered
+  # startup would make a scale-out from 2 to 8 take six startup probes in a row.
+  podManagementPolicy: Parallel
+  updateStrategy:
     type: RollingUpdate
+  {{- if .Values.persistence.enabled }}
+  {{- with .Values.persistence.retentionPolicy }}
+  # Honoured from Kubernetes 1.27; older API servers drop the field, which
+  # leaves the claims in place — the same as Retain. Absent altogether (a
+  # --reuse-values upgrade from 1.0.4), the field is left out, and Kubernetes
+  # defaults both to Retain as well.
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: {{ .whenDeleted | default "Retain" }}
+    whenScaled: {{ .whenScaled | default "Retain" }}
+  {{- end }}
   {{- end }}
   selector:
     matchLabels:
@@ -40,7 +59,7 @@ spec:
       annotations:
         # The configuration is read once at startup, so a changed ConfigMap does
         # nothing until the pods are replaced. Kubernetes does not roll a
-        # Deployment when a mounted ConfigMap changes; hashing it into the pod
+        # StatefulSet when a mounted ConfigMap changes; hashing it into the pod
         # template is what turns `helm upgrade --set config.…` into a rollout
         # rather than a silent no-op.
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
@@ -152,18 +171,16 @@ spec:
         - name: config
           configMap:
             name: {{ include "easyp-service.fullname" . }}-config
+        {{- /* With persistence on, volumeClaimTemplates below supply it. */}}
+        {{- if not .Values.persistence.enabled }}
         - name: plugins
-          {{- if .Values.persistence.enabled }}
-          persistentVolumeClaim:
-            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-plugins" (include "easyp-service.fullname" .)) }}
-          {{- else }}
           # Ephemeral: every restart re-downloads plugin archives from S3.
           # sizeLimit is what keeps an overrun local to this pod — without it the
           # cache grows into the node's ephemeral storage, and the kubelet
           # resolves disk pressure by evicting pods that need not be this one.
           emptyDir:
             sizeLimit: {{ .Values.persistence.ephemeralSizeLimit }}
-          {{- end }}
+        {{- end }}
         {{- if .Values.tls.enabled }}
         - name: server-tls
           secret:
@@ -190,3 +207,26 @@ spec:
       topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+  {{- if .Values.persistence.enabled }}
+  # A claim per pod, plugins-<fullname>-N. Each starts empty and fills from
+  # object storage, which is why more than one replica needs S3. Not Helm-owned:
+  # `helm uninstall` leaves them, and retentionPolicy decides on scale-down.
+  #
+  # Immutable once created: a StatefulSet refuses any change here, so raising
+  # persistence.size fails `helm upgrade`. The README's "Resizing the plugin
+  # volumes" section has the procedure.
+  volumeClaimTemplates:
+    - metadata:
+        name: plugins
+        labels:
+          {{- include "easyp-service.selectorLabels" . | nindent 10 }}
+      spec:
+        accessModes:
+          - {{ .Values.persistence.accessMode }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass }}
+        {{- end }}
+  {{- end }}

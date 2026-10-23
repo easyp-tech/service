@@ -386,38 +386,122 @@ fi
 echo
 echo "== rollout strategy =="
 
-# A ReadWriteOnce volume attaches to one node at a time, so a rolling update can
-# strand the replacement pod on a Multi-Attach error and hang the upgrade
-# indefinitely. Nothing in `helm upgrade` reports that as a failure, which is
-# why it is checked here rather than discovered in a cluster.
-if expect_render "a ReadWriteOnce volume forces Recreate"; then
-  if grep -q "type: Recreate" <<<"$out"; then
-    pass "a ReadWriteOnce volume forces Recreate"
+# One workload kind in every storage mode. It used to be a Deployment, which had
+# to Recreate on a ReadWriteOnce claim: a rolling update started the replacement
+# first, and a replacement on another node waited on Multi-Attach forever. A
+# StatefulSet deletes the pod before starting its successor, so every mode rolls.
+# A Deployment reappearing here would bring that hang back with it.
+for mode in "claim per replica|" \
+            "emptyDir|--set persistence.enabled=false --set resources.limits.ephemeral-storage=30Gi"; do
+  what="${mode%%|*}"
+  read -r -a args <<<"${mode#*|}"
+
+  if expect_render "$what: a StatefulSet that rolls" ${args[@]+"${args[@]}"}; then
+    if grep -q "^kind: Deployment$" <<<"$out"; then
+      fail "$what: a StatefulSet that rolls: a Deployment rendered"
+    elif ! grep -q "^kind: StatefulSet$" <<<"$out"; then
+      fail "$what: a StatefulSet that rolls: no StatefulSet rendered"
+    elif ! grep -A1 "updateStrategy:" <<<"$out" | grep -q "type: RollingUpdate"; then
+      fail "$what: a StatefulSet that rolls: updateStrategy is not RollingUpdate"
+    else
+      pass "$what: a StatefulSet that rolls"
+    fi
+  fi
+done
+
+# A StatefulSet must name a governing Service that exists, or the API server
+# accepts it and the pods never get their DNS records.
+if expect_render "the StatefulSet names the headless Service the chart renders"; then
+  governing="$(grep -E '^  serviceName: ' <<<"$out" | awk '{print $2}')"
+  if [[ -n "$governing" ]] && grep -qE "^  name: ${governing}$" <<<"$out" && grep -q "clusterIP: None" <<<"$out"; then
+    pass "the StatefulSet names the headless Service the chart renders"
   else
-    fail "a ReadWriteOnce volume forces Recreate: strategy is not Recreate"$'\n'"$(grep -A2 'strategy:' <<<"$out")"
+    fail "the StatefulSet names the headless Service the chart renders: serviceName '$governing' has no headless Service"
   fi
 fi
 
-# The converse: a shared volume has no attach conflict, so the upgrade should
-# roll rather than take the service down for it.
-if expect_render "a ReadWriteMany volume rolls" \
-     --set persistence.accessMode=ReadWriteMany; then
-  if grep -q "type: RollingUpdate" <<<"$out"; then
-    pass "a ReadWriteMany volume rolls"
+# The headless Service carries the same selector labels as the real one, and the
+# ServiceMonitor selects Services by those labels. With a metrics port on both,
+# every pod would be scraped twice and every summed counter doubled.
+if expect_render "the headless Service does not publish metrics" \
+     --show-only templates/service-headless.yaml; then
+  if grep -q "name: metrics" <<<"$out"; then
+    fail "the headless Service does not publish metrics: it does, so the ServiceMonitor would scrape each pod twice"
   else
-    fail "a ReadWriteMany volume rolls: strategy is not RollingUpdate"
+    pass "the headless Service does not publish metrics"
   fi
 fi
 
-# Without persistence the volume is an emptyDir, which every pod gets its own
-# copy of. Nothing to conflict over, so nothing to take downtime for.
-if expect_render "no persistence rolls" \
-     --set persistence.enabled=false \
-     --set resources.limits.ephemeral-storage=30Gi; then
-  if grep -q "type: RollingUpdate" <<<"$out"; then
-    pass "no persistence rolls"
+echo
+echo "== one volume per replica =="
+
+# Plenty of clusters have no ReadWriteMany class, or one too slow to execute
+# plugins from — and replicas must not share a cache anyway. Every replica gets
+# a ReadWriteOnce claim of its own from volumeClaimTemplates.
+S3=(--set config.registry.s3.bucket=plugins)
+
+if expect_render "every replica gets a claim of its own" \
+     "${S3[@]}" --set replicaCount=3; then
+  problems=""
+  grep -q "^kind: PersistentVolumeClaim$" <<<"$out" && problems="$problems a-standalone-claim-rendered"
+  grep -q "volumeClaimTemplates:" <<<"$out" || problems="$problems no-volumeClaimTemplates"
+  grep -q "persistentVolumeClaim:" <<<"$out" && problems="$problems pod-names-a-claim"
+  grep -A1 "accessModes:" <<<"$out" | grep -q "ReadWriteOnce" || problems="$problems not-ReadWriteOnce"
+  grep -qE "^  replicas: 3$" <<<"$out" || problems="$problems replicas-not-3"
+
+  if [[ -n "$problems" ]]; then
+    fail "every replica gets a claim of its own:$problems"
   else
-    fail "no persistence rolls: strategy is not RollingUpdate"
+    pass "every replica gets a claim of its own"
+  fi
+fi
+
+# Two pods on one volume corrupt the cache on a concurrent miss for the same
+# plugin, and it appears to work until then. Refused, not documented.
+expect_failure "a shared access mode is refused" "must be ReadWriteOnce or ReadWriteOncePod" \
+  --set persistence.accessMode=ReadWriteMany
+
+if expect_render "ReadWriteOncePod is accepted" \
+     --set persistence.accessMode=ReadWriteOncePod; then
+  pass "ReadWriteOncePod is accepted"
+fi
+
+# existingClaim was a value until the StatefulSet, and Helm ignores values
+# nothing reads. Ignored, an upgrade carrying it would mount an empty claim
+# while the named one — without S3, the only copy of every plugin — sat unused.
+expect_failure "the removed existingClaim is refused, not ignored" "persistence.existingClaim was removed" \
+  --set persistence.existingClaim=mine
+
+# An empty volume with nothing to fill it from fails every generation.
+expect_failure "several replicas without object storage are refused" "needs config.registry.s3.bucket" \
+  --set replicaCount=2
+
+expect_failure "several emptyDir replicas without object storage are refused" "needs config.registry.s3.bucket" \
+  --set replicaCount=2 --set persistence.enabled=false \
+  --set resources.limits.ephemeral-storage=30Gi
+
+# The HPA's ceiling is what matters: a pod it adds under load has to be able
+# to start.
+expect_failure "autoscaling without object storage is refused" "needs config.registry.s3.bucket" \
+  --set autoscaling.enabled=true
+
+expect_failure "autoscaling with no metric is refused" "an HPA with no metric never scales" \
+  "${S3[@]}" --set autoscaling.enabled=true \
+  --set autoscaling.targetCPUUtilizationPercentage=null
+
+expect_failure "a retention policy other than Retain or Delete is refused" "must be Retain or Delete" \
+  --set persistence.retentionPolicy.whenScaled=Keep
+
+# A replicas field alongside an HPA is reset by every `helm upgrade`, scaling the
+# workload back to replicaCount until the HPA notices.
+if expect_render "autoscaling leaves the replica count to the HPA" \
+     "${S3[@]}" --set autoscaling.enabled=true; then
+  if grep -qE "^  replicas:" <<<"$out"; then
+    fail "autoscaling leaves the replica count to the HPA: the workload still sets replicas"
+  elif ! grep -A3 "scaleTargetRef:" <<<"$out" | grep -q "kind: StatefulSet"; then
+    fail "autoscaling leaves the replica count to the HPA: the HPA does not target the StatefulSet"
+  else
+    pass "autoscaling leaves the replica count to the HPA"
   fi
 fi
 
@@ -473,6 +557,62 @@ if expect_render "the defaults ship a network policy"; then
     fail "the defaults ship a network policy: none rendered"
   fi
 fi
+
+echo
+echo "== upgrading with --reuse-values =="
+
+# `helm upgrade --reuse-values` replaces the new chart's defaults with the old
+# release's values, so every key added since that release is absent rather than
+# defaulted. A template reading one as `.Values.new.key` fails with a nil pointer
+# and the upgrade stops. It did, for autoscaling, before anything checked it.
+#
+# Rendering against the old release's values.yaml alone is what the templates
+# see on that upgrade. The copy is needed because --reuse-values is a property
+# of an installed release; helm template has no way to ask for it.
+reuse_chart="$(mktemp -d -t easyp-reuse.XXXXXX)"
+cp -R "$CHART/." "$reuse_chart/"
+cp "$CHART/tests/values-1.0.4.yaml" "$reuse_chart/values.yaml"
+
+reuse() { helm template test "$reuse_chart" "${BASE[@]}" "$@"; }
+
+if out="$(reuse 2>&1)"; then
+  problems=""
+  grep -q "^kind: StatefulSet$" <<<"$out" || problems="$problems no-StatefulSet"
+  grep -q "^kind: HorizontalPodAutoscaler$" <<<"$out" && problems="$problems an-HPA-nobody-asked-for"
+  grep -qE "^  replicas: 1$" <<<"$out" || problems="$problems replicas-not-1"
+
+  if [[ -n "$problems" ]]; then
+    fail "an upgrade from 1.0.4 with --reuse-values renders:$problems"
+  else
+    pass "an upgrade from 1.0.4 with --reuse-values renders"
+  fi
+else
+  fail "an upgrade from 1.0.4 with --reuse-values renders"$'\n'"$out"
+fi
+
+# Turning autoscaling on in the same upgrade brings one key of the map and none
+# of its defaults. Refused by name, rather than an HPA with no bounds.
+if out="$(reuse --set autoscaling.enabled=true --set config.registry.s3.bucket=plugins 2>&1)"; then
+  fail "a partial autoscaling map is refused by name: it rendered"
+elif grep -qF "needs autoscaling.minReplicas and autoscaling.maxReplicas" <<<"$out"; then
+  pass "a partial autoscaling map is refused by name"
+else
+  fail "a partial autoscaling map is refused by name: failed some other way"$'\n'"$out"
+fi
+
+# One retention key set, the other absent: the absent one is Retain, which is
+# also what Kubernetes would pick, not an empty field the API server rejects.
+if out="$(reuse --set persistence.retentionPolicy.whenScaled=Delete 2>&1)"; then
+  if grep -q "whenDeleted: Retain" <<<"$out" && grep -q "whenScaled: Delete" <<<"$out"; then
+    pass "a partial retention policy fills the rest with Retain"
+  else
+    fail "a partial retention policy fills the rest with Retain: $(grep -A2 'persistentVolumeClaimRetentionPolicy' <<<"$out" | tr '\n' ' ')"
+  fi
+else
+  fail "a partial retention policy fills the rest with Retain"$'\n'"$out"
+fi
+
+rm -rf "$reuse_chart"
 
 echo
 echo "== install paths a customer actually takes =="

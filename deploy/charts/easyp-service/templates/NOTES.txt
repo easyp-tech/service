@@ -2,12 +2,12 @@
 
 Watch it come up:
 
-  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "easyp-service.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} rollout status statefulset/{{ include "easyp-service.fullname" . }}
 
 If the pod restarts immediately, the cause is almost always configuration and it
 is printed on the first line of the log, not in the pod events:
 
-  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "easyp-service.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} logs statefulset/{{ include "easyp-service.fullname" . }}
 
 Three things worth checking before you call it done:
 
@@ -23,7 +23,7 @@ Three things worth checking before you call it done:
 {{- else }}
 1. LICENSE — a key was supplied. Confirm it was accepted:
 
-   kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "easyp-service.fullname" . }} | grep -i licen
+   kubectl -n {{ .Release.Namespace }} logs statefulset/{{ include "easyp-service.fullname" . }} | grep -i licen
 {{- end }}
 
 {{ if not (hasKey .Values.secrets.data "AUTH_WRITE_TOKENS") }}
@@ -65,8 +65,7 @@ Three things worth checking before you call it done:
 PLUGIN CACHE IS ON NODE DISK.
 
   persistence is disabled, so each pod keeps its own copy of the plugin cache in
-  an emptyDir. That is a supported way to run several replicas without
-  ReadWriteMany storage, but the space is the node's, and it is charged per
+  an emptyDir, lost with the pod. The space is the node's, and it is charged per
   replica rather than once:
 
     {{ .Values.replicaCount }} × {{ .Values.persistence.ephemeralSizeLimit }} across the nodes these pods land on
@@ -75,6 +74,38 @@ PLUGIN CACHE IS ON NODE DISK.
   resources.limits.ephemeral-storage on the pod — so an overrun evicts the pod
   responsible rather than a neighbour. Neither reserves node capacity for you;
   resources.requests.ephemeral-storage is what the scheduler actually reads.
+{{- end }}
+
+{{- if .Values.persistence.enabled }}
+
+PLUGIN CACHE IS ONE VOLUME PER REPLICA.
+
+  Each pod has its own {{ .Values.persistence.size }} claim (plugins-{{ include "easyp-service.fullname" . }}-N) and fills it
+  from object storage on first use, so a new replica starts cold. Resizing
+  cannot go through `helm upgrade` — the claim template is immutable; see the
+  chart README, "Resizing the plugin volumes".
+{{- /*
+Releases before the StatefulSet created one claim, <fullname>-plugins, and kept
+it on removal. Nothing mounts it any more; without S3 it holds the only copy of
+every plugin, which is worth saying at the moment it stops being used.
+*/}}
+{{- $legacy := printf "%s-plugins" (include "easyp-service.fullname" .) }}
+{{- if and .Release.IsUpgrade (lookup "v1" "PersistentVolumeClaim" .Release.Namespace $legacy) }}
+
+  THE PREVIOUS CLAIM, {{ $legacy }}, IS NO LONGER MOUNTED. It was kept, not
+  deleted.{{ if not .Values.config.registry.s3.bucket }} Without S3 it holds the only copy of every plugin, and
+  the new claim started empty: rebind its volume to plugins-{{ include "easyp-service.fullname" . }}-0 as the
+  chart README describes, "Upgrading from a release that rendered a Deployment".{{ else }}
+  The new claims fill from S3, so delete it once the pods are serving.{{ end }}
+{{- end }}
+{{- end }}
+
+{{- if eq (include "easyp-service.autoscalingEnabled" .) "true" }}
+
+AUTOSCALING between {{ .Values.autoscaling.minReplicas }} and {{ .Values.autoscaling.maxReplicas }} replicas. It needs metrics-server; without it the
+HPA shows <unknown> targets and never scales. Check:
+
+  kubectl -n {{ .Release.Namespace }} get hpa {{ include "easyp-service.fullname" . }}
 {{- end }}
 
 {{ if not .Values.ingress.enabled }}

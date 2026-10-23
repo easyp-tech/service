@@ -914,24 +914,29 @@ chain and is wrapped separately.
 That is a single shared credential, not identity: it decides *whether* a caller
 may read, never *which* caller is reading.
 
-### It does not run in more than one replica
+### Replicas must not share a plugin cache
 
 The database side is safe: migrations take a Postgres session lock and audit
 partition maintenance takes an advisory lock, so several processes cannot
 collide there.
 
-The plugin cache cannot. Unpacking finishes with a remove followed by a rename —
-two steps, not atomic — and the only thing serialising it is an in-process
-lock. Two pods on one `ReadWriteMany` volume race: one can delete a directory
-the other is reading, and a rename onto a directory recreated in between fails.
-Each pod also keeps its own in-memory accounting of the same shared bytes, so
-`registry.cache_max_bytes` is applied once per pod to one volume.
+The plugin cache cannot be shared. Unpacking finishes with a remove followed by
+a rename — two steps, not atomic — and the only thing serialising it is an
+in-process lock. Two pods on one `ReadWriteMany` volume race: one can delete a
+directory the other is reading, and a rename onto a directory recreated in
+between fails. Each pod also keeps its own in-memory accounting of the same
+shared bytes, so `registry.cache_max_bytes` is applied once per pod to one
+volume.
 
-The chart's defaults are honest about this — one replica, `ReadWriteOnce`,
-`Recreate`. It *permits* `replicaCount > 1` with a `ReadWriteMany` volume, and
-that combination is **not supported**: it will appear to work and corrupt the
-cache under concurrent misses for the same plugin. Scale by making the single
-pod bigger — `maxConcurrentGenerations` and CPU — not by adding pods.
+So the service scales out with a cache per pod, never one between them. The
+Helm chart runs a StatefulSet that gives each replica a ReadWriteOnce claim of
+its own, or an emptyDir with `persistence.enabled=false`, and refuses a shared
+access mode outright. More than one replica needs `registry.s3`, since each pod
+fills its own cache from object storage.
+
+Everything else a replica enforces is its own: the worker pool, the concurrent
+generation cap and the per-client rate limit apply per pod, so a client spread
+across N pods gets up to N times its limit.
 
 ### There is no down-migration path
 

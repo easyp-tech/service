@@ -173,24 +173,175 @@ fail the request in a way that looks like a corrupt artifact. Watch
 `easyp_plugin_cache_bytes` against the limit, and
 `easyp_plugin_cache_evictions_total` for churn.
 
-The PVC carries `helm.sh/resource-policy: keep`, because refilling the cache
-costs more than the disk.
+The claims outlive the release: they are created by the StatefulSet rather than
+by Helm, so `helm uninstall` leaves them, because refilling the cache costs more
+than the disk. `persistence.retentionPolicy.whenDeleted=Delete` changes that.
 
-`replicaCount > 1` needs `persistence.accessMode=ReadWriteMany`; the chart fails
-the install otherwise rather than leaving pods stuck in Pending.
+## Scaling
 
-### Upgrades take the service down briefly
+The workload is a StatefulSet. The pods keep no state of their own — plugin
+metadata and audit live in Postgres, archives in object storage — and nothing
+addresses one by name; the StatefulSet is there for `volumeClaimTemplates`, the
+one way to give each replica a ReadWriteOnce volume that outlives the pod.
 
-With a `ReadWriteOnce` volume the deployment uses `strategy: Recreate`, so an
-upgrade stops the running pod before starting its replacement. That gap is
-deliberate. A rolling update would start the new pod first, and because a
-ReadWriteOnce volume attaches to one node at a time, a replacement scheduled
-anywhere else waits on a Multi-Attach error indefinitely — `helm upgrade` neither
-completes nor fails.
+| | Replicas | Cache after a restart |
+|---|---|---|
+| `persistence.enabled=true` (default) | any | warm: a claim per replica, `plugins-<release>-easyp-service-N` |
+| `persistence.enabled=false` | any | cold: an emptyDir per pod |
 
-If the gap is unacceptable, the answer is a `ReadWriteMany` volume, not a
-different strategy: with a shared volume the chart rolls, and `replicaCount` can
-exceed one.
+Replicas never share a volume, and the chart has no ReadWriteMany option.
+Unpacking a plugin is serialised by an in-process lock only, so two pods on one
+volume race on a concurrent miss for the same plugin and corrupt it; each would
+also apply `cacheMaxBytes` to the same bytes on its own. `persistence.accessMode`
+accepts `ReadWriteOnce` and `ReadWriteOncePod` and refuses anything else. That
+also means scaling needs nothing but ordinary block storage — no NFS, no RWX
+class.
+
+More than one replica needs object storage:
+
+```bash
+helm install easyp oci://ghcr.io/easyp-tech/charts/easyp-service \
+  --set secrets.existingSecret=easyp-env \
+  --set config.registry.s3.bucket=easyp-plugins \
+  --set config.registry.s3.endpoint=https://s3.example.com \
+  --set autoscaling.enabled=true \
+  ...
+```
+
+Every replica's volume starts empty and S3 is the only thing that fills it;
+without S3 the plugins directory is the one copy of every plugin, and only one
+replica can hold it. The chart refuses more than one replica — or an autoscaler
+allowed more than one — without `config.registry.s3.bucket`, rather than
+starting pods that have no plugins.
+
+Storage is `replicas × persistence.size`, and each new replica downloads what it
+serves. `persistence.retentionPolicy.whenScaled` decides what happens to a claim
+when the StatefulSet scales down: `Retain` (the default) keeps the warm cache for
+the next scale-up, `Delete` stops an autoscaler from leaving idle disks behind.
+It needs Kubernetes 1.27; older API servers ignore it and retain.
+
+### Upgrades roll
+
+A StatefulSet deletes a pod before starting its replacement, so a ReadWriteOnce
+claim is released before the next pod asks for it. With one replica that is a
+short gap; with several, the others serve through it. Pods start in parallel
+(`podManagementPolicy: Parallel`) — migrations are serialised by an advisory
+lock, so there is nothing to order.
+
+The chart used to render a Deployment, which needed `strategy: Recreate` on a
+ReadWriteOnce claim: a rolling update started the replacement first, and one
+scheduled on another node waited on a Multi-Attach error forever.
+
+### Upgrading from a release that rendered a Deployment
+
+Earlier releases rendered a Deployment and one standalone claim,
+`<release>-easyp-service-plugins`, or mounted the claim named by
+`persistence.existingClaim`. Both are gone: the StatefulSet's pods mount claims
+from the template, `plugins-<release>-easyp-service-N`, and `existingClaim` is
+refused rather than ignored, so an upgrade that still sets it stops before it
+starts pods on an empty volume. The chart's own old claim carries
+`helm.sh/resource-policy: keep`, so Helm leaves it in place, unmounted, and the
+install notes say so when they find it.
+
+What to do with the old claim depends on whether the release uses object
+storage:
+
+- **With S3**, nothing is lost. The new claims fill on demand, a cold start per
+  replica. Upgrade, then delete the old claim once the pods are serving.
+- **Without S3**, the old claim holds the only copy of every plugin. Before
+  upgrading, rebind its PersistentVolume to the name the StatefulSet will look
+  for; the StatefulSet then adopts it as replica 0's claim instead of creating
+  an empty one.
+
+```bash
+release=easyp
+old=easyp-easyp-service-plugins            # or the claim existingClaim named
+new=plugins-easyp-easyp-service-0
+
+pv="$(kubectl get pvc "$old" -o jsonpath='{.spec.volumeName}')"
+class="$(kubectl get pvc "$old" -o jsonpath='{.spec.storageClassName}')"
+size="$(kubectl get pvc "$old" -o jsonpath='{.spec.resources.requests.storage}')"
+
+# Keep the volume when its claim goes away, and stop the pod that mounts it.
+kubectl patch pv "$pv" -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}'
+kubectl scale deploy/easyp-easyp-service --replicas=0
+kubectl delete pvc "$old"
+
+# Free the volume, then claim it under the StatefulSet's name.
+kubectl patch pv "$pv" --type=json -p '[{"op":"remove","path":"/spec/claimRef"}]'
+kubectl create -f - <<YAML
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: $new
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: "$class"
+  resources: {requests: {storage: "$size"}}
+  volumeName: "$pv"
+YAML
+
+# Give the chart the volume's real size, so its check against cacheMaxBytes
+# compares the disk that is actually there.
+helm upgrade "$release" oci://ghcr.io/easyp-tech/charts/easyp-service \
+  --version <new> --reuse-values \
+  --set persistence.existingClaim=null --set persistence.size="$size"
+```
+
+`--reuse-values` works for this upgrade, with one thing to know. It does not
+merge the new chart's defaults: it replaces them with the old release's values,
+so every key added since — `autoscaling`, `persistence.retentionPolicy` — is
+absent rather than defaulted. The templates read an absent key as off (or, for
+retention, as Retain), so the release comes up as it was. Turning autoscaling on
+in the same upgrade is the exception: `--set autoscaling.enabled=true` brings
+that one key and none of its bounds, and the chart refuses it by name. Use
+`--reset-then-reuse-values` (Helm 3.14+) for that, which starts from the new
+defaults and applies the old release's values over them.
+
+If the release was already upgraded and its pod started on an empty claim, the
+same steps apply with `kubectl scale statefulset/easyp-easyp-service
+--replicas=0` in place of the Deployment, deleting the empty
+`plugins-easyp-easyp-service-0` alongside the old claim, and scaling back to one
+afterwards.
+
+Tooling that addressed `deploy/<release>-easyp-service` — `kubectl rollout`,
+`kubectl logs`, dashboards, alert selectors on `kube_deployment_*` — needs
+`statefulset/` instead.
+
+### Autoscaling
+
+`autoscaling.enabled` renders a HorizontalPodAutoscaler on CPU — every
+generation is a plugin process charged to this container, so CPU is where load
+shows. It needs metrics-server; without it the HPA reports `<unknown>` and never
+scales. `replicaCount` is ignored while it is on, so `helm upgrade` does not
+reset what the HPA chose.
+
+Every limit in the service is per pod: the worker pool, the concurrent
+generation cap and the per-client rate limit. Capacity therefore scales with
+replicas, and so does what one client can use — a client whose requests land on
+N pods gets up to N times `rateLimit`. The Community plugin cap counts rows in
+the database and holds across replicas; the per-pod ceilings apply to each one.
+
+### Resizing the plugin volumes
+
+A StatefulSet's claim templates are immutable, so raising `persistence.size`
+fails `helm upgrade`. With a storage class that allows expansion:
+
+```bash
+# 1. Grow the existing claims in place.
+for pvc in $(kubectl get pvc -l app.kubernetes.io/instance=easyp -o name); do
+  kubectl patch "$pvc" -p '{"spec":{"resources":{"requests":{"storage":"50Gi"}}}}'
+done
+
+# 2. Drop the StatefulSet object, leaving its pods and claims running.
+kubectl delete statefulset easyp-easyp-service --cascade=orphan
+
+# 3. Create it again with the new template; it adopts the pods and claims.
+helm upgrade easyp ... --reuse-values --set persistence.size=50Gi
+```
+
+Raise `config.registry.cacheMaxBytes` in the same upgrade if the extra room is
+meant for the cache.
 
 ## Behind an ingress: `config.server.trustedProxies`
 
@@ -315,6 +466,6 @@ overrides the file.
 
 See `values.yaml`; every key is commented. The install-time checks in
 `_helpers.tpl` reject combinations that would otherwise fail confusingly at
-runtime — missing DSN, plaintext router against a TLS listener, multi-replica
-`ReadWriteOnce`, grace period shorter than the generation timeout, an ingress
+runtime — missing DSN, plaintext router against a TLS listener, a shared
+volume, more than one replica without object storage, grace period shorter than the generation timeout, an ingress
 with no trusted proxies, peak generation buffers larger than the memory limit.
