@@ -171,9 +171,10 @@ func (s *S3Storage) Open(ctx context.Context, key string) (io.ReadCloser, int64,
 	return output.Body, aws.ToInt64(output.ContentLength), nil
 }
 
-// UploadFile stores the file at localPath under key.
-// Used by the CLI push command only; the service never uploads.
-func (s *S3Storage) UploadFile(ctx context.Context, key string, localPath string) error {
+// UploadFile stores the file at localPath under key, recording sha256 — the
+// hex checksum of the file — in the object metadata (see MetadataSha256).
+// Used by the CLI publish command only; the service never uploads.
+func (s *S3Storage) UploadFile(ctx context.Context, key string, localPath string, sha256 string) error {
 	file, err := os.Open(localPath)
 	if err != nil {
 		return fmt.Errorf("os.Open: %w", err)
@@ -183,9 +184,10 @@ func (s *S3Storage) UploadFile(ctx context.Context, key string, localPath string
 	fullKey := s.formatKey(key)
 
 	_, err = s.client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(s.bucket),
-		Key:    aws.String(fullKey),
-		Body:   file,
+		Bucket:   aws.String(s.bucket),
+		Key:      aws.String(fullKey),
+		Body:     file,
+		Metadata: map[string]string{MetadataSha256: sha256},
 	})
 	if err != nil {
 		return fmt.Errorf("s3.PutObject: %w", err)
@@ -212,15 +214,15 @@ func (s *S3Storage) Stat(ctx context.Context, key string) (core.ObjectInfo, bool
 
 	return core.ObjectInfo{
 		Size:   aws.ToInt64(output.ContentLength),
-		Sha256: metadataValue(output.Metadata, MetadataSha256),
+		Sha256: metadataSha256(output.Metadata),
 	}, true, nil
 }
 
-// metadataValue looks a user-metadata key up regardless of case. S3 lowercases
+// metadataSha256 looks the checksum up regardless of key case. S3 lowercases
 // the keys it returns, but S3-compatible stores do not all agree on that.
-func metadataValue(metadata map[string]string, key string) string {
+func metadataSha256(metadata map[string]string) string {
 	for k, v := range metadata {
-		if strings.EqualFold(k, key) {
+		if strings.EqualFold(k, MetadataSha256) {
 			return v
 		}
 	}

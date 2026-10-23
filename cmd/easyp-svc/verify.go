@@ -78,20 +78,24 @@ type verifyOptions struct {
 // the service's base image with an empty environment, as the service's user,
 // with a private working directory — which is what caught 22 plugins whose
 // wrapper exec'd a path that only existed inside their build image.
+//
+// The archive the round trip packed is the one that passed, so a job with an
+// archivePath keeps it there instead of packing the bundle a second time.
 func verifyBundle(ctx context.Context, job buildJob, opts verifyOptions) ([]byte, error) {
-	err := relativizeSymlinks(job.outputDir)
+	err := relativizeSymlinks(job.bundleDir())
 	if err != nil {
 		return nil, fmt.Errorf("normalising symlinks: %w", err)
 	}
 
-	unpacked, cleanup, err := roundTrip(job.outputDir)
+	archive, unpacked, cleanup, err := roundTrip(job.bundleDir())
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
+	defer func() { _ = os.Remove(archive) }()
 
 	if !opts.smoke || job.smoke.Skip {
-		return nil, nil
+		return nil, keepArchive(job, archive)
 	}
 
 	run := opts.run
@@ -104,7 +108,29 @@ func verifyBundle(ctx context.Context, job buildJob, opts verifyOptions) ([]byte
 		return out, fmt.Errorf("%w: %w", ErrSmokeFailed, err)
 	}
 
-	return out, nil
+	return out, keepArchive(job, archive)
+}
+
+// keepArchive moves the verified archive to job.archivePath, when the job
+// wants one.
+func keepArchive(job buildJob, archive string) error {
+	if job.archivePath == "" {
+		return nil
+	}
+
+	// CreateTemp makes the file 0600; archives are meant to be readable by
+	// whoever consumes the tree.
+	err := os.Chmod(archive, archivePermissions)
+	if err != nil {
+		return fmt.Errorf("os.Chmod: %w", err)
+	}
+
+	err = os.Rename(archive, job.archivePath)
+	if err != nil {
+		return fmt.Errorf("os.Rename: %w", err)
+	}
+
+	return nil
 }
 
 // relativizeSymlinks rewrites every absolute symlink under root whose target
@@ -177,17 +203,23 @@ func relativizeOne(root, path, target string) error {
 }
 
 // roundTrip packs dir and unpacks the result with plugarchive, the code the
-// service runs on every download, and returns where it landed.
-func roundTrip(dir string) (string, func(), error) {
-	archive, err := packPluginDir(dir)
+// service runs on every download. It returns the archive, which the caller
+// removes, and where it was unpacked to, which cleanup removes.
+//
+// The archive is written next to dir rather than to os.TempDir(): it is a few
+// hundred megabytes for a JVM plugin, and the next step usually keeps it, which
+// a rename can only do within one filesystem.
+func roundTrip(dir string) (string, string, func(), error) {
+	archive, err := packPluginDirTo(dir, filepath.Dir(dir))
 	if err != nil {
-		return "", func() {}, err
+		return "", "", func() {}, err
 	}
-	defer func() { _ = os.Remove(archive) }()
 
 	parent, err := os.MkdirTemp("", "plugin-verify-*")
 	if err != nil {
-		return "", func() {}, fmt.Errorf("os.MkdirTemp: %w", err)
+		_ = os.Remove(archive)
+
+		return "", "", func() {}, fmt.Errorf("os.MkdirTemp: %w", err)
 	}
 
 	cleanup := func() { _ = os.RemoveAll(parent) }
@@ -196,11 +228,12 @@ func roundTrip(dir string) (string, func(), error) {
 	err = plugarchive.Unpack(archive, unpacked)
 	if err != nil {
 		cleanup()
+		_ = os.Remove(archive)
 
-		return "", func() {}, fmt.Errorf("the service would refuse this archive: %w", err)
+		return "", "", func() {}, fmt.Errorf("the service would refuse this archive: %w", err)
 	}
 
-	return unpacked, cleanup, nil
+	return archive, unpacked, cleanup, nil
 }
 
 // dockerSmoke runs the bundle's entrypoint in image with the request on stdin.
@@ -315,8 +348,8 @@ func smokeRequest(parameter string) *pluginpb.CodeGeneratorRequest {
 // keeping only its build log.
 //
 // Leaving the files in place would leave the entrypoint in place, and that is
-// what `push`, `register` and the cache check all look for: a broken bundle
-// would be reported failed here and then shipped by the next command anyway.
+// what the cache check looks for: a broken bundle would be reported failed
+// here and then taken as built by the next run.
 func discardFailedBuild(job buildJob) error {
 	err := os.RemoveAll(job.outputDir)
 	if err != nil {

@@ -133,8 +133,8 @@ func TestSmokeSkipIsHonoured(t *testing.T) {
 }
 
 // TestFailedSmokeLeavesNothingToShip pins why a failed version is emptied
-// rather than merely reported: push, register and the build cache all key on
-// the entrypoint being there. Left in place, a plugin that cannot start would
+// rather than merely reported: the build cache keys on the entrypoint being
+// there. Left in place, a plugin that cannot start would
 // be marked failed by this build and shipped by the next command.
 func TestFailedSmokeLeavesNothingToShip(t *testing.T) {
 	t.Parallel()
@@ -154,9 +154,9 @@ func TestFailedSmokeLeavesNothingToShip(t *testing.T) {
 	assert.False(t, job.cached(), "a failed version must be rebuilt next time, not taken from cache")
 
 	scanRoot := filepath.Dir(filepath.Dir(filepath.Dir(job.outputDir)))
-	found, err := scanPlugins(scanRoot, "")
+	found, err := scanPluginTree(scanRoot, "", pluginBinaryName)
 	require.NoError(t, err)
-	assert.Empty(t, found, "push and register must not find a version that failed verification")
+	assert.Empty(t, found, "a scan of the output must not find a version that failed verification")
 }
 
 // TestSmokeImageMatchesServiceBase keeps the smoke test honest. A plugin is a
