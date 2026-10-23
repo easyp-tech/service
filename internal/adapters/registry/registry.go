@@ -155,7 +155,7 @@ func ValidateConfig(config json.RawMessage, pluginsDir string) error {
 	// Lexical containment, not EvalSymlinks: with object storage configured the
 	// binary is downloaded on first use, so at registration time the path
 	// routinely does not exist yet and resolving it would reject every
-	// legitimate `plugins register` run against an empty cache. The symlink
+	// legitimate `plugins publish` run against an empty cache. The symlink
 	// half of the problem is closed where it is actually created — see
 	// plugarchive.extractSymlink, which refuses a link out of the archive — and
 	// again at execution time in ensureBinary.

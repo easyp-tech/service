@@ -73,25 +73,21 @@ object store, then registered with the service. The whole catalogue is 80
 plugins in several hundred versions and takes hours; a filter builds one:
 
 ```bash
-# 1. Build plugin binaries — the two that easyp.local.yaml asks for.
-#    `task build-plugins` builds the whole registry.
-FILTER='protocolbuffers/go:v1.36.10' task build-plugins-filter
-FILTER='grpc/go:v1.6.2' task build-plugins-filter
-
-# 2. Generate development certificates and start everything.
+# 1. Generate development certificates and start everything.
 task up
 
-# 3. Upload the archives, then register them.
-task push-plugins
-task register-plugins
+# 2. Build, upload and register the two plugins easyp.local.yaml asks for.
+#    Without FILTER, `task publish-plugins` publishes the whole registry.
+FILTER='protocolbuffers/go:v1.36.10' task publish-plugins
+FILTER='grpc/go:v1.6.2' task publish-plugins
 
-# Or all four in one go, tailing the service log at the end:
+# Or restart the stack and publish the whole registry in one go:
 task run
 ```
 
 The gRPC port is not published on the host: the way in is traefik at
 `easyp.api.localhost:4443`, which terminates TLS and speaks mutual TLS to the
-service. `task register-plugins` already knows that. To see what got
+service. `task publish-plugins` already knows that. To see what got
 registered:
 
 ```bash
@@ -330,7 +326,7 @@ question is answerable inside a container where these commands are not to hand.
 The binary's defaults are `23410` (gRPC), `23411` (metrics), `23412` (health)
 and `23413` (MCP). Every configuration under `deploy/` moves them to
 `8080`–`8083`, and so do the examples in this file — a port seen in a compose
-file or a log line is a deployment's choice, not the default. `plugins register`
+file or a log line is a deployment's choice, not the default. `plugins publish`
 dials `localhost:23410` unless told otherwise.
 
 ### Configuration Files
@@ -363,7 +359,7 @@ registry:
   plugins_dir: "./plugins"
   max_output_size: 67108864
   # Optional S3-compatible binary storage. When enabled, plugin archives
-  # pushed by `easyp-svc plugins push` are lazily downloaded into plugins_dir
+  # uploaded by `easyp-svc plugins publish` are lazily downloaded into plugins_dir
   # (acting as a local cache) and sha256-verified before unpacking.
   s3:
     endpoint: "http://localhost:9000"
@@ -423,8 +419,9 @@ certificate and re-establishes mutual TLS toward the service.
 task certs
 
 # Talk to the service through traefik
-easyp-svc plugins register plugins \
-  --addr easyp.api.localhost:4443 --tls-ca deploy/certs/ca.crt --cfg deploy/config/config.yml
+easyp-svc plugins publish registry --filter 'grpc/go:v1.6.2' \
+  --addr easyp.api.localhost:4443 --tls-ca deploy/certs/ca.crt --cfg deploy/config/config.yml \
+  --endpoint http://localhost:9000
 ```
 
 Client-side flags: `--tls-ca` overrides the trust store, `--tls-cert`/`--tls-key`
@@ -556,44 +553,55 @@ call time.
 The unit of delivery is the **plugin version directory**, not a single file: the contract requires `plugins/{group}/{name}/{version}/plugin` as the entrypoint and allows sidecars next to it (jars, shared libraries, scripts). It is packed as a `tar.gz` and stored at `{group}/{name}/{version}/plugin.tgz`.
 
 ```
-build machine / CI                       service
-──────────────────                       ───────
-plugins build   → plugins/{g}/{n}/{v}/…
-plugins push    → s3://…/plugin.tgz
-plugins register ──── CreatePlugin ────→ streams the archive from S3,
-                      (metadata only)    computes sha256, stores it in the DB
+build machine / CI                          service
+──────────────────                          ───────
+plugins publish registry
+  for each version:
+    docker build → verify (unpack + smoke run)
+    upload       → s3://…/plugin.tgz  (sha256 in object metadata)
+    register     ──── CreatePlugin ────→ checks the archive is there and has
+                      {"sha256": …}      that sha256, derives the command,
+                                         stores both in the DB
+    delete the local copy
 
-                      GenerateCode ────→ entrypoint missing locally?
-                                         download archive → verify sha256
-                                         → unpack → execute
+                      GenerateCode ────→ entrypoint missing, or unpacked from
+                                         an archive since republished?
+                                         download → verify sha256 → unpack
+                                         → execute
 ```
 
 Key properties:
 
-- **Push before register.** Registering a plugin whose archive is absent fails with `FAILED_PRECONDITION` — a registered plugin always has its artifact.
-- **The service computes the checksum**, reading the object itself, so a client cannot register a bogus hash. It is re-verified after every download, before anything is executed.
-- **Credentials split:** the build pipeline needs S3 write access; the service only needs read (plus delete for `DeletePlugin`). Clients of the gRPC API need no S3 access at all.
+- **One command, in the right order.** `plugins publish` builds, verifies, uploads, registers and deletes each version before the next one needs the disk; a catalogue never has to fit on the publishing machine, and nothing is registered before its archive is in place.
+- **Idempotent.** A version that is registered and in storage is skipped; one in storage but not registered is only registered; an upload is skipped whenever storage already holds the same archive. An interrupted run is resumed by re-running it. `--force` rebuilds and re-registers everything it matches.
+- **Republishing takes effect everywhere.** `--force` on a registered version replaces its config with the new checksum (`UpdatePlugin`), and every replica refetches its unpacked copy on next use — each keeps a `.sha256` marker beside it. A registration that names a checksum the stored archive does not have fails with `FAILED_PRECONDITION` / `CHECKSUM_MISMATCH`, as does a download that does not match the registry.
+- **The service owns the command.** It is always `{plugins_dir}/{group}/{name}/{version}/plugin`, derived on registration; clients need not know the server's `plugins_dir`. An explicit `command` is still accepted for a plugin that needs arguments.
+- **Credentials split:** publishing needs S3 write access; the service only needs read (plus delete for `DeletePlugin`). Clients of the gRPC API need no S3 access at all.
 - **Concurrent misses collapse** into a single download (singleflight); `plugins_dir` acts as a local cache.
-- With S3 disabled, nothing changes from the classic flow: artifacts are read straight from `plugins_dir`.
+- With S3 disabled, artifacts are read straight from `plugins_dir`: `plugins publish --plugins-dir <dir>` unpacks into it instead of uploading, and given neither a registry nor `--archives` registers what is already there.
 
-#### Pushing a packed tree
+`publish` needs a v1.2.0 or newer service; against an older one it stops at the first registration and says so.
 
-`plugins pack --out <dir>` writes the same `{group}/{name}/{version}/plugin.tgz` layout to disk, which `plugins push --packed <dir>` uploads as it is. Packing on the build machine and uploading later — or from elsewhere — is then two commands instead of one repeated:
+#### Building on one machine, publishing from another
+
+`plugins build --archive --output <dir>` keeps only each version's verified `{group}/{name}/{version}/plugin.tgz` — the archive the verification already packed — and `plugins publish --archives <dir>` takes that tree from anywhere with the storage credentials and a write token:
 
 ```bash
-# Build machine: pack once.
-easyp-svc plugins pack plugins --out plugin-archives
+# Build machine.
+easyp-svc plugins build registry --archive --output plugin-archives
 
-# Anywhere with the archives and S3 credentials.
-export AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=…
-easyp-svc plugins push plugin-archives --packed \
+# Anywhere with the archives.
+export AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… EASYP_TOKEN=…
+easyp-svc plugins publish --archives plugin-archives \
   --endpoint https://storage.example.com --bucket easyp-plugins --force-path-style \
-  --parallel 24
+  --addr plugins.example.com:443 --parallel 24
 ```
 
-Uploads run `--parallel` at a time (8 by default). Object storage commonly rate-limits a single connection far below the link it arrives on, so throughput comes from streams rather than from any one of them: measure one stream, then set `--parallel` to about the ratio between your uplink and that figure. An interrupted run is resumed by re-running it — archives already in storage are skipped without being re-read.
+Uploads and registrations run `--parallel` at a time (8 by default), builds `--build-parallel` (4). Object storage commonly rate-limits a single connection far below the link it arrives on, so throughput comes from streams rather than from any one of them: measure one stream, then set `--parallel` to about the ratio between your uplink and that figure — and no higher than the server's `rate_limit.max_concurrent_per_ip`.
 
-The S3 settings can also come from a config file: `plugins push --cfg` accepts a **full server configuration** and runs it through the same validation as `service start` — a fragment holding only `registry.s3` is refused. That is deliberate: a config the server would reject must not quietly keep working for push, or the two stop agreeing about which store they talk to. To push without a server config, pass the storage settings as flags, as above.
+Before anything is built, `publish` checks that storage answers, that the service accepts the token, and which versions the service already has. An object uploaded before v1.2.0 carries no checksum; when its size matches the local archive it is not sent again, and the service, which reads it from inside its own network, decides — if it differs, `publish` uploads it after all.
+
+The S3 settings can also come from a config file: `plugins publish --cfg` accepts a **full server configuration** and runs it through the same validation as `service start` — a fragment holding only `registry.s3` is refused. That is deliberate: a config the server would reject must not quietly keep working for publish, or the two stop agreeing about which store they talk to. To publish without a server config, pass the storage settings as flags, as above.
 
 ### The registry
 
@@ -715,9 +723,8 @@ What the service needs from the result:
 Then prove it:
 
 ```bash
-FILTER='grpc/go:v1.6.2' task build-plugins-filter
-task up-minimal && task run-local
-task register-plugins
+task up
+FILTER='grpc/go:v1.6.2' task publish-plugins
 easyp --cfg easyp.local.yaml generate
 ```
 
@@ -1051,9 +1058,10 @@ docker exec -it easyp-postgres psql -U easyp_svc -d easyp_db -c 'SELECT group_na
 host already listens there; `EASYP_RUSTFS_CONSOLE_PORT=9011 task up` moves the
 object store's console aside. Nothing on the host needs it.
 
-A `CreatePlugin` that fails with `FAILED_PRECONDITION` means the archive was
-never pushed: `task push-plugins` comes before `task register-plugins`.
-`plugins register` paces itself when the server's rate limit refuses a burst,
+A `CreatePlugin` that fails with `FAILED_PRECONDITION` means the archive is not
+in storage, or — reason `CHECKSUM_MISMATCH` — is not the one named; `task
+publish-plugins` uploads before it registers, and `--force` republishes.
+`plugins publish` paces itself when the server's rate limit refuses a burst,
 but its default `--parallel` of 8 against a server left at the default
 `rate_limit.max_concurrent_per_ip` of 2 still loses most of the batch — the
 configs under `deploy/` raise the cap; against any other server pass

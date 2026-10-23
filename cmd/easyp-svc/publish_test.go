@@ -437,6 +437,56 @@ func TestPublishNeedsExactlyOneSource(t *testing.T) {
 	require.ErrorIs(t, err, ErrPublishSource)
 }
 
+// TestPublishRegistersWhatIsAlreadyInStorage is what `register --packed` used
+// to do: archives uploaded earlier, a service that has never heard of them.
+// A version that would have to be built is not rebuilt or sent again, and no
+// checksum is claimed — the service takes the stored archive's.
+func TestPublishRegistersWhatIsAlreadyInStorage(t *testing.T) {
+	t.Parallel()
+
+	store, service := newFakeStore(), newFakeService()
+	store.objects[archiveObjectKey(plgGo)] = core.ObjectInfo{Size: 1}
+
+	pub := &publisher{
+		dest:         storageDestination{store: store},
+		service:      service,
+		tracker:      newBuildTracker(1, false),
+		registered:   map[string]bool{},
+		buildSlots:   make(chan struct{}, 1),
+		deliverSlots: make(chan struct{}, 1),
+		abort:        func(error) {},
+	}
+
+	// A job that cannot be built: reaching docker would fail the test.
+	pub.run(t.Context(), []publishItem{{plg: plgGo, job: &buildJob{pluginDir: "/nonexistent"}}})
+
+	require.Equal(t, 1, pub.tracker.succeeded)
+	assert.Empty(t, store.uploads)
+
+	calls := service.callsFor(pluginDisplayName(plgGo))
+	require.Len(t, calls, 1)
+	assert.Equal(t, "create", calls[0].method)
+	assert.Empty(t, calls[0].config)
+}
+
+// TestPublishRegistersAPluginsDir is `task run-local`: a plugins_dir holding
+// unpacked versions, and a service started on it with an empty registry.
+func TestPublishRegistersAPluginsDir(t *testing.T) {
+	t.Parallel()
+
+	pluginsDir := writePluginTree(t, plugarchive.EntrypointName, plgGo, plgJava)
+	service := newFakeService(pluginDisplayName(plgJava))
+
+	opts := publishOptions{pluginsDir: pluginsDir, nonInteractive: true, parallel: 1, buildParallel: 1}
+
+	err := runPluginsPublish(t.Context(), opts, dirDestination{root: pluginsDir},
+		func() (pluginService, func(), error) { return service, func() {}, nil })
+	require.NoError(t, err)
+
+	require.Len(t, service.callsFor(pluginDisplayName(plgGo)), 1)
+	assert.Empty(t, service.callsFor(pluginDisplayName(plgJava)), "already registered and in place")
+}
+
 // TestVerifyKeepsTheArchiveItChecked pins that an archive-only build ships the
 // archive the round trip unpacked, rather than packing the bundle twice.
 func TestVerifyKeepsTheArchiveItChecked(t *testing.T) {

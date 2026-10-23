@@ -89,7 +89,7 @@ func runConfigValidate(ctx context.Context, cfgPath string) error {
 //
 // Every caller that resolves a configuration prints these. Two of them used to
 // discard them with `_` — `config print`, whose entire job is to say what will
-// actually apply, and `plugins push`, which is how the CLI and the server come
+// actually apply, and `plugins push` (now `plugins publish`), which is how the CLI and the server come
 // to disagree about which bucket they use.
 func reportDiagnostics(dst io.Writer, diags config.Diagnostics) {
 	for _, diag := range diags {

@@ -119,13 +119,13 @@ task tier-dev            # Assert the two dev tiers really are different tiers
 task logs-dev            # Tail the two-tier stack
 task down-dev            # Stop the two-tier stack
 task deploy-dev HOST=... # Ship deploy/ to a stand and roll it to the version this repo names
-task run                 # Full cycle: build-plugins → down → up → push-plugins → register-plugins → logs
-task setup               # Same as run but without tailing logs
-task run-local           # go run from source against minimal stack
-task build-plugins       # Build the whole registry (80 plugins, hundreds of versions; takes hours)
+task run                 # Full cycle: down → up → publish-plugins
+task setup               # Same as run
+task run-local           # go run from source without object storage; registers what is in plugins/
+task build-plugins       # Build the whole registry into plugins/ (80 plugins, hundreds of versions; takes hours)
 task build-plugins-filter # One slice: FILTER='grpc/go:v1.6.2' task build-plugins-filter
-task push-plugins        # Upload packed archives to S3 (easyp-svc plugins push)
-task register-plugins    # Register all built plugins via gRPC CreatePlugin API (easyp-svc plugins register)
+task publish-plugins     # Build, upload and register into the dev stack (easyp-svc plugins publish); FILTER=… for a slice
+task publish-archives    # Publish a plugin.tgz tree to any service + S3 (S3_ENDPOINT, ADDR, ARCHIVES)
 task generate            # easyp generate against running service (easyp.yaml)
 task generate-local      # easyp generate with local config (easyp.local.yaml)
 go test ./...            # Standard tests
@@ -142,9 +142,9 @@ go test ./...            # Standard tests
 - `api.ErrorToStatus()` maps domain errors → gRPC status codes
 - **Plugin name format:** `{group}/{name}:{version}` — validated by `^[a-z][a-z0-9-]*/[a-z][a-z0-9-]*:(v\d+\.\d+(\.\d+)?|latest)$` — the patch component is optional, because protobuf ships versions like `v33.1`
 - **Plugin execution:** local binary execution from `plugins/` directory (built by `easyp-svc plugins build`)
-- **Plugin registration:** via gRPC `CreatePlugin` API (automated by `easyp-svc plugins register`) — metadata only; with S3 enabled the service streams the already-pushed archive from storage, computes its sha256 and records it in the plugin config
+- **Plugin registration:** via gRPC `CreatePlugin`/`UpdatePlugin` (automated by `easyp-svc plugins publish`) — metadata only. The service derives `command` (`{plugins_dir}/{g}/{n}/{v}/plugin`) when the config leaves it out; with S3 enabled it checks the archive is in storage, takes its sha256 from the object metadata (or reads the object when there is none), refuses a `sha256` in the config that differs, and records it
 - **Artifact unit:** the whole version directory packed as `tar.gz` (`internal/plugarchive`), stored at `{group}/{name}/{version}/plugin.tgz` — the entrypoint plus any sidecars, never a bare binary
-- **Binary storage:** `core.BinaryStorage` interface (read-only: Download/Open/Exists/Delete), S3 implementation in `internal/adapters/storage`; uploads happen out-of-band via `easyp-svc plugins push`
+- **Binary storage:** `core.BinaryStorage` interface (read-only: Download/Open/Stat/Delete), S3 implementation in `internal/adapters/storage`; uploads happen out-of-band via `easyp-svc plugins publish`, which records the sha256 as `x-amz-meta-sha256`
 - **Testing:** standard `go test` with `stretchr/testify` assertions (`assert`/`require`); mocks defined in test files
 - **Config priority:** environment > YAML file > `default=` struct tag. The only
   flags that take part are `--cfg`, which chooses the file, and `--log_level`,
@@ -157,15 +157,14 @@ go test ./...            # Standard tests
 ## Pitfalls & Gotchas
 
 - **Plugins are local binaries** — service executes plugins from `plugins/` directory, not Docker containers at runtime
-- **S3 mode** — with `registry.s3` configured, `plugins_dir` is a local cache: archives are pushed out-of-band (`plugins push`), then downloaded on demand (singleflight-deduplicated), sha256-verified and unpacked before execution; **push must precede register** or `CreatePlugin` fails with `FAILED_PRECONDITION`; S3 outage surfaces as `UNAVAILABLE`, not `NOT_FOUND`
-- **Pipeline order** — `build` → `push` → `register` (`task run` / `task setup` chain them); `--force` re-push of a registered plugin invalidates its recorded checksum, so re-register it
+- **S3 mode** — with `registry.s3` configured, `plugins_dir` is a local cache: archives are uploaded out-of-band (`plugins publish`), then downloaded on demand (singleflight-deduplicated), sha256-verified and unpacked before execution; registering a version whose archive is absent fails with `FAILED_PRECONDITION`, and one whose archive is not the `sha256` named with `FAILED_PRECONDITION` / `CHECKSUM_MISMATCH`; S3 outage surfaces as `UNAVAILABLE`, not `NOT_FOUND`
+- **Republishing** — `plugins publish --force` uploads the new archive and `UpdatePlugin`s the new checksum; each unpacked version directory carries a `.sha256` marker, and `ensureBinary` refetches on every replica when it differs from the registry. Directories without a marker (unpacked before v1.2.0) count as current
 - **Entrypoint is always named `plugin`** — build output and migrate scan require `plugins/{group}/{name}/{version}/plugin`; Dockerfiles must `COPY` the entrypoint to `/plugin` (sidecars optional)
 - **A plugin runs outside its image** — the service unpacks the image filesystem and execs `plugin` as a plain process on its own base (`debian:trixie-slim`). Wrappers resolve paths from `DIR=${0%/*}`, never from `/`; absolute symlinks are skipped on unpack. `plugins build` proves it per version: it relativises in-bundle absolute links, round-trips the archive through `plugarchive`, and smoke-runs `plugin` in the runtime image as uid 65532 with an empty env — a failure leaves only `build.log`. `TestSmokeImageMatchesServiceBase` keeps the smoke image equal to the Dockerfile's runtime stage
-- **`easyp-svc plugins build <registry-path>`** — uses Docker multi-stage builds to extract image filesystems to the output directory (`plugins/` by default); supports `--filter`, `--parallel`, `--force`, `--dry-run`
-- **`easyp-svc plugins push [path]`** — packs each version directory into `plugin.tgz` and uploads it to S3; `--cfg` supplies `registry.s3`, flags override it; `--filter`, `--force`, `--dry-run`
-- **`easyp-svc plugins register [path]`** — registers built plugins via gRPC `CreatePlugin` (default path `plugins`); `--cfg` supplies `registry.plugins_dir` as the command prefix, and a config that omits the key resolves to its declared default, as the service does; `--dry-run`, `--fail-on-error` (default true). It sends `--parallel` 8 at once and backs off on the rate and concurrency limits — the SDK deliberately does not retry `ResourceExhausted` — but reports the licence tier's plugin cap at once. Every config under `deploy/` sets `rate_limit.max_concurrent_per_ip: 10` for it; against a server left at the default of 2, pass `--parallel 2`
+- **`easyp-svc plugins build <registry-path>`** — uses Docker multi-stage builds to extract image filesystems to the output directory (`plugins/` by default) and verifies each version; `--archive` keeps only the verified `{g}/{n}/{v}/plugin.tgz` instead. Supports `--filter`, `--parallel`, `--force`, `--dry-run`. Nothing is uploaded
+- **`easyp-svc plugins publish [registry-path]`** — per version: build → verify → upload with sha256 metadata → `CreatePlugin` (or `UpdatePlugin` when it exists) → delete the local copy. Sources: a registry, `--archives <dir>` (a `build --archive` tree), or with neither, `--plugins-dir` itself. Destination: S3 (`--cfg` supplies `registry.s3`, flags override it) or `--plugins-dir` (no object storage, same host). Skips what is registered and in storage, only registers what is in storage but not registered, skips uploads of an identical archive; `--force` republishes. Preflight checks storage and the token before building. `--build-parallel` 4, `--parallel` 8, backing off on the rate and concurrency limits — the SDK deliberately does not retry `ResourceExhausted` — and stopping new versions at the licence tier's plugin cap. Every config under `deploy/` sets `rate_limit.max_concurrent_per_ip: 10` for it; against a server left at the default of 2, pass `--parallel 2`. Needs a v1.2.0+ server
 - **Port 5432 conflict** — if postgres already runs locally, minimal stack uses port 5433 (`EASYP_POSTGRES_PORT`)
-- **Plugin binaries must exist** — run `task build-plugins` before the service can generate code
+- **Plugin binaries must exist** — publish them (`task publish-plugins`, or `task build-plugins` + `task run-local` without S3) before the service can generate code
 - **License:** `PasetoLicenseClient` verifies the token offline against `license.public_keys` (kid → hex; an entry under `"*"` verifies any key id). No key configured means community mode; a key that does not decode stops startup. Anything else that goes wrong resolves to community, never to an error
 - **`easyp generate` needs a running service** — `easyp.local.yaml` points at `localhost:8080`, `easyp.yaml` at the public stand `plugins.beta.easyp.tech`, which CI's `Generated code is current` job also depends on
 - **Built plugins are Linux binaries** — `plugins build` extracts them from Docker images, so a service run natively on macOS registers them and then fails every `GenerateCode` with `exec format error`. On macOS use the compose stack

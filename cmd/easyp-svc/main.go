@@ -260,10 +260,12 @@ func getPluginsPublishCommand() *cli.Command {
 		Description: "Takes each version through in one pass: build it from the registry (or take its " +
 			"plugin.tgz from --archives), verify it, upload the archive to object storage with its sha256, " +
 			"register it — creating it, or replacing the config of a version the service already has — and " +
-			"delete it from the work directory. A version that is registered and already in storage is " +
-			"skipped unless --force is set; an upload is skipped whenever storage already holds the same " +
-			"archive. With --plugins-dir the archive is unpacked into that directory instead of uploaded, " +
-			"for a service on the same host running without object storage. Needs a v1.2.0 or newer server.",
+			"delete it from the work directory. Unless --force is set, a version already in storage is not " +
+			"rebuilt: it is skipped when registered and only registered when not. An upload is skipped " +
+			"whenever storage already holds the same archive. With --plugins-dir the archive is unpacked " +
+			"into that directory instead of uploaded, for a service on the same host running without object " +
+			"storage; given neither a registry nor --archives, that directory is the source, and what is " +
+			"already unpacked there is registered. Needs a v1.2.0 or newer server.",
 		ArgsUsage: "[registry-path]",
 		Flags:     publishFlags(),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -414,7 +416,7 @@ func publishFlags() []cli.Flag {
 		&cli.StringFlag{
 			Name: "plugins-dir",
 			Usage: "unpack into this directory instead of uploading; it must be the plugins_dir of a service " +
-				"running without object storage",
+				"running without object storage. With no other source, register what is already in it",
 			Value: "",
 		},
 		&cli.StringFlag{

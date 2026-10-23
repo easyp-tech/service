@@ -56,7 +56,9 @@ var (
 	// config, which is what servers before v1.2.0 do.
 	ErrServerTooOld = errors.New("the server is older than v1.2.0 and cannot derive plugin commands; upgrade it first")
 	// ErrPublishSource is returned when the command is given no source, or two.
-	ErrPublishSource = errors.New("give either a registry path to build from or --archives, not both")
+	ErrPublishSource = errors.New(
+		"give a registry path to build from or --archives, not both; with neither, --plugins-dir is the source",
+	)
 	// ErrServiceRefused is returned when the service turns the token away; no
 	// version can be published until that changes.
 	ErrServiceRefused = errors.New("the service refused the write token")
@@ -103,9 +105,12 @@ type publishOptions struct {
 // publishItem is one version on its way through.
 type publishItem struct {
 	plg pluginInfo
-	// job is set for a version built here; archive for one taken from disk.
+	// job is set for a version built here; archive for one taken from disk;
+	// inPlace for one found already unpacked in --plugins-dir, which only needs
+	// registering.
 	job     *buildJob
 	archive string
+	inPlace bool
 }
 
 func (it publishItem) key() string { return pluginDisplayName(it.plg) }
@@ -351,6 +356,10 @@ func prepare(
 
 // publishItems lists the versions to publish and the ones plugin.yaml skips.
 func publishItems(opts publishOptions) ([]publishItem, []string, error) {
+	if opts.registryPath == "" && opts.archivesDir == "" && opts.pluginsDir != "" {
+		return inPlaceItems(opts)
+	}
+
 	if (opts.registryPath == "") == (opts.archivesDir == "") {
 		return nil, nil, ErrPublishSource
 	}
@@ -393,6 +402,23 @@ func publishItems(opts publishOptions) ([]publishItem, []string, error) {
 	}
 
 	return items, skipped, nil
+}
+
+// inPlaceItems lists the versions already unpacked in --plugins-dir: what a
+// service running from that directory can be told about without building
+// anything.
+func inPlaceItems(opts publishOptions) ([]publishItem, []string, error) {
+	plugins, err := scanPluginTree(opts.pluginsDir, opts.filter, plugarchive.EntrypointName)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	items := make([]publishItem, 0, len(plugins))
+	for _, plg := range plugins {
+		items = append(items, publishItem{plg: plg, inPlace: true})
+	}
+
+	return items, nil, nil
 }
 
 // preflight proves, before anything is built, that storage and the service
@@ -462,14 +488,18 @@ func (p *publisher) run(ctx context.Context, items []publishItem) {
 func (p *publisher) publishOne(ctx context.Context, item publishItem) {
 	key := item.key()
 	isRegistered := p.registered[key]
+	inPlace := item.inPlace || (!p.opts.force && p.present(ctx, item.plg))
 
-	if !p.opts.force && isRegistered {
-		present, err := p.dest.present(ctx, item.plg)
-		if err == nil && present {
-			p.tracker.skip(key, "already published")
+	if inPlace && isRegistered && !p.opts.force {
+		p.tracker.skip(key, "already published")
 
-			return
-		}
+		return
+	}
+
+	// An archive given on disk is what the caller wants published, and seeing
+	// whether storage already holds that one costs a hash, not a build.
+	if item.archive != "" {
+		inPlace = false
 	}
 
 	if !isRegistered && p.capped.Load() {
@@ -481,7 +511,15 @@ func (p *publisher) publishOne(ctx context.Context, item publishItem) {
 	start := time.Now()
 	p.tracker.start(key)
 
-	details, err := p.publishVersion(ctx, item, isRegistered)
+	work := p.publishVersion
+	if inPlace {
+		// Delivered already, by an earlier run or by hand, and only unknown to
+		// the service: registering it is all that is left, and rebuilding it
+		// would replace something nobody asked to replace.
+		work = p.registerInPlace
+	}
+
+	details, err := work(ctx, item, isRegistered)
 	dur := time.Since(start).Round(time.Second)
 
 	if err != nil {
@@ -492,6 +530,38 @@ func (p *publisher) publishOne(ctx context.Context, item publishItem) {
 	}
 
 	p.tracker.finish(key, true, details, dur)
+}
+
+// present reports whether the destination already holds plg. A failure to find
+// out counts as absent: the version is then published in full, which is the
+// safe direction to be wrong in.
+func (p *publisher) present(ctx context.Context, plg pluginInfo) bool {
+	present, err := p.dest.present(ctx, plg)
+
+	return err == nil && present
+}
+
+// registerInPlace registers a version whose archive is already where the
+// service reads it. No checksum is claimed: there is no local archive to take
+// one from, and the service records the stored one's.
+func (p *publisher) registerInPlace(ctx context.Context, item publishItem, isRegistered bool) (string, error) {
+	p.tracker.stage(item.key(), stageWaiting)
+
+	select {
+	case p.deliverSlots <- struct{}{}:
+	case <-ctx.Done():
+		return "", fmt.Errorf("waiting to register: %w", context.Cause(ctx))
+	}
+	defer func() { <-p.deliverSlots }()
+
+	p.tracker.stage(item.key(), stageRegistering)
+
+	action, err := p.register(ctx, item.plg, "", isRegistered)
+	if err != nil {
+		return "", err
+	}
+
+	return "already in place, " + action, nil
 }
 
 // publishVersion does the work for one version and describes what it did.
@@ -744,8 +814,12 @@ func printPublishDryRun(items []publishItem, skipped []string, dest destination)
 
 	for _, item := range items {
 		source := item.archive
-		if item.job != nil {
+
+		switch {
+		case item.job != nil:
 			source = "build " + item.job.pluginDir
+		case item.inPlace:
+			source = "in place"
 		}
 
 		_, _ = fmt.Fprintf(os.Stdout, "%-40s  %s -> %s\n", item.key(), source, dest.describe(item.plg))
