@@ -296,6 +296,8 @@ func runPluginsPublish(ctx context.Context, opts publishOptions, dest destinatio
 	_, _ = fmt.Fprintf(os.Stdout, "Публикация: %d версий (build-parallel=%d, parallel=%d)\n\n",
 		len(items), cap(pub.buildSlots), cap(pub.deliverSlots))
 
+	pub.tracker.verb = "Publishing"
+
 	stop := startTicker(pub.tracker)
 	pub.run(runCtx, items)
 	stop()

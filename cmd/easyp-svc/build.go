@@ -759,6 +759,8 @@ type buildTracker struct {
 	interactive bool
 	spinIdx     int
 	panelLines  int
+	// verb is what a non-interactive start line says is happening.
+	verb string
 }
 
 // activeItem is one version in flight: when it started and what it is doing.
@@ -785,6 +787,7 @@ func newBuildTracker(total int, interactive bool) *buildTracker {
 		startTime:   now,
 		lastReport:  now,
 		interactive: interactive,
+		verb:        "Building",
 	}
 }
 
@@ -799,7 +802,7 @@ func (t *buildTracker) start(key string) {
 		return
 	}
 
-	_, _ = fmt.Fprintf(os.Stdout, "Building %s...\n", key)
+	_, _ = fmt.Fprintf(os.Stdout, "%s %s...\n", t.verb, key)
 }
 
 // stage records what an active item has moved on to. Only the live panel shows
