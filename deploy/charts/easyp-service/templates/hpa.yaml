@@ -1,0 +1,46 @@
+{{- if eq (include "easyp-service.autoscalingEnabled" .) "true" }}
+{{/*
+Scales on CPU because the work is CPU: every generation is a plugin process
+running inside this container, so its usage is charged here. Memory is offered
+but off by default — the buffers it would react to are bounded by
+maxConcurrentGenerations per pod, and freed as soon as a response is sent, so it
+tracks CPU without adding anything.
+
+Needs metrics-server. Without it the HPA exists, reports <unknown> and scales
+nothing, which is why NOTES.txt names it.
+*/}}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "easyp-service.fullname" . }}
+  labels:
+    {{- include "easyp-service.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: {{ include "easyp-service.fullname" . }}
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+    {{- with .Values.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ . }}
+    {{- end }}
+    {{- with .Values.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ . }}
+    {{- end }}
+  {{- with .Values.autoscaling.behavior }}
+  behavior:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
