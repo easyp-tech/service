@@ -365,20 +365,7 @@ func publishItems(opts publishOptions) ([]publishItem, []string, error) {
 	}
 
 	if opts.archivesDir != "" {
-		plugins, err := scanPluginTree(opts.archivesDir, opts.filter, plugarchive.ArchiveName)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		items := make([]publishItem, 0, len(plugins))
-		for _, plg := range plugins {
-			items = append(items, publishItem{
-				plg:     plg,
-				archive: filepath.Join(opts.archivesDir, plg.group, plg.name, plg.version, plugarchive.ArchiveName),
-			})
-		}
-
-		return items, nil, nil
+		return archiveItems(opts)
 	}
 
 	err := validateRegistryDir(opts.registryPath)
@@ -402,6 +389,24 @@ func publishItems(opts publishOptions) ([]publishItem, []string, error) {
 	}
 
 	return items, skipped, nil
+}
+
+// archiveItems lists the archives of an --archives tree.
+func archiveItems(opts publishOptions) ([]publishItem, []string, error) {
+	plugins, err := scanPluginTree(opts.archivesDir, opts.filter, plugarchive.ArchiveName)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	items := make([]publishItem, 0, len(plugins))
+	for _, plg := range plugins {
+		items = append(items, publishItem{
+			plg:     plg,
+			archive: filepath.Join(opts.archivesDir, plg.group, plg.name, plg.version, plugarchive.ArchiveName),
+		})
+	}
+
+	return items, nil, nil
 }
 
 // inPlaceItems lists the versions already unpacked in --plugins-dir: what a
@@ -488,18 +493,12 @@ func (p *publisher) run(ctx context.Context, items []publishItem) {
 func (p *publisher) publishOne(ctx context.Context, item publishItem) {
 	key := item.key()
 	isRegistered := p.registered[key]
-	inPlace := item.inPlace || (!p.opts.force && p.present(ctx, item.plg))
 
-	if inPlace && isRegistered && !p.opts.force {
+	inPlace, done := p.alreadyPublished(ctx, item, isRegistered)
+	if done {
 		p.tracker.skip(key, "already published")
 
 		return
-	}
-
-	// An archive given on disk is what the caller wants published, and seeing
-	// whether storage already holds that one costs a hash, not a build.
-	if item.archive != "" {
-		inPlace = false
 	}
 
 	if !isRegistered && p.capped.Load() {
@@ -530,6 +529,25 @@ func (p *publisher) publishOne(ctx context.Context, item publishItem) {
 	}
 
 	p.tracker.finish(key, true, details, dur)
+}
+
+// alreadyPublished decides how much of the work a version still needs: done
+// when it is in place and registered, inPlace when it is in place but unknown
+// to the service. --force makes neither true for a version publish produces.
+func (p *publisher) alreadyPublished(ctx context.Context, item publishItem, isRegistered bool) (bool, bool) {
+	inPlace := item.inPlace || (!p.opts.force && p.present(ctx, item.plg))
+
+	if inPlace && isRegistered && !p.opts.force {
+		return true, true
+	}
+
+	// An archive given on disk is what the caller wants published, and seeing
+	// whether storage already holds that one costs a hash, not a build.
+	if item.archive != "" {
+		return false, false
+	}
+
+	return inPlace, false
 }
 
 // present reports whether the destination already holds plg. A failure to find
