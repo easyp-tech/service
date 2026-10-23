@@ -102,7 +102,7 @@ type GeneratorAPIClient interface {
 	// | `INVALID_ARGUMENT` | Invalid plugin name format |
 	// | `RESOURCE_EXHAUSTED` | The service is at its concurrency limit; retry later |
 	// | `UNAVAILABLE` | Object storage is unreachable, or the service is shutting down |
-	// | `FAILED_PRECONDITION` | The plugin is registered but its archive is not in storage |
+	// | `FAILED_PRECONDITION` | The plugin is registered but its archive is not in storage, or the stored archive is not the one registered (reason `CHECKSUM_MISMATCH`); publish the plugin again |
 	// | `INTERNAL` | Plugin execution failed |
 	// | `DEADLINE_EXCEEDED` | Plugin execution timeout |
 	GenerateCode(ctx context.Context, in *GenerateCodeRequest, opts ...grpc.CallOption) (*GenerateCodeResponse, error)
@@ -121,7 +121,8 @@ type GeneratorAPIClient interface {
 	// | Code | Description |
 	// |------|-------------|
 	// | `ALREADY_EXISTS` | Plugin with same group/name/version exists |
-	// | `INVALID_ARGUMENT` | Invalid plugin name format |
+	// | `INVALID_ARGUMENT` | Invalid plugin name format, or an invalid config |
+	// | `FAILED_PRECONDITION` | The archive is not in storage, or its checksum is not the `sha256` the config names (reason `CHECKSUM_MISMATCH`) |
 	// | `RESOURCE_EXHAUSTED` | Max plugins limit reached |
 	// | `PERMISSION_DENIED` | Enterprise license required |
 	CreatePlugin(ctx context.Context, in *CreatePluginRequest, opts ...grpc.CallOption) (*CreatePluginResponse, error)
@@ -135,7 +136,8 @@ type GeneratorAPIClient interface {
 	// | Code | Description |
 	// |------|-------------|
 	// | `NOT_FOUND` | Plugin not found |
-	// | `INVALID_ARGUMENT` | Invalid plugin name format |
+	// | `INVALID_ARGUMENT` | Invalid plugin name format, or an invalid config |
+	// | `FAILED_PRECONDITION` | The archive is not in storage, or its checksum is not the `sha256` the config names (reason `CHECKSUM_MISMATCH`) |
 	// | `PERMISSION_DENIED` | Enterprise license required |
 	UpdatePlugin(ctx context.Context, in *UpdatePluginRequest, opts ...grpc.CallOption) (*UpdatePluginResponse, error)
 	// Delete a plugin.
@@ -286,7 +288,7 @@ type GeneratorAPIServer interface {
 	// | `INVALID_ARGUMENT` | Invalid plugin name format |
 	// | `RESOURCE_EXHAUSTED` | The service is at its concurrency limit; retry later |
 	// | `UNAVAILABLE` | Object storage is unreachable, or the service is shutting down |
-	// | `FAILED_PRECONDITION` | The plugin is registered but its archive is not in storage |
+	// | `FAILED_PRECONDITION` | The plugin is registered but its archive is not in storage, or the stored archive is not the one registered (reason `CHECKSUM_MISMATCH`); publish the plugin again |
 	// | `INTERNAL` | Plugin execution failed |
 	// | `DEADLINE_EXCEEDED` | Plugin execution timeout |
 	GenerateCode(context.Context, *GenerateCodeRequest) (*GenerateCodeResponse, error)
@@ -305,7 +307,8 @@ type GeneratorAPIServer interface {
 	// | Code | Description |
 	// |------|-------------|
 	// | `ALREADY_EXISTS` | Plugin with same group/name/version exists |
-	// | `INVALID_ARGUMENT` | Invalid plugin name format |
+	// | `INVALID_ARGUMENT` | Invalid plugin name format, or an invalid config |
+	// | `FAILED_PRECONDITION` | The archive is not in storage, or its checksum is not the `sha256` the config names (reason `CHECKSUM_MISMATCH`) |
 	// | `RESOURCE_EXHAUSTED` | Max plugins limit reached |
 	// | `PERMISSION_DENIED` | Enterprise license required |
 	CreatePlugin(context.Context, *CreatePluginRequest) (*CreatePluginResponse, error)
@@ -319,7 +322,8 @@ type GeneratorAPIServer interface {
 	// | Code | Description |
 	// |------|-------------|
 	// | `NOT_FOUND` | Plugin not found |
-	// | `INVALID_ARGUMENT` | Invalid plugin name format |
+	// | `INVALID_ARGUMENT` | Invalid plugin name format, or an invalid config |
+	// | `FAILED_PRECONDITION` | The archive is not in storage, or its checksum is not the `sha256` the config names (reason `CHECKSUM_MISMATCH`) |
 	// | `PERMISSION_DENIED` | Enterprise license required |
 	UpdatePlugin(context.Context, *UpdatePluginRequest) (*UpdatePluginResponse, error)
 	// Delete a plugin.

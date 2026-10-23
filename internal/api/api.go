@@ -232,6 +232,7 @@ const (
 	ReasonShuttingDown       = "SHUTTING_DOWN"
 	ReasonStorageUnavailable = "STORAGE_UNAVAILABLE"
 	ReasonBinaryNotUploaded  = "BINARY_NOT_UPLOADED"
+	ReasonChecksumMismatch   = "CHECKSUM_MISMATCH"
 	ReasonFeatureDenied      = "FEATURE_DENIED"
 	ReasonDeadlineExceeded   = "DEADLINE_EXCEEDED"
 	ReasonCanceled           = "CANCELED"
@@ -295,6 +296,8 @@ func classify(err error) (codes.Code, string) {
 	switch {
 	case errors.Is(err, core.ErrNotFound):
 		code, reason = codes.NotFound, ReasonNotFound
+	case errors.Is(err, core.ErrChecksumMismatch):
+		code, reason = codes.FailedPrecondition, ReasonChecksumMismatch
 	case errors.Is(err, core.ErrInvalidPluginName):
 		code, reason = codes.InvalidArgument, ReasonInvalidPluginName
 	case errors.Is(err, core.ErrInvalidConfig):

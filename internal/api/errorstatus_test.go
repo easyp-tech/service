@@ -71,6 +71,7 @@ func TestErrorToStatusCarriesReason(t *testing.T) {
 		"overloaded":         {core.ErrServerOverloaded, codes.ResourceExhausted, ReasonServerOverloaded},
 		"licence ceiling":    {core.ErrMaxPluginsExceeded, codes.ResourceExhausted, ReasonMaxPluginsExceeded},
 		"archive missing":    {core.ErrBinaryNotUploaded, codes.FailedPrecondition, ReasonBinaryNotUploaded},
+		"archive replaced":   {core.ErrChecksumMismatch, codes.FailedPrecondition, ReasonChecksumMismatch},
 		"enterprise feature": {core.ErrFeatureDenied, codes.PermissionDenied, ReasonFeatureDenied},
 		"timeout":            {context.DeadlineExceeded, codes.DeadlineExceeded, ReasonDeadlineExceeded},
 		"anything else":      {errors.New("boom"), codes.Internal, ReasonInternal},

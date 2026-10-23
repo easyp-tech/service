@@ -222,3 +222,14 @@ func (m *memoryStorage) put(key string, data []byte) {
 	defer m.mu.Unlock()
 	m.files[key] = bytes.Clone(data)
 }
+
+// TestMetadataValueIgnoresCase covers the stores that hand user metadata back
+// with the case the uploader used rather than lowercased, as S3 itself does.
+func TestMetadataValueIgnoresCase(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "abc", metadataValue(map[string]string{"sha256": "abc"}, MetadataSha256))
+	assert.Equal(t, "abc", metadataValue(map[string]string{"Sha256": "abc"}, MetadataSha256))
+	assert.Empty(t, metadataValue(map[string]string{"other": "abc"}, MetadataSha256))
+	assert.Empty(t, metadataValue(nil, MetadataSha256))
+}

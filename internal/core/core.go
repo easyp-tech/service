@@ -366,6 +366,7 @@ func errorCode(err error) string {
 		code string
 	}{
 		{ErrNotFound, "NOT_FOUND"},
+		{ErrChecksumMismatch, "CHECKSUM_MISMATCH"},
 		{ErrInvalidPluginName, "INVALID_PLUGIN_NAME"},
 		{ErrGenerationFailed, "GENERATION_FAILED"},
 		{ErrServerOverloaded, "SERVER_OVERLOADED"},

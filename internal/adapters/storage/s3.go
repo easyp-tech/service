@@ -25,6 +25,11 @@ import (
 // stay executable even when the service runs under a different account.
 const cacheDirPermissions = 0o755
 
+// MetadataSha256 is the user-metadata key (x-amz-meta-sha256) under which the
+// uploader records the hex sha256 of a plugin archive. It lets registration
+// learn the checksum from a HEAD request instead of reading the whole object.
+const MetadataSha256 = "sha256"
+
 // ErrBucketRequired is returned when no bucket was configured.
 var ErrBucketRequired = errors.New("s3 bucket cannot be empty")
 
@@ -187,6 +192,40 @@ func (s *S3Storage) UploadFile(ctx context.Context, key string, localPath string
 	}
 
 	return nil
+}
+
+// Stat describes the object under key with a HEAD request.
+func (s *S3Storage) Stat(ctx context.Context, key string) (core.ObjectInfo, bool, error) {
+	fullKey := s.formatKey(key)
+
+	output, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(fullKey),
+	})
+	if err != nil {
+		if _, ok := errors.AsType[*types.NotFound](err); ok {
+			return core.ObjectInfo{}, false, nil
+		}
+
+		return core.ObjectInfo{}, false, fmt.Errorf("s3.HeadObject: %w", err)
+	}
+
+	return core.ObjectInfo{
+		Size:   aws.ToInt64(output.ContentLength),
+		Sha256: metadataValue(output.Metadata, MetadataSha256),
+	}, true, nil
+}
+
+// metadataValue looks a user-metadata key up regardless of case. S3 lowercases
+// the keys it returns, but S3-compatible stores do not all agree on that.
+func metadataValue(metadata map[string]string, key string) string {
+	for k, v := range metadata {
+		if strings.EqualFold(k, key) {
+			return v
+		}
+	}
+
+	return ""
 }
 
 // Exists reports whether a key exists in S3.
