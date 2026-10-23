@@ -101,9 +101,13 @@ jobs:
     # A real database rather than a mock, because the defects these tests exist
     # to catch — a NOT NULL column, a pool whose workers were never started —
     # are invisible to anything that stands in for Postgres.
+    #
+    # 17.7, the version deploy/docker-compose*.yml run. Not 16: the runner's
+    # postgresql-client is 18, and pg_dump 17+ writes SET transaction_timeout,
+    # which a 16 server rejects when the restore drill replays the dump.
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:17.7-alpine
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: easyp
