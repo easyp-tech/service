@@ -4,6 +4,17 @@
 # file, which changes the volume names the moment anyone moves or renames it.
 name: easyp-svc
 
+# Every container's stdout is capped. Docker's json-file driver keeps it all by
+# default, and on the dev host's 14 GB disk loki alone had written 2 GB of its
+# own log, grafana 640 MB: with the plugin caches filling up the remainder, the
+# disk ran out and postgres went into crash recovery mid-request. 3 × 10 MB per
+# container is plenty for `docker logs`; anything older is in loki.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 networks:
   easyp_network:
     name: easyp_network
@@ -30,6 +41,7 @@ volumes:
 services:
 
   traefik:
+    logging: *logging
     image: traefik:v3.6
     container_name: easyp-traefik
     restart: unless-stopped
@@ -69,6 +81,7 @@ services:
         ipv4_address: 172.28.0.10
 
   postgres:
+    logging: *logging
     image: postgres:17.7
     container_name: easyp-postgres
     restart: unless-stopped
@@ -100,6 +113,7 @@ services:
       - easyp_network
 
   init-db:
+    logging: *logging
     image: postgres:17.7
     container_name: easyp-init-db
     depends_on:
@@ -127,6 +141,7 @@ services:
       - easyp_network
 
   service-community:
+    logging: *logging
     # Pinned, not floating. `:latest` is published only when a release tag is
     # pushed, so it means "the last release" rather than "the current master" —
     # and `docker compose up` without an explicit pull will keep an old layer
@@ -214,6 +229,7 @@ services:
       - easyp_network
 
   service-enterprise:
+    logging: *logging
     # Pinned, not floating. `:latest` is published only when a release tag is
     # pushed, so it means "the last release" rather than "the current master" —
     # and `docker compose up` without an explicit pull will keep an old layer
