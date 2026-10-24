@@ -27,10 +27,19 @@
 # are shared, so the two can only drift in wiring, not in behaviour — but they
 # can drift, and unifying them is worth doing once the two stacks converge.
 
+# Same cap as in docker-compose.dev.yml, repeated because an anchor does not
+# reach across files. These backends are the chattiest containers on the host.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   # No rustfs here: the backends use the shared object store, so the only setup
   # left is making sure the buckets exist.
   init-buckets:
+    logging: *logging
     # The AWS CLI rather than MinIO's mc, which is no longer anonymously
     # pullable from Docker Hub or quay.io. See docker-compose.yml.
     image: amazon/aws-cli:2.37.4
@@ -53,6 +62,7 @@ services:
       - easyp_network
 
   mimir:
+    logging: *logging
     image: grafana/mimir:2.16.0
     container_name: easyp-mimir
     restart: unless-stopped
@@ -76,6 +86,7 @@ services:
       - easyp_network
 
   loki:
+    logging: *logging
     image: grafana/loki:3.5.0
     container_name: easyp-loki
     restart: unless-stopped
@@ -95,6 +106,7 @@ services:
       - easyp_network
 
   tempo:
+    logging: *logging
     image: grafana/tempo:2.7.2
     container_name: easyp-tempo
     restart: unless-stopped
@@ -114,6 +126,7 @@ services:
       - easyp_network
 
   pyroscope:
+    logging: *logging
     image: grafana/pyroscope:1.13.5
     container_name: easyp-pyroscope
     restart: unless-stopped
@@ -133,6 +146,7 @@ services:
       - easyp_network
 
   alloy:
+    logging: *logging
     image: grafana/alloy:v1.9.1
     container_name: easyp-alloy
     restart: unless-stopped
@@ -164,6 +178,7 @@ services:
       - easyp_network
 
   grafana:
+    logging: *logging
     image: grafana/grafana:12.3.0
     container_name: easyp-grafana
     restart: unless-stopped
