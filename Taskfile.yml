@@ -134,9 +134,15 @@ tasks:
     cmds:
       - "go run ./cmd/easyp-svc/ plugins build registry --output plugins --filter '{{.FILTER}}'"
 
-  push-plugins:
-    desc: "Pack and upload built plugin archives to S3 storage (rustfs in the dev stack)"
+  publish-plugins:
+    desc: >-
+      Build, upload and register plugins in the dev stack in one pass; versions already there are
+      skipped. A subset: FILTER='protocolbuffers/*' task publish-plugins
     dir: "{{.USER_WORKING_DIR}}"
+    vars:
+      FILTER: '{{.FILTER | default ""}}'
+    preconditions:
+      - "test -f deploy/certs/ca.crt"
     env:
       # Credentials reach the AWS SDK default chain; the service reads its own
       # from registry.s3 in config.yml.
@@ -144,19 +150,30 @@ tasks:
       AWS_SECRET_ACCESS_KEY: "rustfsadmin"
     cmds:
       # The compose config points at rustfs:9000, which is unreachable from the
-      # host — pass the published endpoint explicitly.
+      # host — pass the published endpoint explicitly. The gRPC port is not
+      # published either: the only way in is through traefik, which terminates
+      # the edge certificate and re-establishes mTLS inward. Registration is a
+      # mutating call: it needs a token whose digest is listed in
+      # auth.write_tokens. The default matches the throwaway token shipped in
+      # config.yml; set EASYP_TOKEN to override it.
       - >-
-        go run ./cmd/easyp-svc/ plugins push
+        go run ./cmd/easyp-svc/ plugins publish registry
+        --filter '{{.FILTER}}'
+        --build-parallel 12
         --endpoint http://localhost:9000
         --bucket easyp-plugins
         --region us-east-1
         --force-path-style
+        --addr easyp.api.localhost:${EASYP_TRAEFIK_TLS_PORT:-4443}
+        --tls-ca deploy/certs/ca.crt
+        --token ${EASYP_TOKEN:-local-dev-token}
         --non-interactive
 
-  push-archives:
+  publish-archives:
     desc: >-
-      Upload a packed archive tree (from `plugins pack`) to any S3-compatible storage, e.g.
-      S3_ENDPOINT=https://storage.example.com AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... task push-archives
+      Publish an archive tree (from `plugins build --archive`) to any service and S3-compatible storage, e.g.
+      S3_ENDPOINT=https://storage.example.com ADDR=plugins.example.com:443 EASYP_TOKEN=...
+      AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... task publish-archives
     dir: "{{.USER_WORKING_DIR}}"
     vars:
       ARCHIVES: '{{.ARCHIVES | default "../plugin-archives"}}'
@@ -166,63 +183,43 @@ tasks:
       PARALLEL: '{{.PARALLEL | default "24"}}'
     preconditions:
       - sh: 'test -n "$S3_ENDPOINT"'
-        msg: "S3_ENDPOINT is required, e.g. S3_ENDPOINT=https://storage.example.com task push-archives"
+        msg: "S3_ENDPOINT is required, e.g. S3_ENDPOINT=https://storage.example.com task publish-archives"
+      - sh: 'test -n "$ADDR"'
+        msg: "ADDR is required: the service the archives are registered with, e.g. ADDR=plugins.example.com:443"
       - sh: 'test -d "{{.ARCHIVES}}"'
-        msg: "{{.ARCHIVES}} not found; pack first or pass ARCHIVES=<dir>"
+        msg: "{{.ARCHIVES}} not found; build with `plugins build --archive` first or pass ARCHIVES=<dir>"
     cmds:
-      # Credentials are left to the AWS SDK default chain: they belong in the
-      # environment or a secret manager, never in this file.
+      # Credentials are left to the AWS SDK default chain and EASYP_TOKEN: they
+      # belong in the environment or a secret manager, never in this file.
       - >-
-        go run ./cmd/easyp-svc/ plugins push {{.ARCHIVES}} --packed
+        go run ./cmd/easyp-svc/ plugins publish --archives {{.ARCHIVES}}
         --endpoint "$S3_ENDPOINT"
         --bucket {{.S3_BUCKET}}
         --force-path-style
         --parallel {{.PARALLEL}}
-
-  register-plugins:
-    desc: "Register all built plugins via gRPC CreatePlugin API"
-    dir: "{{.USER_WORKING_DIR}}"
-    preconditions:
-      - "test -f deploy/certs/ca.crt"
-    cmds:
-      # The gRPC port is not published: the only way in is through traefik,
-      # which terminates the edge certificate and re-establishes mTLS inward.
-      # CreatePlugin is a mutating method: it needs a token whose digest is
-      # listed in auth.write_tokens. The default matches the throwaway token
-      # shipped in config.yml; set EASYP_TOKEN to override it.
-      - >-
-        go run ./cmd/easyp-svc/ plugins register
-        --addr easyp.api.localhost:${EASYP_TRAEFIK_TLS_PORT:-4443}
-        --tls-ca deploy/certs/ca.crt
-        --token ${EASYP_TOKEN:-local-dev-token}
-        --cfg deploy/config/config.yml
-        --non-interactive
+        --addr "$ADDR"
 
 
   run:
-    desc: "Full cycle: build plugins → restart services → register → follow logs"
+    desc: "Full cycle: restart services → build, upload and register plugins"
     dir: "{{.USER_WORKING_DIR}}"
     cmds:
-      - task: build-plugins
       - task: down
       - task: up
       - "echo 'Waiting for service to be ready...' && until curl -sf http://localhost:8082/ >/dev/null 2>&1; do sleep 2; done && echo 'Service is ready!'"
-      - task: push-plugins
-      - task: register-plugins
+      - task: publish-plugins
 
   setup:
-    desc: "Build plugins, start services, register plugins (no logs)"
+    desc: "Restart services, then build, upload and register plugins (no logs)"
     dir: "{{.USER_WORKING_DIR}}"
     cmds:
-      - task: build-plugins
       - task: down
       - task: up
       - "echo 'Waiting for service to be ready...' && until curl -sf http://localhost:8082/ >/dev/null 2>&1; do sleep 2; done && echo 'Service is ready!'"
-      - task: push-plugins
-      - task: register-plugins
+      - task: publish-plugins
 
   run-local:
-    desc: "Start local service and automatically migrate plugins"
+    desc: "Start a local service without object storage and register what is built in plugins/"
     dir: "{{.USER_WORKING_DIR}}"
     preconditions:
       - "test -f deploy/config/config.local.yml"
@@ -233,10 +230,11 @@ tasks:
           until curl -sf http://localhost:8082/ >/dev/null 2>&1; do
             sleep 1
           done
-          echo "Service is ready! Running plugin migration..."
-          # config.local.yml leaves server.tls empty, so this leg is plaintext,
-          # and it ships the matching throwaway write token.
-          go run ./cmd/easyp-svc/ plugins register --addr localhost:8080 --cfg deploy/config/config.local.yml \
+          echo "Service is ready! Registering plugins/..."
+          # config.local.yml runs from plugins_dir ./plugins with no object
+          # storage, leaves server.tls empty, so this leg is plaintext, and
+          # ships the matching throwaway write token.
+          go run ./cmd/easyp-svc/ plugins publish --plugins-dir plugins --addr localhost:8080 \
             --non-interactive --insecure --token local-dev-token
         ) &
         go run ./cmd/easyp-svc/ service start --cfg deploy/config/config.local.yml --log_level debug

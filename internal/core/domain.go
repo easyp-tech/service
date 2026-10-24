@@ -24,6 +24,11 @@ var (
 	ErrFeatureDenied      = errors.New("feature denied")
 	ErrStorageUnavailable = errors.New("binary storage unavailable")
 	ErrBinaryNotUploaded  = errors.New("plugin archive not found in binary storage")
+	// ErrChecksumMismatch means the archive in binary storage is not the one the
+	// registry recorded: it was replaced after registration, or the caller named
+	// a checksum the stored object does not have. Either way the fix is to
+	// publish the plugin again, not to retry, which is why it is not Internal.
+	ErrChecksumMismatch = errors.New("plugin archive checksum mismatch")
 	// ErrInvalidConfig covers a plugin configuration the caller got wrong: no
 	// command, an unparseable document, an executable outside plugins_dir.
 	//
@@ -319,8 +324,18 @@ type (
 		ValidateLicense(ctx context.Context) (LicenseClaims, error)
 	}
 
+	// ObjectInfo describes an object in binary storage without reading it.
+	ObjectInfo struct {
+		Size int64
+		// Sha256 is the hex checksum the uploader recorded in the object's
+		// metadata, or empty when it recorded none (archives pushed before
+		// v1.2.0). It is what the uploader claimed, not something storage
+		// computed: the registry still verifies every download against it.
+		Sha256 string
+	}
+
 	// BinaryStorage provides read access to plugin archives in remote object
-	// storage. Archives are uploaded out-of-band (easyp-svc plugins push);
+	// storage. Archives are uploaded out-of-band (easyp-svc plugins publish);
 	// the service only downloads, inspects, and deletes them.
 	BinaryStorage interface {
 		// Download retrieves a plugin archive from remote storage and
@@ -329,8 +344,9 @@ type (
 		// Open returns a stream of the object under key and its size.
 		// The caller must close the returned reader.
 		Open(ctx context.Context, key string) (io.ReadCloser, int64, error)
-		// Exists reports whether an object exists in remote storage.
-		Exists(ctx context.Context, key string) (bool, error)
+		// Stat describes the object under key; exists is false, with a nil
+		// error, when there is no such object.
+		Stat(ctx context.Context, key string) (info ObjectInfo, exists bool, err error)
 		// Delete removes an object from remote storage.
 		Delete(ctx context.Context, key string) error
 	}

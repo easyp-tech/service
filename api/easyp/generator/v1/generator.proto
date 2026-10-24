@@ -83,7 +83,7 @@ service GeneratorAPI {
   // | `INVALID_ARGUMENT` | Invalid plugin name format |
   // | `RESOURCE_EXHAUSTED` | The service is at its concurrency limit; retry later |
   // | `UNAVAILABLE` | Object storage is unreachable, or the service is shutting down |
-  // | `FAILED_PRECONDITION` | The plugin is registered but its archive is not in storage |
+  // | `FAILED_PRECONDITION` | The plugin is registered but its archive is not in storage, or the stored archive is not the one registered (reason `CHECKSUM_MISMATCH`); publish the plugin again |
   // | `INTERNAL` | Plugin execution failed |
   // | `DEADLINE_EXCEEDED` | Plugin execution timeout |
   rpc GenerateCode(GenerateCodeRequest) returns (GenerateCodeResponse) {
@@ -114,7 +114,8 @@ service GeneratorAPI {
   // | Code | Description |
   // |------|-------------|
   // | `ALREADY_EXISTS` | Plugin with same group/name/version exists |
-  // | `INVALID_ARGUMENT` | Invalid plugin name format |
+  // | `INVALID_ARGUMENT` | Invalid plugin name format, or an invalid config |
+  // | `FAILED_PRECONDITION` | The archive is not in storage, or its checksum is not the `sha256` the config names (reason `CHECKSUM_MISMATCH`) |
   // | `RESOURCE_EXHAUSTED` | Max plugins limit reached |
   // | `PERMISSION_DENIED` | Enterprise license required |
   rpc CreatePlugin(CreatePluginRequest) returns (CreatePluginResponse) {
@@ -133,7 +134,8 @@ service GeneratorAPI {
   // | Code | Description |
   // |------|-------------|
   // | `NOT_FOUND` | Plugin not found |
-  // | `INVALID_ARGUMENT` | Invalid plugin name format |
+  // | `INVALID_ARGUMENT` | Invalid plugin name format, or an invalid config |
+  // | `FAILED_PRECONDITION` | The archive is not in storage, or its checksum is not the `sha256` the config names (reason `CHECKSUM_MISMATCH`) |
   // | `PERMISSION_DENIED` | Enterprise license required |
   rpc UpdatePlugin(UpdatePluginRequest) returns (UpdatePluginResponse) {
     option (mcp.options.v1.method) = {
@@ -361,6 +363,15 @@ message CreatePluginRequest {
   }];
 
   // Optional plugin configuration.
+  //
+  // Keys the service reads:
+  // - `command`: the plugin command line. Defaults to the entrypoint the
+  //   service unpacks the archive to, `{plugins_dir}/{group}/{name}/{version}/plugin`;
+  //   when given, `command[0]` must name an executable inside plugins_dir.
+  // - `sha256`: hex sha256 of the archive in storage. When given, registration
+  //   fails unless the stored archive has exactly this checksum; when not, the
+  //   service records the stored archive's checksum itself.
+  // - `env`, `timeout`: the plugin's environment and run time limit.
   google.protobuf.Struct config = 4;
 
   // Tags for the plugin.
@@ -400,9 +411,10 @@ message UpdatePluginRequest {
 
   // New plugin configuration.
   //
-  // Replaces the existing config when `update_mask` selects it. Note that a
-  // config is validated on the way in: `command[0]` must name the plugin
-  // executable inside the service's plugins directory.
+  // Replaces the existing config when `update_mask` selects it, with the same
+  // keys and defaults as `CreatePluginRequest.config`. Replacing the config is
+  // also how a republished archive takes effect: every replica refetches a
+  // plugin whose recorded `sha256` changed.
   google.protobuf.Struct config = 4;
 
   // New tags. Replaces the existing tags when `update_mask` selects them.

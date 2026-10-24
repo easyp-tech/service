@@ -43,6 +43,14 @@ const (
 	// and the plugin lookup both assume.
 	tmpDirName = ".tmp"
 	dirPerm    = 0o750
+
+	// checksumMarkerName is the file in an unpacked version directory recording
+	// the sha256 of the archive it came from. A directory whose marker differs
+	// from the registry's checksum was unpacked from an archive that has since
+	// been republished, and is fetched again. The leading dot keeps it clear of
+	// anything a plugin bundle ships at its root.
+	checksumMarkerName = ".sha256"
+	markerPerm         = 0o644
 )
 
 // Registry package errors.
@@ -59,7 +67,7 @@ var (
 	ErrEmptyCommand     = fmt.Errorf("%w: empty command array", core.ErrInvalidConfig)
 	ErrInvalidConfig    = fmt.Errorf("%w", core.ErrInvalidConfig)
 	ErrEmptyPluginsDir  = errors.New("pluginsDir cannot be empty")
-	ErrChecksumMismatch = errors.New("plugin archive checksum mismatch")
+	ErrChecksumMismatch = core.ErrChecksumMismatch
 )
 
 var (
@@ -74,9 +82,10 @@ type (
 		Env     map[string]string `json:"env,omitempty"`
 		Timeout string            `json:"timeout,omitempty"`
 		// Sha256 is the hex-encoded checksum of the plugin archive
-		// ({group}/{name}/{version}/plugin.tgz), computed by the service at
-		// registration time from the object in binary storage and verified
-		// after every download before unpacking.
+		// ({group}/{name}/{version}/plugin.tgz), verified after every download
+		// before unpacking. The service records it at registration from the
+		// object in binary storage; a caller may send it too, and then
+		// registration fails unless the stored object has exactly that one.
 		Sha256 string `json:"sha256,omitempty"`
 	}
 
@@ -146,7 +155,7 @@ func ValidateConfig(config json.RawMessage, pluginsDir string) error {
 	// Lexical containment, not EvalSymlinks: with object storage configured the
 	// binary is downloaded on first use, so at registration time the path
 	// routinely does not exist yet and resolving it would reject every
-	// legitimate `plugins register` run against an empty cache. The symlink
+	// legitimate `plugins publish` run against an empty cache. The symlink
 	// half of the problem is closed where it is actually created — see
 	// plugarchive.extractSymlink, which refuses a link out of the archive — and
 	// again at execution time in ensureBinary.
@@ -597,22 +606,16 @@ func (p *plugin) command(ctx context.Context, requestData []byte) (*exec.Cmd, fu
 
 // Create implements core.Registry.
 func (r *Registry) Create(ctx context.Context, req core.CreatePluginRequest) (*core.PluginInfo, error) {
-	validateErr := ValidateConfig(req.Config, r.pluginsDir)
-	if validateErr != nil {
-		return nil, fmt.Errorf("ValidateConfig: %w", validateErr)
+	config, err := r.prepareConfig(ctx, req.Group, req.Name, req.Version, req.Config)
+	if err != nil {
+		return nil, err
 	}
 
-	if r.storage != nil {
-		config, err := r.attachArchiveChecksum(ctx, req.Group, req.Name, req.Version, req.Config)
-		if err != nil {
-			return nil, fmt.Errorf("r.attachArchiveChecksum: %w", err)
-		}
-		req.Config = config
-	}
+	req.Config = config
 
 	var plug plugin
 
-	err := r.db.NoTxContext(ctx, func(conn *sqlx.DB) error {
+	err = r.db.NoTxContext(ctx, func(conn *sqlx.DB) error {
 		return conn.QueryRowxContext(ctx,
 			`INSERT INTO plugins (group_name, name, version, config, tags)
                          VALUES ($1, $2, $3, $4, $5)
@@ -669,29 +672,25 @@ func (r *Registry) Update(ctx context.Context, req core.UpdatePluginRequest) (*c
 
 	config := req.Config
 
+	// Completed exactly as Create completes it, checksum included.
+	//
+	// Update once skipped the checksum, and the omission disabled integrity
+	// checking rather than reporting anything: the sha256 lives inside the
+	// config document, replacing the config dropped it, and verifyChecksum
+	// treats an empty expected value as "nothing to check". So one UpdatePlugin
+	// carrying a config without sha256 — which is every config a client writes
+	// by hand — permanently turned off verification of that plugin's binary,
+	// with no error and no log line.
+	//
+	// It is also how a republished archive takes effect: the new checksum lands
+	// here, and every replica's ensureBinary sees its unpacked copy go stale.
 	if req.UpdateConfig {
-		validateErr := ValidateConfig(config, r.pluginsDir)
-		if validateErr != nil {
-			return nil, fmt.Errorf("ValidateConfig: %w", validateErr)
+		prepared, err := r.prepareConfig(ctx, req.Group, req.Name, req.Version, config)
+		if err != nil {
+			return nil, err
 		}
 
-		// Recompute the archive checksum, exactly as Create does.
-		//
-		// Update did not, and the omission disabled integrity checking rather
-		// than reporting anything: the sha256 lives inside the config document,
-		// replacing the config dropped it, and verifyChecksum treats an empty
-		// expected value as "nothing to check". So one UpdatePlugin carrying a
-		// config without sha256 — which is every config a client writes by hand
-		// — permanently turned off verification of that plugin's binary, with
-		// no error and no log line.
-		if r.storage != nil {
-			withChecksum, err := r.attachArchiveChecksum(ctx, req.Group, req.Name, req.Version, config)
-			if err != nil {
-				return nil, fmt.Errorf("r.attachArchiveChecksum: %w", err)
-			}
-
-			config = withChecksum
-		}
+		config = prepared
 	}
 
 	// Built from the mask, so an unselected column is not written at all —
@@ -791,6 +790,80 @@ func (r *Registry) Delete(ctx context.Context, group, name, version string) erro
 	return nil
 }
 
+// prepareConfig completes a plugin config with what the service can work out on
+// its own, then validates it.
+//
+// The command defaults to the entrypoint of the version directory —
+// {plugins_dir}/{group}/{name}/{version}/plugin — which is the only place an
+// archive is ever unpacked to. Making clients spell it out meant every client
+// had to know the server's plugins_dir, and the CLI guessed it from a config
+// file that was not necessarily the server's. An explicit command still wins:
+// a plugin may need arguments.
+//
+// With binary storage the archive checksum is recorded as well; see
+// attachArchiveChecksum.
+func (r *Registry) prepareConfig(
+	ctx context.Context, group, name, version string, config json.RawMessage,
+) (json.RawMessage, error) {
+	withCommand, err := withDefaultCommand(config, filepath.Join(r.pluginsDir, group, name, version, plugarchive.EntrypointName))
+	if err != nil {
+		return nil, err
+	}
+
+	validateErr := ValidateConfig(withCommand, r.pluginsDir)
+	if validateErr != nil {
+		return nil, fmt.Errorf("ValidateConfig: %w", validateErr)
+	}
+
+	if r.storage == nil {
+		return withCommand, nil
+	}
+
+	withChecksum, err := r.attachArchiveChecksum(ctx, group, name, version, withCommand)
+	if err != nil {
+		return nil, fmt.Errorf("r.attachArchiveChecksum: %w", err)
+	}
+
+	return withChecksum, nil
+}
+
+// withDefaultCommand returns config with command set to entrypoint when it has
+// none. An absent config counts as an empty one: with the command derived,
+// group, name and version are all a registration needs.
+func withDefaultCommand(config json.RawMessage, entrypoint string) (json.RawMessage, error) {
+	raw := map[string]any{}
+
+	if len(config) > 0 {
+		err := json.Unmarshal(config, &raw)
+		if err != nil {
+			return nil, fmt.Errorf("%w: json.Unmarshal config: %w", ErrInvalidConfig, err)
+		}
+
+		// "null" unmarshals into a nil map rather than failing.
+		if raw == nil {
+			raw = map[string]any{}
+		}
+	}
+
+	command, present := raw["command"]
+	if present && command != nil {
+		list, isList := command.([]any)
+		if !isList || len(list) > 0 {
+			// Malformed ones included: ValidateConfig reports those.
+			return config, nil
+		}
+	}
+
+	raw["command"] = []string{entrypoint}
+
+	updated, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("json.Marshal: %w", err)
+	}
+
+	return updated, nil
+}
+
 // checkExecutableContained resolves the plugin entrypoint and refuses one that
 // leaves pluginsDir. A plugin with no command is left alone: ValidateConfig
 // rejects that at registration, and rows predating it are not made worse by
@@ -870,11 +943,11 @@ func (p *plugin) Info(_ context.Context) *core.PluginInfo {
 }
 
 // ensureBinary makes the plugin entrypoint available locally. When it is
-// missing and binary storage is configured, the plugin archive is downloaded
-// (concurrent requests for the same plugin are collapsed into a single
-// download), its checksum recorded at registration is verified, and the
-// archive is unpacked into the plugin version directory before anything is
-// ever executed.
+// missing, or was unpacked from an archive the registry no longer records, and
+// binary storage is configured, the plugin archive is downloaded (concurrent
+// requests for the same plugin are collapsed into a single download), its
+// checksum recorded at registration is verified, and the archive is unpacked
+// into the plugin version directory before anything is ever executed.
 func (r *Registry) ensureBinary(ctx context.Context, plug *plugin) error {
 	if r.storage == nil || len(plug.pluginConfig.Command) == 0 {
 		return nil
@@ -882,9 +955,9 @@ func (r *Registry) ensureBinary(ctx context.Context, plug *plugin) error {
 
 	binPath := plug.pluginConfig.Command[0]
 	versionDir := filepath.Dir(binPath)
+	expected := plug.pluginConfig.Sha256
 
-	_, statErr := os.Stat(binPath)
-	if statErr == nil || !os.IsNotExist(statErr) {
+	if unpackedCurrent(binPath, versionDir, expected) {
 		// A cache hit is the signal that this plugin is in demand, and it is the
 		// only one there is: eviction order must reflect use, not download time.
 		r.cache.touch(versionDir)
@@ -898,14 +971,13 @@ func (r *Registry) ensureBinary(ctx context.Context, plug *plugin) error {
 	// error matters. struct{}{} rather than nil so this is not a nil-nil return.
 	_, err, _ := r.downloads.Do(key, func() (any, error) {
 		// Another caller in this flight may already have unpacked it.
-		_, reStatErr := os.Stat(binPath)
-		if reStatErr == nil {
+		if unpackedCurrent(binPath, versionDir, expected) {
 			r.cache.touch(versionDir)
 
 			return struct{}{}, nil
 		}
 
-		unpackErr := r.fetchAndUnpack(ctx, key, versionDir, plug.pluginConfig.Sha256)
+		unpackErr := r.fetchAndUnpack(ctx, key, versionDir, expected)
 		if unpackErr != nil {
 			return struct{}{}, unpackErr
 		}
@@ -921,6 +993,38 @@ func (r *Registry) ensureBinary(ctx context.Context, plug *plugin) error {
 	}
 
 	return nil
+}
+
+// unpackedCurrent reports whether binPath is on disk and was unpacked from the
+// archive the registry currently records.
+//
+// Without this a republished version never reached a replica that had already
+// unpacked it: the entrypoint existed, so the new archive was never fetched,
+// and that replica kept running the old build for as long as its cache kept
+// it. Every replica owns its own volume, so nothing short of a check here
+// would reach all of them.
+//
+// A stat error other than "not there" counts as present, as it always has:
+// exec reports that better than a second download would. A directory without
+// a marker counts as current — it was unpacked before markers existed, from an
+// archive verified against the checksum of the day — and so does a plugin with
+// no recorded checksum, which has nothing to compare against.
+func unpackedCurrent(binPath, versionDir, expected string) bool {
+	_, statErr := os.Stat(binPath)
+	if os.IsNotExist(statErr) {
+		return false
+	}
+
+	if expected == "" {
+		return true
+	}
+
+	recorded, err := os.ReadFile(filepath.Join(versionDir, checksumMarkerName))
+	if err != nil {
+		return os.IsNotExist(err)
+	}
+
+	return strings.TrimSpace(string(recorded)) == expected
 }
 
 // stagingDir returns the directory archives are downloaded into, creating it
@@ -972,40 +1076,119 @@ func (r *Registry) fetchAndUnpack(ctx context.Context, key, versionDir, expected
 		return fmt.Errorf("plugarchive.Unpack: %w", unpackErr)
 	}
 
+	if expectedSha256 == "" {
+		return nil
+	}
+
+	// Best-effort: a directory without a marker counts as current, which is
+	// exactly what these files are, so failing to write one costs at most a
+	// stale copy surviving a later republish — not this request.
+	markerErr := os.WriteFile(filepath.Join(versionDir, checksumMarkerName), []byte(expectedSha256+"\n"), markerPerm)
+	if markerErr != nil {
+		monitor.FromContext(ctx).Warn("failed to write plugin checksum marker", "path", versionDir, "error", markerErr)
+	}
+
 	return nil
 }
 
-// attachArchiveChecksum verifies that the plugin archive has been pushed to
-// binary storage, streams it to compute its sha256 checksum, and returns the
-// plugin config with the checksum recorded. Registration fails when the
-// archive is absent, so a registered plugin always has its artifact.
+// attachArchiveChecksum verifies that the plugin archive is in binary storage
+// and returns the plugin config with the archive's sha256 recorded.
+// Registration fails when the archive is absent, so a registered plugin always
+// has its artifact.
+//
+// A sha256 already in the config is the caller's claim about which archive it
+// means, and registration fails unless the stored object has that checksum.
+// It used to be overwritten unread, and that is how a republished archive
+// became 333 broken plugins: the archives were replaced, re-registration was
+// skipped as "already exists", and each plugin kept the old checksum until a
+// download refused the new file. A claim turns that into an error at publish
+// time, for the one plugin at fault.
 func (r *Registry) attachArchiveChecksum(
 	ctx context.Context, group, name, version string, config json.RawMessage,
 ) (json.RawMessage, error) {
+	var pCfg PluginConfig
+
+	err := json.Unmarshal(config, &pCfg)
+	if err != nil {
+		return nil, fmt.Errorf("%w: json.Unmarshal config: %w", ErrInvalidConfig, err)
+	}
+
+	claimed := strings.ToLower(pCfg.Sha256)
+	if claimed != "" && !isSha256Hex(claimed) {
+		return nil, fmt.Errorf("%w: sha256 must be 64 hex characters, got %q", ErrInvalidConfig, pCfg.Sha256)
+	}
+
 	key := archiveKey(group, name, version)
 
-	reader, _, err := r.storage.Open(ctx, key)
+	actual, err := r.archiveChecksum(ctx, key)
 	if err != nil {
-		exists, existsErr := r.storage.Exists(ctx, key)
-		if existsErr == nil && !exists {
-			return nil, fmt.Errorf("%w: %s (run `easyp-svc plugins push` first)", core.ErrBinaryNotUploaded, key)
-		}
-
-		return nil, fmt.Errorf("%w: open %s: %w", core.ErrStorageUnavailable, key, err)
+		return nil, err
 	}
-	defer func() { _ = reader.Close() }()
 
-	hasher := sha256.New()
-	_, err = io.Copy(hasher, reader)
-	if err != nil {
-		return nil, fmt.Errorf("%w: read %s: %w", core.ErrStorageUnavailable, key, err)
+	if claimed != "" && claimed != actual {
+		return nil, fmt.Errorf(
+			"%w: %s in storage has sha256 %s, the request names %s; upload the archive again",
+			core.ErrChecksumMismatch, key, actual, claimed,
+		)
 	}
-	checksumHex := hex.EncodeToString(hasher.Sum(nil))
 
-	withChecksum, err := configWithChecksum(config, checksumHex)
+	withChecksum, err := configWithChecksum(config, actual)
 	if err != nil {
 		return nil, fmt.Errorf("configWithChecksum: %w", err)
 	}
 
 	return withChecksum, nil
+}
+
+// archiveChecksum returns the sha256 of the archive under key.
+//
+// The uploader's record in the object metadata is used when there is one,
+// which costs a HEAD request; otherwise the object is read through, which for
+// a full catalogue is tens of gigabytes per registration run. Trusting the
+// metadata loses nothing: whoever can set it can replace the object too, and
+// every download is still verified against what is recorded here.
+func (r *Registry) archiveChecksum(ctx context.Context, key string) (string, error) {
+	info, exists, err := r.storage.Stat(ctx, key)
+	if err != nil {
+		return "", fmt.Errorf("%w: stat %s: %w", core.ErrStorageUnavailable, key, err)
+	}
+
+	if !exists {
+		return "", fmt.Errorf("%w: %s (run `easyp-svc plugins publish` first)", core.ErrBinaryNotUploaded, key)
+	}
+
+	recorded := strings.ToLower(info.Sha256)
+	if isSha256Hex(recorded) {
+		return recorded, nil
+	}
+
+	reader, _, err := r.storage.Open(ctx, key)
+	if err != nil {
+		return "", fmt.Errorf("%w: open %s: %w", core.ErrStorageUnavailable, key, err)
+	}
+	defer func() { _ = reader.Close() }()
+
+	hasher := sha256.New()
+
+	_, err = io.Copy(hasher, reader)
+	if err != nil {
+		return "", fmt.Errorf("%w: read %s: %w", core.ErrStorageUnavailable, key, err)
+	}
+
+	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+// isSha256Hex reports whether s is a lowercase hex-encoded sha256.
+func isSha256Hex(s string) bool {
+	if len(s) != sha256.Size*2 {
+		return false
+	}
+
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+
+	return true
 }

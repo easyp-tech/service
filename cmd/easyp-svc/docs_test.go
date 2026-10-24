@@ -40,7 +40,7 @@ func TestReadmeNamesOnlyRealVariables(t *testing.T) {
 
 	// Real names that are not settings of this Config, so the check does not
 	// reject the README for documenting them: the client's credential, the
-	// compose-level variables, and the ones `task push-archives` reads.
+	// compose-level variables, and the ones `task publish-archives` reads.
 	for _, name := range []string{
 		"EASYP_TOKEN",
 		"EASYP_SERVICE_VERSION",

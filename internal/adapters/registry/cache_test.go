@@ -177,7 +177,7 @@ func TestEvictionLeavesArchiveInStorage(t *testing.T) {
 
 	assert.NoFileExists(t, binPath, "the aged entry should have been evicted")
 
-	stillStored, err := store.Exists(t.Context(), key)
+	_, stillStored, err := store.Stat(t.Context(), key)
 	require.NoError(t, err)
 	assert.True(t, stillStored, "eviction must not touch object storage")
 

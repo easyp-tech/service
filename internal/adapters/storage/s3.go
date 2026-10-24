@@ -25,6 +25,11 @@ import (
 // stay executable even when the service runs under a different account.
 const cacheDirPermissions = 0o755
 
+// MetadataSha256 is the user-metadata key (x-amz-meta-sha256) under which the
+// uploader records the hex sha256 of a plugin archive. It lets registration
+// learn the checksum from a HEAD request instead of reading the whole object.
+const MetadataSha256 = "sha256"
+
 // ErrBucketRequired is returned when no bucket was configured.
 var ErrBucketRequired = errors.New("s3 bucket cannot be empty")
 
@@ -166,9 +171,10 @@ func (s *S3Storage) Open(ctx context.Context, key string) (io.ReadCloser, int64,
 	return output.Body, aws.ToInt64(output.ContentLength), nil
 }
 
-// UploadFile stores the file at localPath under key.
-// Used by the CLI push command only; the service never uploads.
-func (s *S3Storage) UploadFile(ctx context.Context, key string, localPath string) error {
+// UploadFile stores the file at localPath under key, recording sha256 — the
+// hex checksum of the file — in the object metadata (see MetadataSha256).
+// Used by the CLI publish command only; the service never uploads.
+func (s *S3Storage) UploadFile(ctx context.Context, key string, localPath string, sha256 string) error {
 	file, err := os.Open(localPath)
 	if err != nil {
 		return fmt.Errorf("os.Open: %w", err)
@@ -178,15 +184,50 @@ func (s *S3Storage) UploadFile(ctx context.Context, key string, localPath string
 	fullKey := s.formatKey(key)
 
 	_, err = s.client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(s.bucket),
-		Key:    aws.String(fullKey),
-		Body:   file,
+		Bucket:   aws.String(s.bucket),
+		Key:      aws.String(fullKey),
+		Body:     file,
+		Metadata: map[string]string{MetadataSha256: sha256},
 	})
 	if err != nil {
 		return fmt.Errorf("s3.PutObject: %w", err)
 	}
 
 	return nil
+}
+
+// Stat describes the object under key with a HEAD request.
+func (s *S3Storage) Stat(ctx context.Context, key string) (core.ObjectInfo, bool, error) {
+	fullKey := s.formatKey(key)
+
+	output, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(fullKey),
+	})
+	if err != nil {
+		if _, ok := errors.AsType[*types.NotFound](err); ok {
+			return core.ObjectInfo{}, false, nil
+		}
+
+		return core.ObjectInfo{}, false, fmt.Errorf("s3.HeadObject: %w", err)
+	}
+
+	return core.ObjectInfo{
+		Size:   aws.ToInt64(output.ContentLength),
+		Sha256: metadataSha256(output.Metadata),
+	}, true, nil
+}
+
+// metadataSha256 looks the checksum up regardless of key case. S3 lowercases
+// the keys it returns, but S3-compatible stores do not all agree on that.
+func metadataSha256(metadata map[string]string) string {
+	for k, v := range metadata {
+		if strings.EqualFold(k, MetadataSha256) {
+			return v
+		}
+	}
+
+	return ""
 }
 
 // Exists reports whether a key exists in S3.

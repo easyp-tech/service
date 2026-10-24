@@ -669,7 +669,7 @@ const maxConfigFileSize = 1 << 20
 //
 // It is a struct rather than four return values because the callers that need
 // the diagnostics are exactly the ones that used to drop them. With `_` in the
-// third position, `config print` and `plugins push` each silently discarded the
+// third position, `config print` and `plugins push` (now `plugins publish`) each silently discarded the
 // warnings they existed to surface; with a field, ignoring it has to be written
 // down on purpose.
 type Result struct {
@@ -704,7 +704,7 @@ type Result struct {
 // environmentLookuper.
 //
 // This is the only way the service and the CLI build a Config from a file: both
-// must see the same settings, or "plugins push" would talk to one store while
+// must see the same settings, or "plugins publish" would talk to one store while
 // the server read from another.
 //
 // The order is carried by an explicit merge rather than by layering the

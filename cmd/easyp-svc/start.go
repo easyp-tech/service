@@ -212,7 +212,7 @@ func configSource(cfgPath string) string {
 //
 // Both branches end at the same place on purpose: settings resolve identically
 // whether the service was pointed at a file or handed an environment, and the
-// file path uses the very call "plugins push" uses, so the two cannot disagree
+// file path uses the very call "plugins publish" uses, so the two cannot disagree
 // about which store or which database they are talking to.
 func loadConfig(ctx context.Context, cfgPath string, log *slog.Logger) (config.Result, error) {
 	var (

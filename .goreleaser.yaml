@@ -2,7 +2,7 @@ version: 2
 
 project_name: easyp-svc
 
-# The CLI is also a client tool: auth new-token, plugins pack/push, config
+# The CLI is also a client tool: auth new-token, plugins build/publish, config
 # validate all run on operator machines, not just in the container. The
 # binaries here are for those machines; the Docker image compiles its own copy
 # in the Dockerfile (buildx cross-compile, no QEMU) — both stamp the same

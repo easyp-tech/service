@@ -23,14 +23,18 @@ import (
 
 // fakeStorage is an in-memory core.BinaryStorage used in tests.
 type fakeStorage struct {
-	mu        sync.RWMutex
+	mu sync.RWMutex
+	// objects and checksums are keyed alike; a checksum is what an uploader
+	// recorded in the object metadata, absent for an archive pushed without one.
 	objects   map[string][]byte
+	checksums map[string]string
 	downloads atomic.Int64
+	opens     atomic.Int64
 	failWith  error
 }
 
 func newFakeStorage() *fakeStorage {
-	return &fakeStorage{objects: make(map[string][]byte)}
+	return &fakeStorage{objects: make(map[string][]byte), checksums: make(map[string]string)}
 }
 
 func (f *fakeStorage) Download(_ context.Context, key string, localPath string) error {
@@ -61,6 +65,8 @@ func (f *fakeStorage) Download(_ context.Context, key string, localPath string) 
 }
 
 func (f *fakeStorage) Open(_ context.Context, key string) (io.ReadCloser, int64, error) {
+	f.opens.Add(1)
+
 	if f.failWith != nil {
 		return nil, 0, f.failWith
 	}
@@ -75,16 +81,20 @@ func (f *fakeStorage) Open(_ context.Context, key string) (io.ReadCloser, int64,
 	return io.NopCloser(bytes.NewReader(data)), int64(len(data)), nil
 }
 
-func (f *fakeStorage) Exists(_ context.Context, key string) (bool, error) {
+func (f *fakeStorage) Stat(_ context.Context, key string) (core.ObjectInfo, bool, error) {
 	if f.failWith != nil {
-		return false, f.failWith
+		return core.ObjectInfo{}, false, f.failWith
 	}
 
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	_, ok := f.objects[key]
 
-	return ok, nil
+	data, ok := f.objects[key]
+	if !ok {
+		return core.ObjectInfo{}, false, nil
+	}
+
+	return core.ObjectInfo{Size: int64(len(data)), Sha256: f.checksums[key]}, true, nil
 }
 
 func (f *fakeStorage) Delete(_ context.Context, key string) error {
@@ -396,6 +406,16 @@ func (f *fakeStorage) put(key string, data []byte) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.objects[key] = bytes.Clone(data)
+	delete(f.checksums, key)
+}
+
+// putWithChecksum stores data the way plugins publish does: with its sha256 in
+// the object metadata.
+func (f *fakeStorage) putWithChecksum(key string, data []byte, checksum string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.objects[key] = bytes.Clone(data)
+	f.checksums[key] = checksum
 }
 
 // TestValidateConfigExecutableContainment covers the rule that decides what a
@@ -504,9 +524,10 @@ func TestUpdateValidatesConfigOnlyWhenSelected(t *testing.T) {
 
 	r := &Registry{pluginsDir: t.TempDir()}
 
-	// Config selected but absent — still refused, as before.
+	// Config selected and invalid — refused before the query.
 	_, err := r.Update(context.Background(), core.UpdatePluginRequest{
 		Group: "grpc", Name: "go", Version: "v1.5.1",
+		Config:       json.RawMessage(`{"command":["/bin/sh"]}`),
 		UpdateConfig: true,
 	})
 	require.ErrorIs(t, err, core.ErrInvalidConfig)

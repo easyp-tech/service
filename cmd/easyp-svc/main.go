@@ -6,11 +6,13 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/urfave/cli/v3"
 
 	"github.com/easyp-tech/service/internal/adapters/storage"
+	"github.com/easyp-tech/service/sdk"
 )
 
 // Flag and argument names shared by several plugin subcommands.
@@ -18,7 +20,6 @@ const (
 	flagCfg            = "cfg"
 	envCfg             = "EASYP_CONFIG"
 	flagFilter         = "filter"
-	flagPacked         = "packed"
 	flagParallel       = "parallel"
 	flagForce          = "force"
 	flagDryRun         = "dry-run"
@@ -28,8 +29,6 @@ const (
 	flagTLSKey         = "tls-key"
 	flagInsecure       = "insecure"
 	flagToken          = "token"
-
-	argPath = "[path]"
 
 	usageNonInteractive = "disable interactive UI and dynamic progress bars"
 )
@@ -246,168 +245,139 @@ func getServiceCommand() *cli.Command {
 func getPluginsCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "plugins",
-		Usage: "Manage plugins",
+		Usage: "Build and publish plugins",
 		Commands: []*cli.Command{
 			getPluginsBuildCommand(),
-			getPluginsPackCommand(),
-			getPluginsPushCommand(),
-			getPluginsRegisterCommand(),
+			getPluginsPublishCommand(),
 		},
 	}
 }
 
-func getPluginsPackCommand() *cli.Command {
+func getPluginsPublishCommand() *cli.Command {
 	return &cli.Command{
-		Name:  "pack",
-		Usage: "Pack built plugin version directories into tar.gz archives on disk",
-		Description: "Writes each plugin version directory to {out}/{group}/{name}/{version}/plugin.tgz. " +
-			"The layout mirrors the S3 object keys used by `plugins push`, so a packed tree can be " +
-			"uploaded as-is later. Existing archives are skipped unless --force is set.",
-		ArgsUsage: argPath,
-		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:     "out",
-				Usage:    "directory to write archives to",
-				Required: true,
-			},
-			&cli.StringFlag{
-				Name:  flagFilter,
-				Usage: "glob filter pattern for plugins (e.g. 'protocolbuffers/*' or 'grpc/go:v1.6.2')",
-				Value: "",
-			},
-			&cli.BoolFlag{
-				Name:  flagForce,
-				Usage: "re-pack even if the archive already exists",
-				Value: false,
-			},
-			&cli.BoolFlag{
-				Name:  flagDryRun,
-				Usage: "print the pack plan without writing archives",
-				Value: false,
-			},
-			&cli.BoolFlag{
-				Name:  flagNonInteractive,
-				Usage: usageNonInteractive,
-				Value: false,
-			},
-		},
+		Name:  "publish",
+		Usage: "Build, verify, upload and register plugin versions with a running service",
+		Description: "Takes each version through in one pass: build it from the registry (or take its " +
+			"plugin.tgz from --archives), verify it, upload the archive to object storage with its sha256, " +
+			"register it — creating it, or replacing the config of a version the service already has — and " +
+			"delete it from the work directory. Unless --force is set, a version already in storage is not " +
+			"rebuilt: it is skipped when registered and only registered when not. An upload is skipped " +
+			"whenever storage already holds the same archive. With --plugins-dir the archive is unpacked " +
+			"into that directory instead of uploaded, for a service on the same host running without object " +
+			"storage; given neither a registry nor --archives, that directory is the source, and what is " +
+			"already unpacked there is registered. Needs a v1.2.0 or newer server.",
+		ArgsUsage: "[registry-path]",
+		Flags:     publishFlags(),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
-			scanPath := defaultPluginsScanPath
-			if args := cmd.Args().Slice(); len(args) >= 1 {
-				scanPath = args[0]
-			}
-
-			return runPluginsPack(ctx, packOptions{
-				scanPath:       scanPath,
-				outDir:         cmd.String("out"),
+			opts := publishOptions{
+				registryPath:   cmd.Args().First(),
+				archivesDir:    cmd.String("archives"),
+				pluginsDir:     cmd.String("plugins-dir"),
+				workDir:        cmd.String("workdir"),
+				keep:           cmd.Bool("keep"),
 				filter:         cmd.String(flagFilter),
 				force:          cmd.Bool(flagForce),
 				dryRun:         cmd.Bool(flagDryRun),
 				nonInteractive: cmd.Bool(flagNonInteractive),
-			})
-		},
-	}
-}
-
-func getPluginsPushCommand() *cli.Command {
-	return &cli.Command{
-		Name:  "push",
-		Usage: "Upload built plugin archives to S3 binary storage",
-		Description: "Packs each plugin version directory into a tar.gz and uploads it to " +
-			"{group}/{name}/{version}/plugin.tgz. With --packed the path is instead a tree " +
-			"already written by `plugins pack`, whose archives are uploaded as they are. " +
-			"Run before `plugins register`: the service records the archive checksum at " +
-			"registration time. Re-pushing an already registered plugin with --force " +
-			"invalidates its recorded checksum — re-register it.",
-		ArgsUsage: argPath,
-		Flags:     pushFlags(),
-		Action: func(ctx context.Context, cmd *cli.Command) error {
-			scanPath := defaultPluginsScanPath
-			if args := cmd.Args().Slice(); len(args) >= 1 {
-				scanPath = args[0]
-			}
-
-			s3Opts, err := resolveS3Options(
-				ctx,
-				cmd.String(flagCfg),
-				storage.S3Options{
-					Endpoint:       cmd.String("endpoint"),
-					Bucket:         cmd.String("bucket"),
-					Region:         cmd.String("region"),
-					Prefix:         cmd.String("prefix"),
-					ForcePathStyle: cmd.Bool("force-path-style"),
-				},
-				cmd.IsSet("force-path-style"),
-			)
-			if err != nil {
-				return err
-			}
-
-			return runPluginsPush(ctx, pushOptions{
-				scanPath:       scanPath,
-				filter:         cmd.String(flagFilter),
-				s3:             s3Opts,
-				packed:         cmd.Bool(flagPacked),
+				buildParallel:  cmd.Int("build-parallel"),
 				parallel:       cmd.Int(flagParallel),
-				force:          cmd.Bool(flagForce),
-				dryRun:         cmd.Bool(flagDryRun),
-				nonInteractive: cmd.Bool(flagNonInteractive),
-			})
-		},
-	}
-}
-
-func getPluginsRegisterCommand() *cli.Command {
-	return &cli.Command{
-		Name:  "register",
-		Usage: "Register built plugin binaries with a running service via CreatePlugin",
-		Description: "Sends metadata and a command path for every plugin version found under the path. " +
-			"With --packed the path is a tree written by `plugins pack`, which names the same versions " +
-			"without holding their binaries — enough to register a catalogue from a machine that never " +
-			"built it, as long as the archives are already in storage.",
-		ArgsUsage: argPath,
-		Flags:     registerFlags(),
-		Action: func(ctx context.Context, cmd *cli.Command) error {
-			scanPath := defaultPluginsScanPath
-			if args := cmd.Args().Slice(); len(args) >= 1 {
-				scanPath = args[0]
+				verify: verifyOptions{
+					runtimeImage: cmd.String("runtime-image"),
+					smoke:        !cmd.Bool("no-smoke"),
+				},
 			}
 
-			pluginsPrefix, err := resolvePluginsPrefix(
-				cmd.String(flagCfg),
-				cmd.String("plugins-prefix"),
-				cmd.IsSet("plugins-prefix"),
-			)
+			dest, err := publishDestination(ctx, cmd, opts)
 			if err != nil {
 				return err
 			}
 
-			return runPluginsRegister(ctx, registerOptions{
-				scanPath:      scanPath,
-				addr:          cmd.String("addr"),
-				filter:        cmd.String(flagFilter),
-				pluginsPrefix: pluginsPrefix,
-				token:         resolveWriteToken(cmd.String(flagToken)),
-				tls: clientTLSOptions{
+			connect := func() (pluginService, func(), error) {
+				return connectService(cmd.String("addr"), resolveWriteToken(cmd.String(flagToken)), clientTLSOptions{
 					caFile:   cmd.String(flagTLSCA),
 					certFile: cmd.String(flagTLSCert),
 					keyFile:  cmd.String(flagTLSKey),
 					insecure: cmd.Bool(flagInsecure),
-				},
-				packed:         cmd.Bool(flagPacked),
-				parallel:       cmd.Int(flagParallel),
-				nonInteractive: cmd.Bool(flagNonInteractive),
-				dryRun:         cmd.Bool(flagDryRun),
-				failOnError:    cmd.Bool("fail-on-error"),
-			})
+				})
+			}
+
+			return runPluginsPublish(ctx, opts, dest, connect)
 		},
 	}
 }
 
+// publishDestination resolves where publish puts archives: the plugins_dir
+// given, or object storage configured by flags and --cfg.
+//
+//nolint:ireturn // destination is the seam between the two modes
+func publishDestination(ctx context.Context, cmd *cli.Command, opts publishOptions) (destination, error) {
+	if opts.pluginsDir != "" {
+		return dirDestination{root: opts.pluginsDir}, nil
+	}
+
+	s3Opts, err := resolveS3Options(
+		ctx,
+		cmd.String(flagCfg),
+		storage.S3Options{
+			Endpoint:       cmd.String("endpoint"),
+			Bucket:         cmd.String("bucket"),
+			Region:         cmd.String("region"),
+			Prefix:         cmd.String("prefix"),
+			ForcePathStyle: cmd.Bool("force-path-style"),
+		},
+		cmd.IsSet("force-path-style"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if opts.dryRun {
+		return storageDestination{bucket: s3Opts.Bucket, prefix: s3Opts.Prefix}, nil
+	}
+
+	if s3Opts.Bucket == "" {
+		return nil, ErrS3BucketRequired
+	}
+
+	store, err := storage.NewS3Storage(ctx, s3Opts)
+	if err != nil {
+		return nil, fmt.Errorf("storage.NewS3Storage: %w", err)
+	}
+
+	return storageDestination{store: store, bucket: s3Opts.Bucket, prefix: s3Opts.Prefix}, nil
+}
+
+// connectService opens a client to the service. Mutating calls need a token;
+// an empty one is passed through deliberately, since the server's rejection
+// names the problem better than a client-side guess would.
+//
+//nolint:ireturn // pluginService is the seam tests replace
+func connectService(addr, token string, tls clientTLSOptions) (pluginService, func(), error) {
+	tlsOpt, err := tls.sdkOption()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	sdkOpts := []sdk.Option{tlsOpt}
+	if token != "" {
+		sdkOpts = append(sdkOpts, sdk.WithToken(token))
+	}
+
+	client, err := sdk.NewClient(addr, sdkOpts...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to connect to gRPC server at %s: %w", addr, err)
+	}
+
+	return client, func() { _ = client.Close() }, nil
+}
+
 func getPluginsBuildCommand() *cli.Command {
 	return &cli.Command{
-		Name:      "build",
-		Usage:     "Build plugin binaries from registry Dockerfiles",
+		Name:  "build",
+		Usage: "Build plugin binaries from registry Dockerfiles, without uploading anything",
+		Description: "Builds and verifies each version into --output: an unpacked bundle by default, or with " +
+			"--archive only its verified {group}/{name}/{version}/plugin.tgz — the tree `plugins publish " +
+			"--archives` takes, for building on one machine and publishing from another.",
 		ArgsUsage: "<registry-path>",
 		Flags:     buildFlags(),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -416,52 +386,74 @@ func getPluginsBuildCommand() *cli.Command {
 				return ErrMissingRegistryPath
 			}
 
-			return runPluginsBuild(
-				ctx,
-				args[0],
-				cmd.String("output"),
-				cmd.String(flagFilter),
-				cmd.Int("parallel"),
-				cmd.Bool(flagForce),
-				cmd.Bool(flagDryRun),
-				cmd.Bool(flagNonInteractive),
-				cmd.Bool("keep-going"),
-				verifyOptions{
+			return runPluginsBuild(ctx, buildOptions{
+				registryPath:   args[0],
+				outputDir:      cmd.String("output"),
+				filter:         cmd.String(flagFilter),
+				parallel:       cmd.Int(flagParallel),
+				force:          cmd.Bool(flagForce),
+				dryRun:         cmd.Bool(flagDryRun),
+				nonInteractive: cmd.Bool(flagNonInteractive),
+				keepGoing:      cmd.Bool("keep-going"),
+				archive:        cmd.Bool("archive"),
+				verify: verifyOptions{
 					runtimeImage: cmd.String("runtime-image"),
 					smoke:        !cmd.Bool("no-smoke"),
 				},
-			)
+			})
 		},
 	}
 }
 
-// pushFlags defines the flags of the corresponding subcommand.
-func pushFlags() []cli.Flag {
-	return append(s3Flags(), []cli.Flag{
+// publishFlags defines the flags of the corresponding subcommand.
+func publishFlags() []cli.Flag {
+	flags := []cli.Flag{
+		&cli.StringFlag{
+			Name:  "archives",
+			Usage: "publish the {group}/{name}/{version}/plugin.tgz tree in this directory instead of building",
+			Value: "",
+		},
+		&cli.StringFlag{
+			Name: "plugins-dir",
+			Usage: "unpack into this directory instead of uploading; it must be the plugins_dir of a service " +
+				"running without object storage. With no other source, register what is already in it",
+			Value: "",
+		},
+		&cli.StringFlag{
+			Name:  "workdir",
+			Usage: "where versions are built; each is removed once published",
+			Value: filepath.Join(os.TempDir(), "easyp-publish"),
+		},
+		&cli.BoolFlag{
+			Name:  "keep",
+			Usage: "leave built versions in --workdir after publishing them",
+			Value: false,
+		},
 		&cli.StringFlag{
 			Name:  flagFilter,
 			Usage: "glob filter pattern for plugins (e.g. 'protocolbuffers/*' or 'grpc/go:v1.6.2')",
 			Value: "",
 		},
 		&cli.BoolFlag{
-			Name:  flagPacked,
-			Usage: "the path is a tree of archives written by `plugins pack`, not built plugin directories",
+			Name:  flagForce,
+			Usage: "publish versions the service already has, rebuilding them and replacing their config",
 			Value: false,
+		},
+		&cli.IntFlag{
+			Name:  "build-parallel",
+			Usage: "number of concurrent docker builds",
+			Value: defaultBuildParallel,
 		},
 		&cli.IntFlag{
 			Name:    flagParallel,
 			Aliases: []string{"p"},
-			Usage:   "archives to upload at once; storage usually caps a single connection, so more streams means more throughput",
-			Value:   defaultPushParallel,
-		},
-		&cli.BoolFlag{
-			Name:  flagForce,
-			Usage: "re-upload even if the archive already exists in storage",
-			Value: false,
+			Usage: "versions uploading and registering at once; storage usually caps a single connection, " +
+				"so more streams is more throughput, up to the server's rate_limit.max_concurrent_per_ip",
+			Value: defaultPublishParallel,
 		},
 		&cli.BoolFlag{
 			Name:  flagDryRun,
-			Usage: "print the upload plan without contacting storage",
+			Usage: "list what would be published without building or contacting anything",
 			Value: false,
 		},
 		&cli.BoolFlag{
@@ -469,7 +461,12 @@ func pushFlags() []cli.Flag {
 			Usage: usageNonInteractive,
 			Value: false,
 		},
-	}...)
+	}
+
+	flags = append(flags, verifyFlags()...)
+	flags = append(flags, s3Flags()...)
+
+	return append(flags, connectionFlags()...)
 }
 
 // s3Flags defines where and with what credentials a command reaches object
@@ -507,9 +504,10 @@ func s3Flags() []cli.Flag {
 	}
 }
 
-// registerFlags defines the flags of the corresponding subcommand.
-func registerFlags() []cli.Flag {
-	return append([]cli.Flag{
+// connectionFlags defines how a client command reaches and authenticates to the
+// service: transport security first, then the credential.
+func connectionFlags() []cli.Flag {
+	return []cli.Flag{
 		&cli.StringFlag{
 			Name: "addr",
 			// The service's own default. 8080 is what the Helm chart maps the
@@ -519,51 +517,6 @@ func registerFlags() []cli.Flag {
 			Usage: "gRPC server address (the chart publishes gRPC on 8080)",
 			Value: "localhost:23410",
 		},
-		cfgFlag("path to service config YAML; registry.plugins_dir is used as --plugins-prefix when that flag is not set"),
-		&cli.StringFlag{
-			Name:  flagFilter,
-			Usage: "glob filter pattern for plugins (e.g. 'connectrpc/*')",
-			Value: "",
-		},
-		&cli.BoolFlag{
-			Name:  flagPacked,
-			Usage: "the path is a tree of archives written by `plugins pack`, not built plugin directories",
-			Value: false,
-		},
-		&cli.IntFlag{
-			Name:    flagParallel,
-			Aliases: []string{"p"},
-			Usage: "plugins to register at once; the server reads each archive from storage to checksum it, " +
-				"so this is worth raising, up to the server's rate_limit.max_concurrent_per_ip",
-			Value: defaultRegisterParallel,
-		},
-		&cli.BoolFlag{
-			Name:  flagNonInteractive,
-			Usage: usageNonInteractive,
-			Value: false,
-		},
-		&cli.BoolFlag{
-			Name:  flagDryRun,
-			Usage: "scan and print planned CreatePlugin commands without contacting the server",
-			Value: false,
-		},
-		&cli.BoolFlag{
-			Name:  "fail-on-error",
-			Usage: "exit with error if any plugin failed registration",
-			Value: true,
-		},
-		&cli.StringFlag{
-			Name:  "plugins-prefix",
-			Usage: "prefix directory for plugins on the server (overrides registry.plugins_dir from --cfg)",
-			Value: defaultPluginsPrefix,
-		},
-	}, connectionFlags()...)
-}
-
-// connectionFlags defines how a client command reaches and authenticates to the
-// service: transport security first, then the credential.
-func connectionFlags() []cli.Flag {
-	return []cli.Flag{
 		&cli.StringFlag{
 			Name:  flagTLSCA,
 			Usage: "PEM bundle of the CA that signed the server certificate (default: system trust store)",
@@ -586,7 +539,7 @@ func connectionFlags() []cli.Flag {
 		},
 		&cli.StringFlag{
 			Name:  flagToken,
-			Usage: "write token authorising CreatePlugin (falls back to " + writeTokenEnv + ")",
+			Usage: "write token authorising plugin registration (falls back to " + writeTokenEnv + ")",
 			Value: "",
 		},
 	}
@@ -594,7 +547,7 @@ func connectionFlags() []cli.Flag {
 
 // buildFlags defines the flags of the corresponding subcommand.
 func buildFlags() []cli.Flag {
-	return []cli.Flag{
+	return append([]cli.Flag{
 		&cli.StringFlag{
 			Name:    "output",
 			Aliases: []string{"o"},
@@ -613,8 +566,9 @@ func buildFlags() []cli.Flag {
 			Value:   defaultBuildParallel,
 		},
 		&cli.BoolFlag{
-			Name:  flagForce,
-			Usage: "rebuild even if the binary already exists",
+			Name: flagForce,
+			Usage: "rebuild even if the version is already built; a version built by an older easyp-svc " +
+				"was not verified the way this one verifies, and is only rebuilt with this",
 			Value: false,
 		},
 		&cli.BoolFlag{
@@ -632,6 +586,17 @@ func buildFlags() []cli.Flag {
 			Usage: "continue building remaining plugins after a failure",
 			Value: true,
 		},
+		&cli.BoolFlag{
+			Name:  "archive",
+			Usage: "keep only each version's verified plugin.tgz, the tree `plugins publish --archives` takes",
+			Value: false,
+		},
+	}, verifyFlags()...)
+}
+
+// verifyFlags controls the check every built version goes through.
+func verifyFlags() []cli.Flag {
+	return []cli.Flag{
 		&cli.StringFlag{
 			Name: "runtime-image",
 			Usage: "image each built plugin is smoke-tested in; must match the base of the " +
