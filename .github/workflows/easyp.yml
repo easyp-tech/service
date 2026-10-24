@@ -20,7 +20,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: EasyP Lint
         uses: easyp-tech/actions/lint@v1.1.1
         with:
@@ -36,7 +36,7 @@ jobs:
     if: github.ref_type != 'tag'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: EasyP Breaking
