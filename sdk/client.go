@@ -256,8 +256,10 @@ func (c *Client) DeletePlugin(ctx context.Context, group, name, version string) 
 
 // CreatePlugin registers a new plugin in the service.
 // When S3 binary storage is enabled on the service, the plugin archive must
-// be pushed to storage beforehand (easyp-svc plugins push): the service
+// be in storage beforehand (easyp-svc plugins publish does both): the service
 // verifies its presence and records its sha256 checksum at registration.
+// A v1.2.0 or newer service derives "command" when the config leaves it out,
+// and refuses a "sha256" in the config that the stored archive does not have.
 func (c *Client) CreatePlugin(
 	ctx context.Context,
 	group, name, version string,

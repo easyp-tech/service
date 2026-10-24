@@ -63,9 +63,9 @@ worker_pool:
 rate_limit:
   requests_per_second: 50.0
   burst: 100
-  # Also the ceiling for `plugins register --parallel`: past this the server
+  # Also the ceiling for `plugins publish --parallel`: past this the server
   # refuses with ResourceExhausted, which the SDK does not retry — overload is
-  # a refusal the service means — so register reports each one as an error.
+  # a refusal the service means — so publish backs off and tries again.
   max_concurrent_per_ip: 10
 
 # See config.community.dev.yml for why this is written down empty rather than

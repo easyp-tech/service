@@ -428,6 +428,15 @@ type CreatePluginRequest struct {
 	// Version of the plugin.
 	Version string `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
 	// Optional plugin configuration.
+	//
+	// Keys the service reads:
+	//   - `command`: the plugin command line. Defaults to the entrypoint the
+	//     service unpacks the archive to, `{plugins_dir}/{group}/{name}/{version}/plugin`;
+	//     when given, `command[0]` must name an executable inside plugins_dir.
+	//   - `sha256`: hex sha256 of the archive in storage. When given, registration
+	//     fails unless the stored archive has exactly this checksum; when not, the
+	//     service records the stored archive's checksum itself.
+	//   - `env`, `timeout`: the plugin's environment and run time limit.
 	Config *structpb.Struct `protobuf:"bytes,4,opt,name=config,proto3" json:"config,omitempty"`
 	// Tags for the plugin.
 	Tags          []string `protobuf:"bytes,5,rep,name=tags,proto3" json:"tags,omitempty"`
@@ -557,9 +566,10 @@ type UpdatePluginRequest struct {
 	Version string `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
 	// New plugin configuration.
 	//
-	// Replaces the existing config when `update_mask` selects it. Note that a
-	// config is validated on the way in: `command[0]` must name the plugin
-	// executable inside the service's plugins directory.
+	// Replaces the existing config when `update_mask` selects it, with the same
+	// keys and defaults as `CreatePluginRequest.config`. Replacing the config is
+	// also how a republished archive takes effect: every replica refetches a
+	// plugin whose recorded `sha256` changed.
 	Config *structpb.Struct `protobuf:"bytes,4,opt,name=config,proto3" json:"config,omitempty"`
 	// New tags. Replaces the existing tags when `update_mask` selects them.
 	Tags []string `protobuf:"bytes,5,rep,name=tags,proto3" json:"tags,omitempty"`

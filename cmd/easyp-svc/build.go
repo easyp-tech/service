@@ -17,6 +17,8 @@ import (
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
+
+	"github.com/easyp-tech/service/internal/plugarchive"
 )
 
 const (
@@ -30,8 +32,12 @@ const (
 	buildLogName          = "build.log"
 	pluginConfigName      = "plugin.yaml"
 	pluginBinaryName      = "plugin"
-	stalledNameWidth      = 50
-	maxPanelRows          = 15
+	// bundleDirName is where an archive-only build unpacks the image output
+	// before it is packed: inside the version directory, so the archive can be
+	// renamed into place, and one level too deep to be mistaken for a version.
+	bundleDirName    = ".bundle"
+	stalledNameWidth = 50
+	maxPanelRows     = 15
 )
 
 var (
@@ -119,43 +125,96 @@ type buildJob struct {
 	dockerfile string
 	args       []string
 	pluginDir  string
-	outputDir  string
-	smoke      smokeConfig
+	// outputDir is the version directory a build reports into: its build.log,
+	// and its result unless workDir and archivePath say otherwise.
+	outputDir string
+	// workDir, when set, is where the image output is unpacked instead of
+	// outputDir. It is scratch space, removed once the build is over.
+	workDir string
+	// archivePath, when set, is where the verified archive is kept. Without it
+	// the archive is only a check and is discarded.
+	archivePath string
+	smoke       smokeConfig
 }
 
 func (j buildJob) key() string {
 	return fmt.Sprintf("%s/%s:%s", j.group, j.name, j.version)
 }
 
+// bundleDir is where the image output is unpacked.
+func (j buildJob) bundleDir() string {
+	if j.workDir != "" {
+		return j.workDir
+	}
+
+	return j.outputDir
+}
+
 // cached reports whether the plugin version has already been built.
-// The canonical artifact is always a regular file at <outputDir>/plugin;
-// a directory of that name means a broken build, not a cached one.
+// The canonical artifact is a regular file: the archive for an archive-only
+// build, <outputDir>/plugin otherwise. A directory of that name means a broken
+// build, not a cached one.
+//
+// Only presence is checked. A version built by an older easyp-svc is taken as
+// built even though it was never verified the way this one verifies; --force
+// rebuilds it.
 func (j buildJob) cached() bool {
-	info, err := os.Stat(filepath.Join(j.outputDir, pluginBinaryName))
+	artifact := filepath.Join(j.outputDir, pluginBinaryName)
+	if j.archivePath != "" {
+		artifact = j.archivePath
+	}
+
+	info, err := os.Stat(artifact)
 
 	return err == nil && info.Mode().IsRegular()
 }
 
-func runPluginsBuild(
-	ctx context.Context,
-	registryPath string,
-	outputDir string,
-	filter string,
-	parallel int,
-	force bool,
-	dryRun bool,
-	nonInteractive bool,
-	keepGoing bool,
-	verify verifyOptions,
-) error {
+// asArchiveJobs turns jobs into archive-only builds: the image output goes to
+// a scratch directory inside each version directory and only the verified
+// plugin.tgz stays, in the layout object storage uses.
+func asArchiveJobs(jobs []buildJob) []buildJob {
+	out := make([]buildJob, len(jobs))
+
+	for i, job := range jobs {
+		job.workDir = filepath.Join(job.outputDir, bundleDirName)
+		job.archivePath = filepath.Join(job.outputDir, plugarchive.ArchiveName)
+		out[i] = job
+	}
+
+	return out
+}
+
+// buildOptions holds the resolved inputs of the plugins build command.
+type buildOptions struct {
+	registryPath   string
+	outputDir      string
+	filter         string
+	parallel       int
+	force          bool
+	dryRun         bool
+	nonInteractive bool
+	keepGoing      bool
+	// archive keeps only the verified {group}/{name}/{version}/plugin.tgz of
+	// each version, the tree `plugins publish --archives` takes.
+	archive bool
+	verify  verifyOptions
+}
+
+func runPluginsBuild(ctx context.Context, opts buildOptions) error {
+	registryPath, filter, parallel := opts.registryPath, opts.filter, max(opts.parallel, 1)
+
 	err := validateRegistryDir(registryPath)
 	if err != nil {
 		return err
 	}
 
-	jobs, skipped, err := scanBuildJobs(registryPath, outputDir, filter)
+	jobs, skipped, err := scanBuildJobs(registryPath, opts.outputDir, filter)
 	if err != nil {
 		return err
+	}
+
+	if opts.archive {
+		jobs = asArchiveJobs(jobs)
 	}
 
 	total := len(jobs) + len(skipped)
@@ -165,10 +224,10 @@ func runPluginsBuild(
 		return nil
 	}
 
-	toBuild, cached := splitCached(jobs, force)
+	toBuild, cached := splitCached(jobs, opts.force)
 	printBuildPlan(registryPath, filter, total, len(toBuild), cached, len(skipped), parallel)
 
-	if reportNothingToBuild(toBuild, skipped, dryRun) {
+	if reportNothingToBuild(toBuild, skipped, opts.dryRun) {
 		return nil
 	}
 
@@ -177,11 +236,11 @@ func runPluginsBuild(
 		return err
 	}
 
-	interactive := !nonInteractive && term.IsTerminal(int(os.Stdout.Fd()))
+	interactive := !opts.nonInteractive && term.IsTerminal(int(os.Stdout.Fd()))
 	tracker := newBuildTracker(len(toBuild), interactive)
 
 	stop := startTicker(tracker)
-	executeBuilds(ctx, toBuild, parallel, keepGoing, verify, tracker)
+	executeBuilds(ctx, toBuild, parallel, opts.keepGoing, opts.verify, tracker)
 	stop()
 
 	printBuildSummary(tracker, total, cached, skipped)
@@ -405,7 +464,8 @@ func executeBuilds(
 	ctx context.Context, jobs []buildJob, parallel int, keepGoing bool, verify verifyOptions, tracker *buildTracker,
 ) {
 	group, ctx := errgroup.WithContext(ctx)
-	group.SetLimit(parallel)
+	// errgroup with a limit of zero starts nothing and Wait never returns.
+	group.SetLimit(max(parallel, 1))
 
 	for _, j := range jobs {
 		job := j
@@ -420,48 +480,93 @@ func executeBuilds(
 func buildOne(ctx context.Context, job buildJob, keepGoing bool, verify verifyOptions, tracker *buildTracker) error {
 	start := time.Now()
 
-	err := os.MkdirAll(job.outputDir, dirPermissions)
-	if err != nil {
-		tracker.finish(job.key(), false, "mkdir failed", time.Since(start).Round(time.Second))
-
-		return keepOrFail(keepGoing, fmt.Errorf("mkdir %s: %w", job.outputDir, err))
-	}
-
 	tracker.start(job.key())
 
-	out, err := runDockerBuild(ctx, job)
+	details, err := buildVerified(ctx, job, verify, tracker)
 	dur := time.Since(start).Round(time.Second)
+
 	if err != nil {
-		writeBuildLog(job, out, err)
-		tracker.finish(job.key(), false, "see "+filepath.Join(job.outputDir, buildLogName), dur)
+		tracker.finish(job.key(), false, failureDetails(job, err), dur)
 
 		return keepOrFail(keepGoing, fmt.Errorf("build %s: %w", job.key(), err))
+	}
+
+	tracker.finish(job.key(), true, details, dur)
+
+	return nil
+}
+
+// errBuildLogged marks a failure whose output is in the version's build.log;
+// the progress line points there instead of repeating it.
+var errBuildLogged = errors.New("docker build failed")
+
+// failureDetails is what the progress line says about a failed build.
+func failureDetails(job buildJob, err error) string {
+	if errors.Is(err, errBuildLogged) {
+		return "see " + filepath.Join(job.outputDir, buildLogName)
+	}
+
+	return err.Error()
+}
+
+// buildVerified builds one version, checks it the way the service will use it
+// and leaves the result where job says: the unpacked bundle in outputDir, or
+// only the archive at archivePath. It returns a short description of the
+// result. A failure leaves nothing but the build log behind.
+func buildVerified(ctx context.Context, job buildJob, verify verifyOptions, tracker *buildTracker) (string, error) {
+	err := os.MkdirAll(job.outputDir, dirPermissions)
+	if err != nil {
+		return "", fmt.Errorf("mkdir %s: %w", job.outputDir, err)
+	}
+
+	if job.workDir != "" {
+		// Left behind by an interrupted run: docker's local exporter adds to a
+		// directory rather than replacing it, and stale files would ride along
+		// into the archive.
+		err = os.RemoveAll(job.workDir)
+		if err != nil {
+			return "", fmt.Errorf("clearing %s: %w", job.workDir, err)
+		}
+
+		defer func() { _ = os.RemoveAll(job.workDir) }()
+	}
+
+	out, err := runDockerBuild(ctx, job)
+	if err != nil {
+		writeBuildLog(job, out, err)
+
+		return "", fmt.Errorf("%w: %w", errBuildLogged, err)
 	}
 
 	details, normErr := normalizeOutput(job)
 	if normErr != nil {
 		writeBuildLog(job, out, normErr)
-		tracker.finish(job.key(), false, normErr.Error(), dur)
 
-		return keepOrFail(keepGoing, fmt.Errorf("build %s: %w", job.key(), normErr))
+		return "", normErr
 	}
+
+	tracker.stage(job.key(), "verifying")
 
 	smokeOut, verifyErr := verifyBundle(ctx, job, verify)
 	if verifyErr != nil {
 		discardErr := discardFailedBuild(job)
 		writeBuildLog(job, append(out, smokeOut...), errors.Join(verifyErr, discardErr))
-		tracker.finish(job.key(), false, verifyErr.Error(), time.Since(start).Round(time.Second))
 
-		return keepOrFail(keepGoing, fmt.Errorf("build %s: %w", job.key(), verifyErr))
+		return "", verifyErr
 	}
 
 	// A log left over from an earlier failure would otherwise outlive the
 	// successful rebuild and misreport this version as broken.
 	_ = os.Remove(filepath.Join(job.outputDir, buildLogName))
 
-	tracker.finish(job.key(), true, details, dur)
+	if job.archivePath != "" {
+		info, statErr := os.Stat(job.archivePath)
+		if statErr == nil {
+			details = formatSize(info.Size()) + " archive"
+		}
+	}
 
-	return nil
+	return details, nil
 }
 
 func keepOrFail(keepGoing bool, err error) error {
@@ -495,7 +600,7 @@ func runDockerBuild(ctx context.Context, job buildJob) ([]byte, error) {
 	args = append(args, job.args...)
 
 	args = append(args,
-		"--output", "type=local,dest="+job.outputDir,
+		"--output", "type=local,dest="+job.bundleDir(),
 		"-f", dockerfilePath(job),
 		job.pluginDir,
 	)
@@ -528,7 +633,7 @@ func dockerfilePath(job buildJob) string {
 // and returns a short human-readable description of the result.
 // Dockerfiles must emit the entrypoint at /plugin (sidecar files are optional).
 func normalizeOutput(job buildJob) (string, error) {
-	pluginFile := filepath.Join(job.outputDir, pluginBinaryName)
+	pluginFile := filepath.Join(job.bundleDir(), pluginBinaryName)
 	info, err := os.Stat(pluginFile)
 	if err != nil || !info.Mode().IsRegular() {
 		return "", ErrNoOutputBinary
@@ -637,36 +742,59 @@ func formatSize(size int64) string {
 }
 
 // buildTracker keeps concurrency-safe state of active and completed builds.
+//
+// publish drives it too, which is where stages and skips come from: there a
+// version goes through building, uploading and registering, and a version
+// already in place is skipped without any of them.
 type buildTracker struct {
 	mu          sync.Mutex
-	active      map[string]time.Time
+	active      map[string]activeItem
 	total       int
 	completed   int
 	succeeded   int
+	skipped     int
 	failed      int
 	startTime   time.Time
 	lastReport  time.Time
 	interactive bool
 	spinIdx     int
 	panelLines  int
+	// verb is what a non-interactive start line says is happening.
+	verb string
+}
+
+// activeItem is one version in flight: when it started and what it is doing.
+type activeItem struct {
+	started time.Time
+	stage   string
+}
+
+// label is how the panel names an item: its key, and its stage when it has one.
+func (a activeItem) label(key string) string {
+	if a.stage == "" {
+		return key
+	}
+
+	return key + " · " + a.stage
 }
 
 func newBuildTracker(total int, interactive bool) *buildTracker {
 	now := time.Now()
 
 	return &buildTracker{
-		active:      make(map[string]time.Time),
+		active:      make(map[string]activeItem),
 		total:       total,
 		startTime:   now,
 		lastReport:  now,
 		interactive: interactive,
+		verb:        "Building",
 	}
 }
 
 func (t *buildTracker) start(key string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.active[key] = time.Now()
+	t.active[key] = activeItem{started: time.Now()}
 
 	if t.interactive {
 		t.redrawLocked("")
@@ -674,7 +802,43 @@ func (t *buildTracker) start(key string) {
 		return
 	}
 
-	_, _ = fmt.Fprintf(os.Stdout, "Building %s...\n", key)
+	_, _ = fmt.Fprintf(os.Stdout, "%s %s...\n", t.verb, key)
+}
+
+// stage records what an active item has moved on to. Only the live panel shows
+// it; a non-interactive run reports starts and outcomes, not every step.
+func (t *buildTracker) stage(key, stage string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	item, ok := t.active[key]
+	if !ok {
+		return
+	}
+
+	item.stage = stage
+	t.active[key] = item
+}
+
+// skip records an item that needed no work.
+func (t *buildTracker) skip(key, reason string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	delete(t.active, key)
+	t.completed++
+	t.skipped++
+	t.lastReport = time.Now()
+
+	line := fmt.Sprintf("[%4d/%4d] ⏭ %s (%s)", t.completed, t.total, key, reason)
+
+	if t.interactive {
+		t.redrawLocked(line)
+
+		return
+	}
+
+	_, _ = fmt.Fprintln(os.Stdout, line)
 }
 
 func (t *buildTracker) finish(key string, success bool, details string, dur time.Duration) {
@@ -758,8 +922,8 @@ func (t *buildTracker) renderPanelLocked() int {
 	pct := int(float64(t.completed) / float64(t.total) * percentMultiplier)
 	bar := renderProgressBar(pct)
 	header := fmt.Sprintf(
-		"%s %s %d/%d (%d%%) | ✅ %d  ❌ %d  | active: %d",
-		spinner, bar, t.completed, t.total, pct, t.succeeded, t.failed, len(t.active),
+		"%s %s %d/%d (%d%%) | ✅ %d  ⏭ %d  ❌ %d  | active: %d",
+		spinner, bar, t.completed, t.total, pct, t.succeeded, t.skipped, t.failed, len(t.active),
 	)
 	_, _ = fmt.Fprintf(os.Stdout, "\033[K%s\n", header)
 	lines := 1
@@ -769,8 +933,8 @@ func (t *buildTracker) renderPanelLocked() int {
 		dur  time.Duration
 	}
 	entries := make([]entry, 0, len(t.active))
-	for name, started := range t.active {
-		entries = append(entries, entry{name: name, dur: time.Since(started).Round(time.Second)})
+	for key, item := range t.active {
+		entries = append(entries, entry{name: item.label(key), dur: time.Since(item.started).Round(time.Second)})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].dur > entries[j].dur })
 
@@ -805,8 +969,8 @@ func (t *buildTracker) printStalledLocked() {
 		dur  time.Duration
 	}
 	entries := make([]entry, 0, len(t.active))
-	for name, started := range t.active {
-		entries = append(entries, entry{name: name, dur: time.Since(started).Round(time.Second)})
+	for key, item := range t.active {
+		entries = append(entries, entry{name: item.label(key), dur: time.Since(item.started).Round(time.Second)})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].dur > entries[j].dur })
 
