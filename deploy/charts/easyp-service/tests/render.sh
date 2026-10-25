@@ -558,6 +558,31 @@ if expect_render "the defaults ship a network policy"; then
   fi
 fi
 
+# The object storage port is taken from the endpoint. A RustFS or MinIO on :9000
+# used to be dropped by the policy unless someone also listed the port by hand,
+# and every upload check and download then hung until it timed out.
+s3_args=(
+  --set config.registry.s3.bucket=easyp-plugins
+  --set secrets.data.REGISTRY_S3_ACCESS_KEY_ID=a
+  --set secrets.data.REGISTRY_S3_SECRET_ACCESS_KEY=b
+)
+
+for case in "http://rustfs.easyp.svc:9000=9000" "http://minio=80" "https://storage.example.com=443"; do
+  endpoint="${case%=*}" want="${case##*=}"
+
+  if expect_render "the network policy lets the pod reach $endpoint" \
+    "${s3_args[@]}" --set "config.registry.s3.endpoint=$endpoint"; then
+    policy="$(awk '/^kind: NetworkPolicy/,/^---/' <<<"$out")"
+    count="$(grep -cE "^ +- port: $want$" <<<"$policy")"
+
+    if [[ "$count" == 1 ]]; then
+      pass "the network policy lets the pod reach $endpoint"
+    else
+      fail "the network policy lets the pod reach $endpoint: port $want listed $count times"
+    fi
+  fi
+done
+
 echo
 echo "== upgrading with --reuse-values =="
 
@@ -1011,6 +1036,30 @@ if [[ -z "$unmounted" ]]; then
   pass "every path mimir.yaml names is mounted wherever mimir.yaml is ($(wc -l <<<"$referenced" | tr -d ' ') paths)"
 else
   fail "every path mimir.yaml names is mounted wherever mimir.yaml is:$unmounted"
+fi
+
+# The backends do not agree on how a default is written. Mimir expands
+# ${VAR:default} and splits on the first colon, so the shell form gives the
+# default with a dash in front: mimir.yaml used it, and Mimir crashed on "-true"
+# for a bool. Loki, Tempo and Pyroscope expand the shell's ${VAR:-default}, and
+# read ${VAR:x} as a substring, which leaves Tempo and Pyroscope with an empty
+# S3 endpoint. Nobody saw either on the dev stand, where every variable is set.
+mimir_shell="$(grep -nE '\$\{[A-Za-z0-9_]+:-' "$REPO/deploy/observability/mimir/mimir.yaml" || true)"
+others_colon="$(grep -nE '\$\{[A-Za-z0-9_]+:[^-]' \
+  "$REPO"/deploy/observability/{loki/loki.yml,tempo/tempo.yaml,pyroscope/pyroscope.yaml} || true)"
+
+if [[ -z "$mimir_shell" ]]; then
+  pass "mimir.yaml writes defaults as \${VAR:default}"
+else
+  fail "mimir.yaml writes \${VAR:-default}, which Mimir reads as '-default':
+$mimir_shell"
+fi
+
+if [[ -z "$others_colon" ]]; then
+  pass "loki, tempo and pyroscope configs write defaults as \${VAR:-default}"
+else
+  fail "loki/tempo/pyroscope configs write \${VAR:default}, which they read as a substring:
+$others_colon"
 fi
 
 echo "== image tag =="
