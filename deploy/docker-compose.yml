@@ -3,6 +3,16 @@
 # have been renamed by the move, silently orphaning the existing dev database.
 name: easyp
 
+# Every container's stdout is capped, as in docker-compose.dev.yml: Docker's
+# json-file driver keeps all of it by default, and on the dev host loki alone
+# had written 2 GB of its own log before the disk ran out. Older output is in
+# loki.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 networks:
   easyp_network:
     name: easyp_network
@@ -26,10 +36,12 @@ volumes:
   postgres-data:
   rustfs-data:
   grafana-data:
+  plugins-cache:
 
 services:
 
   traefik:
+    logging: *logging
     image: traefik:v3.6
     container_name: easyp-traefik
     restart: unless-stopped
@@ -66,6 +78,7 @@ services:
       - easyp_network
 
   rustfs:
+    logging: *logging
     image: rustfs/rustfs:latest
     container_name: easyp-rustfs
     restart: unless-stopped
@@ -87,6 +100,7 @@ services:
       - easyp_network
 
   init-buckets:
+    logging: *logging
     # The AWS CLI rather than MinIO's mc: MinIO stopped publishing mc anonymously,
     # first on Docker Hub and then on quay.io, and a dev stack that cannot pull
     # its bucket initialiser does not start at all. Pinned, so the next time a
@@ -110,6 +124,7 @@ services:
       - easyp_network
 
   mimir:
+    logging: *logging
     image: grafana/mimir:2.16.0
     container_name: easyp-mimir
     restart: unless-stopped
@@ -133,6 +148,7 @@ services:
       - easyp_network
 
   loki:
+    logging: *logging
     image: grafana/loki:3.5.0
     container_name: easyp-loki
     restart: unless-stopped
@@ -149,6 +165,7 @@ services:
       - easyp_network
 
   tempo:
+    logging: *logging
     image: grafana/tempo:2.7.2
     container_name: easyp-tempo
     restart: unless-stopped
@@ -165,6 +182,7 @@ services:
       - easyp_network
 
   alloy:
+    logging: *logging
     image: grafana/alloy:v1.9.1
     container_name: easyp-alloy
     restart: unless-stopped
@@ -192,6 +210,7 @@ services:
       - easyp_network
 
   pyroscope:
+    logging: *logging
     image: grafana/pyroscope:1.13.5
     container_name: easyp-pyroscope
     restart: unless-stopped
@@ -208,6 +227,7 @@ services:
       - easyp_network
 
   grafana:
+    logging: *logging
     image: grafana/grafana:12.3.0
     container_name: easyp-grafana
     restart: unless-stopped
@@ -239,6 +259,7 @@ services:
       - easyp_network
 
   postgres:
+    logging: *logging
     image: postgres:17.7
     container_name: easyp-postgres
     restart: unless-stopped
@@ -264,6 +285,7 @@ services:
       - easyp_network
 
   service:
+    logging: *logging
     build:
       # The repository root, not this directory: the Dockerfile compiles from
       # source and needs the module, and it stays at the root because
@@ -272,12 +294,6 @@ services:
       dockerfile: Dockerfile
     container_name: easyp-api-service
     restart: always
-    # The image runs as 65532, but ../plugins below is a bind mount whose owner
-    # comes from the host. On Linux that makes the mount unwritable unless the
-    # container UID matches: set EASYP_UID=$(id -u) EASYP_GID=$(id -g), or chown
-    # the directory to 65532. Docker Desktop remaps ownership, so the default
-    # works there as-is.
-    user: "${EASYP_UID:-65532}:${EASYP_GID:-65532}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -300,8 +316,13 @@ services:
       - "./certs/server.crt:/certs/server.crt:ro"
       - "./certs/server.key:/certs/server.key:ro"
       - "./certs/ca.crt:/certs/ca.crt:ro"
-      # rw: the service writes lazily downloaded plugin binaries here.
-      - "../plugins:/plugins"
+      # The plugin cache: what the service downloads from rustfs and unpacks.
+      # A named volume, not ../plugins. That bind mount handed the service
+      # whatever `plugins build` had last left in the working tree, and with no
+      # checksum marker in it the service served that build instead of the
+      # archive just published. A named volume starts from the image's /plugins,
+      # owned by 65532, so it is writable without matching host UIDs either.
+      - "plugins-cache:/plugins"
     # Every variable here overrides the matching field in config/config.yml. An
     # unset one arrives as an empty string and is treated as absent, so the file
     # keeps its value — that is what makes the `:-` form below safe.

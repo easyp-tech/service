@@ -41,7 +41,28 @@ spec:
         - port: 53
           protocol: TCP
     - ports:
+        {{- $ports := list }}
         {{- range .Values.networkPolicy.egressPorts }}
+        {{- $ports = append $ports (int .) }}
+        {{- end }}
+        {{- /*
+        The object storage port comes from the endpoint the chart already
+        knows. Listing it by hand was the one step people missed: a MinIO or
+        RustFS endpoint on :9000 was dropped by this policy, and every upload
+        check and download hung until it timed out, which reads as a slow
+        store rather than a blocked one.
+        */}}
+        {{- with .Values.config.registry.s3.endpoint }}
+        {{- $u := urlParse . }}
+        {{- $port := ternary 80 443 (eq $u.scheme "http") }}
+        {{- if contains ":" $u.host }}
+        {{- $port = int (last (splitList ":" $u.host)) }}
+        {{- end }}
+        {{- if not (has $port $ports) }}
+        {{- $ports = append $ports $port }}
+        {{- end }}
+        {{- end }}
+        {{- range $ports }}
         - port: {{ . }}
           protocol: TCP
         {{- end }}

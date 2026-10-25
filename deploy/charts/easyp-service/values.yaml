@@ -473,9 +473,10 @@ podDisruptionBudget:
 # On by default. This pod's whole job is running third-party binaries, so the
 # set of places it can reach should be stated rather than inherited.
 #
-# If your database, object storage or collector is not on one of the ports below,
-# add it here or the pod goes quiet in a way that looks like a hang. That is the
-# one thing to check first after enabling this.
+# If your database or collector is not on one of the ports below, add it here or
+# the pod goes quiet in a way that looks like a hang. That is the one thing to
+# check first after enabling this. The object storage port is added from
+# config.registry.s3.endpoint on its own.
 networkPolicy:
   enabled: true
   # Selector matching the namespace your ingress controller runs in. Empty means
