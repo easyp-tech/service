@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -302,9 +304,38 @@ func runPluginsPublish(ctx context.Context, opts publishOptions, dest destinatio
 	pub.run(runCtx, items)
 	stop()
 
+	// After the run rather than as each version finishes: removing an empty
+	// {group}/{name} then could pull it out from under another version of the
+	// same plugin whose build is just creating its directory there.
+	if opts.registryPath != "" && !opts.keep {
+		pruneEmptyDirs(opts.workDir)
+	}
+
 	pub.printSummary(total, skipped)
 
 	return pub.outcome(ctx, runCtx)
+}
+
+// pruneEmptyDirs removes the directories under root that hold nothing, deepest
+// first, and keeps root itself. A version's directory goes once it is
+// published, which left its {group}/{name} parents behind, empty; a failed
+// build keeps its build.log, and with it its parents.
+func pruneEmptyDirs(root string) {
+	var dirs []string
+
+	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err == nil && entry.IsDir() && path != root {
+			dirs = append(dirs, path)
+		}
+
+		return nil
+	})
+
+	// WalkDir visits a parent before its children; in reverse, every child is
+	// removed before its parent is tried.
+	for _, dir := range slices.Backward(dirs) {
+		_ = os.Remove(dir)
+	}
 }
 
 // outcome is what a finished run returns: the error that stopped it, if one

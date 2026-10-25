@@ -51,6 +51,12 @@ const (
 	// anything a plugin bundle ships at its root.
 	checksumMarkerName = ".sha256"
 	markerPerm         = 0o644
+
+	// pluginCapAdvisoryLock serialises registrations under a licence ceiling,
+	// across replicas: the count and the insert run under it in one
+	// transaction. Transaction scoped, so it is released on commit or rollback
+	// and never left on a pooled connection.
+	pluginCapAdvisoryLock int64 = 7310452861093327
 )
 
 // Registry package errors.
@@ -185,10 +191,20 @@ func New(
 		return nil, ErrEmptyPluginsDir
 	}
 
+	// Absolute before anything is derived from it. The command a version is
+	// registered with is built from this path, and a plugin runs in a private
+	// working directory under .tmp: with plugins_dir "./plugins" the stored
+	// command was "plugins/g/n/v/plugin", which resolves against that private
+	// directory and fails as "no such file or directory" on every generation.
+	pluginsDir, err := filepath.Abs(pluginsDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolving plugins_dir: %w", err)
+	}
+
 	guard := safe.NewGuard(cacheOpts.Registry, cacheOpts.Namespace)
 
 	tmpDir := filepath.Join(pluginsDir, tmpDirName)
-	err := os.MkdirAll(tmpDir, dirPerm)
+	err = os.MkdirAll(tmpDir, dirPerm)
 	if err != nil {
 		return nil, fmt.Errorf("creating the archive staging directory: %w", err)
 	}
@@ -605,7 +621,12 @@ func (p *plugin) command(ctx context.Context, requestData []byte) (*exec.Cmd, fu
 }
 
 // Create implements core.Registry.
-func (r *Registry) Create(ctx context.Context, req core.CreatePluginRequest) (*core.PluginInfo, error) {
+func (r *Registry) Create(
+	ctx context.Context, req core.CreatePluginRequest, maxPlugins int,
+) (*core.PluginInfo, error) {
+	// Before the transaction: completing the config asks object storage for the
+	// archive's checksum, and that round trip has no business holding a lock
+	// every other registration is waiting on.
 	config, err := r.prepareConfig(ctx, req.Group, req.Name, req.Version, req.Config)
 	if err != nil {
 		return nil, err
@@ -615,21 +636,23 @@ func (r *Registry) Create(ctx context.Context, req core.CreatePluginRequest) (*c
 
 	var plug plugin
 
-	err = r.db.NoTxContext(ctx, func(conn *sqlx.DB) error {
-		return conn.QueryRowxContext(ctx,
-			`INSERT INTO plugins (group_name, name, version, config, tags)
-                         VALUES ($1, $2, $3, $4, $5)
-                         RETURNING id, group_name, name, version, tags, created_at`,
-			req.Group, req.Name, req.Version, req.Config, pq.Array(req.Tags),
-		).StructScan(&plug)
-	})
+	if maxPlugins == core.LicenseUnlimited {
+		err = r.db.NoTxContext(ctx, func(conn *sqlx.DB) error {
+			return insertPlugin(ctx, conn, req, &plug)
+		})
+	} else {
+		err = r.db.Tx(ctx, nil, func(tx *sqlx.Tx) error {
+			return insertPluginWithin(ctx, tx, req, maxPlugins, &plug)
+		})
+	}
+
 	if err != nil {
 		var pqErr *pq.Error
 		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
 			return nil, fmt.Errorf("%w: %s/%s:%s", core.ErrAlreadyExists, req.Group, req.Name, req.Version)
 		}
 
-		return nil, fmt.Errorf("r.db.NoTxContext(Create): %w", err)
+		return nil, fmt.Errorf("registry.Create: %w", err)
 	}
 
 	return &core.PluginInfo{
@@ -640,6 +663,52 @@ func (r *Registry) Create(ctx context.Context, req core.CreatePluginRequest) (*c
 		Tags:      []string(plug.Tags),
 		CreatedAt: plug.CreatedAt,
 	}, nil
+}
+
+// sqlxQueryer is what insertPlugin needs from a connection or a transaction.
+type sqlxQueryer interface {
+	QueryRowxContext(ctx context.Context, query string, args ...any) *sqlx.Row
+}
+
+// insertPlugin writes one version and scans the stored row into plug.
+func insertPlugin(ctx context.Context, q sqlxQueryer, req core.CreatePluginRequest, plug *plugin) error {
+	err := q.QueryRowxContext(ctx,
+		`INSERT INTO plugins (group_name, name, version, config, tags)
+                 VALUES ($1, $2, $3, $4, $5)
+                 RETURNING id, group_name, name, version, tags, created_at`,
+		req.Group, req.Name, req.Version, req.Config, pq.Array(req.Tags),
+	).StructScan(plug)
+	if err != nil {
+		return fmt.Errorf("inserting plugin: %w", err)
+	}
+
+	return nil
+}
+
+// insertPluginWithin inserts under the licence ceiling: it takes the
+// registration lock, counts what is there and inserts only below maxPlugins.
+// Every registration under a ceiling goes through the same lock, so the count
+// one of them sees includes everything the others committed.
+func insertPluginWithin(
+	ctx context.Context, tx *sqlx.Tx, req core.CreatePluginRequest, maxPlugins int, plug *plugin,
+) error {
+	_, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock($1)", pluginCapAdvisoryLock)
+	if err != nil {
+		return fmt.Errorf("pg_advisory_xact_lock: %w", err)
+	}
+
+	var current int
+
+	err = tx.GetContext(ctx, &current, "SELECT count(*) FROM plugins")
+	if err != nil {
+		return fmt.Errorf("counting plugins: %w", err)
+	}
+
+	if current >= maxPlugins {
+		return fmt.Errorf("%w: current %d, limit %d", core.ErrMaxPluginsExceeded, current, maxPlugins)
+	}
+
+	return insertPlugin(ctx, tx, req, plug)
 }
 
 // configWithChecksum returns config JSON with the sha256 field set, preserving
@@ -1005,10 +1074,17 @@ func (r *Registry) ensureBinary(ctx context.Context, plug *plugin) error {
 // would reach all of them.
 //
 // A stat error other than "not there" counts as present, as it always has:
-// exec reports that better than a second download would. A directory without
-// a marker counts as current — it was unpacked before markers existed, from an
-// archive verified against the checksum of the day — and so does a plugin with
-// no recorded checksum, which has nothing to compare against.
+// exec reports that better than a second download would. A plugin with no
+// recorded checksum counts as current, having nothing to compare against.
+//
+// A directory without a marker does not, once a checksum is known. It used to:
+// such directories were unpacked before markers existed, and the guess was that
+// they came from the archive of the day. Nothing checked the guess, and it was
+// wrong twice in practice — a replica upgraded from v1.1 kept serving the copy
+// it had after the version was republished, and a compose stack bind-mounting a
+// months-old build tree served that tree instead of the archive just published.
+// Treating it as stale costs one download per version per replica, after which
+// the marker is there.
 func unpackedCurrent(binPath, versionDir, expected string) bool {
 	_, statErr := os.Stat(binPath)
 	if os.IsNotExist(statErr) {
@@ -1021,7 +1097,7 @@ func unpackedCurrent(binPath, versionDir, expected string) bool {
 
 	recorded, err := os.ReadFile(filepath.Join(versionDir, checksumMarkerName))
 	if err != nil {
-		return os.IsNotExist(err)
+		return false
 	}
 
 	return strings.TrimSpace(string(recorded)) == expected
