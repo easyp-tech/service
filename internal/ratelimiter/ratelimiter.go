@@ -3,6 +3,7 @@ package ratelimiter
 import (
 	"context"
 	"log/slog"
+	"math"
 	"strconv"
 	"sync"
 	"time"
@@ -164,7 +165,19 @@ func (rl *RateLimiter) Limit(ctx context.Context) error {
 		slog.Int64("reset_time", resetTime),
 	)
 
-	return status.Errorf(codes.ResourceExhausted, "rate limit exceeded for %s, retry after %d", key, resetTime)
+	return status.Errorf(codes.ResourceExhausted, "rate limit exceeded for %s, retry after %ds",
+		key, retryAfterSeconds(bucket.limiter.Tokens(), rl.cfg.RequestsPerSecond))
+}
+
+// retryAfterSeconds is how long until the bucket holds one token again, in
+// whole seconds and at least one. The message used to print resetTime, the
+// unix time at which the bucket is full again, which read as "retry after
+// 1792932829" — a timestamp where a caller expects a wait. That time is still
+// in the x-ratelimit-reset trailer, where it is labelled as one.
+func retryAfterSeconds(tokens, perSecond float64) int64 {
+	wait := (1 - tokens) / perSecond
+
+	return max(int64(math.Ceil(wait)), 1)
 }
 
 // StartCleanup запускает фоновую горутину очистки stale buckets.

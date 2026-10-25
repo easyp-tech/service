@@ -319,6 +319,11 @@ func TestEnsureBinary(t *testing.T) {
 		require.NoError(t, os.MkdirAll(filepath.Dir(binPath), 0o755))
 		require.NoError(t, os.WriteFile(binPath, []byte("already here"), 0o755))
 
+		// A checksum on record with a matching marker: the directory is known to
+		// hold that archive. Without the marker it would be fetched again.
+		require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(binPath), checksumMarkerName),
+			[]byte(sha256Hex(archive)+"\n"), 0o644))
+
 		r := &Registry{pluginsDir: pluginsDir, storage: store}
 
 		require.NoError(t, r.ensureBinary(ctx, newPlugin(binPath, sha256Hex(archive))))
@@ -327,6 +332,22 @@ func TestEnsureBinary(t *testing.T) {
 		got, err := os.ReadFile(binPath)
 		require.NoError(t, err)
 		assert.Equal(t, "already here", string(got), "local artifact must not be overwritten")
+	})
+
+	t.Run("existing_entrypoint_without_checksum_skips_download", func(t *testing.T) {
+		t.Parallel()
+
+		store := newFakeStorage()
+		store.put(key, archive)
+
+		pluginsDir, binPath := binPathIn(t)
+		require.NoError(t, os.MkdirAll(filepath.Dir(binPath), 0o755))
+		require.NoError(t, os.WriteFile(binPath, []byte("already here"), 0o755))
+
+		r := &Registry{pluginsDir: pluginsDir, storage: store}
+
+		require.NoError(t, r.ensureBinary(ctx, newPlugin(binPath, "")))
+		assert.Equal(t, int64(0), store.downloads.Load(), "nothing to compare against, so nothing to refetch")
 	})
 
 	t.Run("nil_storage_is_noop", func(t *testing.T) {

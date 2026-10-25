@@ -73,7 +73,7 @@ func (r *staticRegistry) List(_ context.Context, _ PluginFilter, _ PluginPage) (
 	return nil, nil
 }
 
-func (r *staticRegistry) Create(_ context.Context, _ CreatePluginRequest) (*PluginInfo, error) {
+func (r *staticRegistry) Create(_ context.Context, _ CreatePluginRequest, _ int) (*PluginInfo, error) {
 	return nil, nil
 }
 

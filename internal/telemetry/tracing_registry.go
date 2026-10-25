@@ -77,7 +77,9 @@ func (r *TracingRegistry) List(ctx context.Context, filter core.PluginFilter, pa
 }
 
 // Create creates a span "registry.Create" with db attributes.
-func (r *TracingRegistry) Create(ctx context.Context, req core.CreatePluginRequest) (*core.PluginInfo, error) {
+func (r *TracingRegistry) Create(
+	ctx context.Context, req core.CreatePluginRequest, maxPlugins int,
+) (*core.PluginInfo, error) {
 	ctx, span := r.tracer.Start(ctx, "registry.Create",
 		trace.WithAttributes(
 			attribute.String("db.system", "postgresql"),
@@ -88,7 +90,7 @@ func (r *TracingRegistry) Create(ctx context.Context, req core.CreatePluginReque
 		))
 	defer span.End()
 
-	result, err := r.inner.Create(ctx, req)
+	result, err := r.inner.Create(ctx, req, maxPlugins)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
