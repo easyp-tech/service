@@ -558,6 +558,31 @@ if expect_render "the defaults ship a network policy"; then
   fi
 fi
 
+# The object storage port is taken from the endpoint. A RustFS or MinIO on :9000
+# used to be dropped by the policy unless someone also listed the port by hand,
+# and every upload check and download then hung until it timed out.
+s3_args=(
+  --set config.registry.s3.bucket=easyp-plugins
+  --set secrets.data.REGISTRY_S3_ACCESS_KEY_ID=a
+  --set secrets.data.REGISTRY_S3_SECRET_ACCESS_KEY=b
+)
+
+for case in "http://rustfs.easyp.svc:9000=9000" "http://minio=80" "https://storage.example.com=443"; do
+  endpoint="${case%=*}" want="${case##*=}"
+
+  if expect_render "the network policy lets the pod reach $endpoint" \
+    "${s3_args[@]}" --set "config.registry.s3.endpoint=$endpoint"; then
+    policy="$(awk '/^kind: NetworkPolicy/,/^---/' <<<"$out")"
+    count="$(grep -cE "^ +- port: $want$" <<<"$policy")"
+
+    if [[ "$count" == 1 ]]; then
+      pass "the network policy lets the pod reach $endpoint"
+    else
+      fail "the network policy lets the pod reach $endpoint: port $want listed $count times"
+    fi
+  fi
+done
+
 echo
 echo "== upgrading with --reuse-values =="
 
