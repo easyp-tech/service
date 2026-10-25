@@ -1013,6 +1013,30 @@ else
   fail "every path mimir.yaml names is mounted wherever mimir.yaml is:$unmounted"
 fi
 
+# The backends do not agree on how a default is written. Mimir expands
+# ${VAR:default} and splits on the first colon, so the shell form gives the
+# default with a dash in front: mimir.yaml used it, and Mimir crashed on "-true"
+# for a bool. Loki, Tempo and Pyroscope expand the shell's ${VAR:-default}, and
+# read ${VAR:x} as a substring, which leaves Tempo and Pyroscope with an empty
+# S3 endpoint. Nobody saw either on the dev stand, where every variable is set.
+mimir_shell="$(grep -nE '\$\{[A-Za-z0-9_]+:-' "$REPO/deploy/observability/mimir/mimir.yaml" || true)"
+others_colon="$(grep -nE '\$\{[A-Za-z0-9_]+:[^-]' \
+  "$REPO"/deploy/observability/{loki/loki.yml,tempo/tempo.yaml,pyroscope/pyroscope.yaml} || true)"
+
+if [[ -z "$mimir_shell" ]]; then
+  pass "mimir.yaml writes defaults as \${VAR:default}"
+else
+  fail "mimir.yaml writes \${VAR:-default}, which Mimir reads as '-default':
+$mimir_shell"
+fi
+
+if [[ -z "$others_colon" ]]; then
+  pass "loki, tempo and pyroscope configs write defaults as \${VAR:-default}"
+else
+  fail "loki/tempo/pyroscope configs write \${VAR:default}, which they read as a substring:
+$others_colon"
+fi
+
 echo "== image tag =="
 
 # The default image tag is Chart.appVersion, and it has to be a tag the release
