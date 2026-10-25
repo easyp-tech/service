@@ -121,8 +121,12 @@ type (
 		// (group, name, version), at most page.Size of them, starting after
 		// page.After. Callers pass page.Size already normalised.
 		List(ctx context.Context, filter PluginFilter, page PluginPage) ([]PluginInfo, error)
-		// Create registers a new plugin in the registry.
-		Create(ctx context.Context, req CreatePluginRequest) (*PluginInfo, error)
+		// Create registers a new plugin in the registry. When maxPlugins is
+		// not LicenseUnlimited, the registry refuses with ErrMaxPluginsExceeded
+		// once it already holds that many: the count and the insert have to be
+		// one step, or concurrent registrations all pass a count taken before
+		// any of them landed.
+		Create(ctx context.Context, req CreatePluginRequest, maxPlugins int) (*PluginInfo, error)
 		// Update modifies config and tags of an existing plugin.
 		Update(ctx context.Context, req UpdatePluginRequest) (*PluginInfo, error)
 		// Delete removes a plugin from the registry.

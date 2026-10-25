@@ -22,6 +22,9 @@ type Client struct {
 }
 
 // NewClient creates a new Client connected to the specified address.
+//
+// A plain host:port is resolved by the system resolver when the connection is
+// made; prefix dns:/// to use grpc-go's own resolver instead. See dialTarget.
 func NewClient(addr string, opts ...Option) (*Client, error) {
 	cfg := defaultConfig()
 	for _, opt := range opts {
@@ -46,7 +49,7 @@ func NewClient(addr string, opts ...Option) (*Client, error) {
 		dialOpts = append(dialOpts, grpc.WithKeepaliveParams(*cfg.keepaliveParams))
 	}
 
-	conn, err := grpc.NewClient(addr, dialOpts...)
+	conn, err := grpc.NewClient(dialTarget(addr), dialOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("grpc.NewClient %s: %w", addr, err)
 	}

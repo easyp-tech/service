@@ -262,7 +262,9 @@ func getPluginsPublishCommand() *cli.Command {
 			"register it — creating it, or replacing the config of a version the service already has — and " +
 			"delete it from the work directory. Unless --force is set, a version already in storage is not " +
 			"rebuilt: it is skipped when registered and only registered when not. An upload is skipped " +
-			"whenever storage already holds the same archive. With --plugins-dir the archive is unpacked " +
+			"whenever storage already holds the same archive. A version the licence's plugin limit refuses " +
+			"has already been uploaded by then; it stays in storage, and a later run registers it without " +
+			"uploading it again. With --plugins-dir the archive is unpacked " +
 			"into that directory instead of uploaded, for a service on the same host running without object " +
 			"storage; given neither a registry nor --archives, that directory is the source, and what is " +
 			"already unpacked there is registered. Needs a v1.2.0 or newer server.",
@@ -514,7 +516,8 @@ func connectionFlags() []cli.Flag {
 			// gRPC port to, which made this flag right for a cluster and wrong
 			// for the binary anyone runs locally — and the two disagreed
 			// silently, as a connection refused.
-			Usage: "gRPC server address (the chart publishes gRPC on 8080)",
+			Usage: "gRPC server address; a host:port is resolved by the system resolver, prefix dns:/// " +
+				"for grpc-go's own (the chart publishes gRPC on 8080)",
 			Value: "localhost:23410",
 		},
 		&cli.StringFlag{

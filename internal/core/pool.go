@@ -368,8 +368,8 @@ func (p *WorkerPool) List(ctx context.Context, filter PluginFilter, page PluginP
 }
 
 // Create проксирует запрос напрямую во внутренний Registry без очереди.
-func (p *WorkerPool) Create(ctx context.Context, req CreatePluginRequest) (*PluginInfo, error) {
-	return p.inner.Create(ctx, req)
+func (p *WorkerPool) Create(ctx context.Context, req CreatePluginRequest, maxPlugins int) (*PluginInfo, error) {
+	return p.inner.Create(ctx, req, maxPlugins)
 }
 
 // Update проксирует запрос напрямую во внутренний Registry без очереди.
