@@ -513,3 +513,21 @@ func TestVerifyKeepsTheArchiveItChecked(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, leftovers, "no temporary archive is left behind")
 }
+
+func TestPruneEmptyDirsLeavesFailedBuilds(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	published := filepath.Join(root, "grpc", "go")
+	require.NoError(t, os.MkdirAll(published, 0o755))
+
+	failed := filepath.Join(root, "bufbuild", "es", "v2.5.1")
+	require.NoError(t, os.MkdirAll(failed, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(failed, "build.log"), []byte("boom"), 0o644))
+
+	pruneEmptyDirs(root)
+
+	assert.NoDirExists(t, filepath.Join(root, "grpc"), "an emptied {group}/{name} goes")
+	assert.FileExists(t, filepath.Join(failed, "build.log"), "a failed build keeps its log")
+	assert.DirExists(t, root, "the work directory itself stays")
+}

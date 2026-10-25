@@ -262,27 +262,11 @@ func (c *Core) CreatePlugin(ctx context.Context, req CreatePluginRequest) (*Plug
 		return nil, err
 	}
 
-	// Check MaxPlugins limit. The nil check matches checkFeature above: a Core
-	// built without a gate treats everything as allowed, and dereferencing here
-	// would panic on the one path that reaches it.
-	if limit := c.maxPlugins(); limit >= 0 {
-		// A zero-size page is unbounded: the licence check needs the true
-		// count, not the first page of it.
-		plugins, err := c.registry.List(ctx, PluginFilter{}, PluginPage{})
-		if err != nil {
-			c.auditError(ctx, OperationCreatePlugin, pluginName, start, err)
-
-			return nil, fmt.Errorf("c.registry.List: %w", err)
-		}
-		if len(plugins) >= limit {
-			err = fmt.Errorf("%w: current %d, limit %d", ErrMaxPluginsExceeded, len(plugins), limit)
-			c.auditError(ctx, OperationCreatePlugin, pluginName, start, err)
-
-			return nil, err
-		}
-	}
-
-	info, err := c.registry.Create(ctx, req)
+	// The MaxPlugins ceiling is enforced by the registry, in the same step as
+	// the insert. Checked here first, as it used to be, it was a count taken
+	// before any concurrent registration landed: eight parallel CreatePlugin
+	// calls against a community licence left fourteen rows under a limit of ten.
+	info, err := c.registry.Create(ctx, req, c.maxPlugins())
 	if err != nil {
 		c.auditError(ctx, OperationCreatePlugin, pluginName, start, err)
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/pluginpb"
 
 	"github.com/easyp-tech/service/internal/core"
 )
@@ -317,19 +318,22 @@ func TestEnsureBinaryRefetchesRepublished(t *testing.T) {
 		assert.Equal(t, int64(1), store.downloads.Load())
 	})
 
-	t.Run("a directory without a marker counts as current", func(t *testing.T) {
+	t.Run("a directory without a marker is fetched once", func(t *testing.T) {
 		t.Parallel()
 
-		// What every replica holds right after upgrading to v1.2.0: refetching
-		// all of it on first use would be a stampede for nothing.
+		// What a replica upgraded from v1.1 holds, and what a bind-mounted build
+		// tree looks like: nothing says which archive it came from, so it is
+		// replaced once and carries a marker from then on.
 		r, store, binPath := setup(t)
 		require.NoError(t, os.MkdirAll(filepath.Dir(binPath), 0o755))
 		require.NoError(t, os.WriteFile(binPath, []byte("unpacked by v1.1.0"), 0o755))
 
 		require.NoError(t, r.ensureBinary(ctx, plug(binPath, sha256Hex(oldArchive))))
+		assert.Equal(t, int64(1), store.downloads.Load())
+		assert.Equal(t, "#!/bin/sh\necho old\n", entrypoint(t, binPath))
 
-		assert.Equal(t, int64(0), store.downloads.Load())
-		assert.Equal(t, "unpacked by v1.1.0", entrypoint(t, binPath))
+		require.NoError(t, r.ensureBinary(ctx, plug(binPath, sha256Hex(oldArchive))))
+		assert.Equal(t, int64(1), store.downloads.Load(), "the marker written by the first fetch makes the second a hit")
 	})
 
 	t.Run("a stale copy is kept when the new archive does not verify", func(t *testing.T) {
@@ -345,4 +349,49 @@ func TestEnsureBinaryRefetchesRepublished(t *testing.T) {
 		assert.Contains(t, entrypoint(t, binPath), "old")
 		assert.Equal(t, int64(2), store.downloads.Load())
 	})
+}
+
+// TestRelativePluginsDirDerivesARunnableCommand covers `task run-local`, whose
+// config says plugins_dir "./plugins". The derived command used to keep that
+// relative form, and a plugin runs in a private directory under .tmp, so every
+// generation failed with "no such file or directory".
+//
+// Not parallel: it changes the working directory, which is process-wide.
+func TestRelativePluginsDirDerivesARunnableCommand(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+
+	r, err := New(context.Background(), nil, "./plugins", 1<<20, nil, CacheOptions{})
+	require.NoError(t, err)
+
+	got, err := r.prepareConfig(context.Background(), "grpc", "go", "v1.6.2", nil)
+	require.NoError(t, err)
+
+	var pCfg PluginConfig
+	require.NoError(t, json.Unmarshal(got, &pCfg))
+
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	require.NoError(t, err)
+
+	bin := pCfg.Command[0]
+	require.True(t, filepath.IsAbs(bin), "derived command %q must be absolute", bin)
+
+	require.NoError(t, os.MkdirAll(filepath.Dir(bin), 0o755))
+	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755))
+
+	// {plugins_dir}/grpc/go/v1.6.2/plugin, four levels below plugins_dir.
+	pluginsDir, err := filepath.EvalSymlinks(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(bin)))))
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(resolvedRoot, "plugins"), pluginsDir)
+
+	plug := &plugin{
+		GroupName: "grpc", Name: "go", Version: "v1.6.2",
+		maxOutputSize: 1 << 20,
+		guard:         r.guard,
+		workRoot:      r.tmpDir,
+		pluginConfig:  pCfg,
+	}
+
+	_, err = plug.Generate(t.Context(), &pluginpb.CodeGeneratorRequest{})
+	require.NoError(t, err, "the plugin must start from its private working directory")
 }
