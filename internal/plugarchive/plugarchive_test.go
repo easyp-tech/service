@@ -4,9 +4,12 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -77,6 +80,48 @@ func TestPackUnpackRoundTrip(t *testing.T) {
 	linkTarget, err := os.Readlink(filepath.Join(destDir, "tool-link"))
 	require.NoError(t, err)
 	assert.Equal(t, "app/tool", linkTarget)
+}
+
+func TestPackDirIsReproducible(t *testing.T) {
+	t.Parallel()
+
+	pack := func(fileMode os.FileMode, mtime time.Time) []byte {
+		t.Helper()
+
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "plugin"), []byte("binary"), 0o755))
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "etc"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "etc", "passwd"), []byte("nobody"), fileMode))
+		require.NoError(t, os.Symlink("plugin", filepath.Join(dir, "link")))
+		for _, name := range []string{"plugin", "etc/passwd", "etc"} {
+			require.NoError(t, os.Chtimes(filepath.Join(dir, name), mtime, mtime))
+		}
+
+		var buf bytes.Buffer
+		require.NoError(t, PackDir(dir, &buf))
+
+		return buf.Bytes()
+	}
+
+	first := pack(0o644, time.Date(2026, 7, 27, 23, 53, 0, 0, time.UTC))
+	second := pack(0o664, time.Date(2026, 10, 30, 16, 49, 0, 0, time.UTC))
+	assert.Equal(t, first, second, "the same contents built at another time, under another umask")
+
+	gzReader, err := gzip.NewReader(bytes.NewReader(first))
+	require.NoError(t, err)
+	modes := map[string]int64{}
+	tarReader := tar.NewReader(gzReader)
+	for {
+		header, err := tarReader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+		modes[header.Name] = header.Mode
+	}
+	assert.Equal(t, map[string]int64{
+		"etc/": 0o755, "etc/passwd": 0o644, "link": 0o777, "plugin": 0o755,
+	}, modes)
 }
 
 func TestUnpackReplacesExistingDir(t *testing.T) {
