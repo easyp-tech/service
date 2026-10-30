@@ -275,6 +275,16 @@ message PluginsResponse {
   string next_page_token = 3 [(doc.v1.field) = {
     output_only: true
   }];
+
+  // Platform the service runs plugins on, as os/arch.
+  //
+  // A plugin binary must be built for it: the service executes the binary
+  // itself, so one built for another architecture fails on every request.
+  // Empty from a server older than v1.3.0.
+  string platform = 4 [(doc.v1.field) = {
+    output_only: true
+    example: "linux/amd64"
+  }];
 }
 
 // Information about a registered plugin.

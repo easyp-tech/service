@@ -531,7 +531,7 @@ func buildVerified(ctx context.Context, job buildJob, verify verifyOptions, trac
 		defer func() { _ = os.RemoveAll(job.workDir) }()
 	}
 
-	out, err := runDockerBuild(ctx, job)
+	out, err := runDockerBuild(ctx, job, verify.platform)
 	if err != nil {
 		writeBuildLog(job, out, err)
 
@@ -577,15 +577,38 @@ func keepOrFail(keepGoing bool, err error) error {
 	return err
 }
 
-func runDockerBuild(ctx context.Context, job buildJob) ([]byte, error) {
-	// 3 fixed flags + a pair per build arg + per-version extras + output/-f/context.
-	const fixedArgs, tailArgs, argsPerBuildArg = 4, 5, 2
+// runDockerBuild builds one version. A platform, when given, is the one the
+// binary is built for: Dockerfiles cross-compile from $BUILDPLATFORM to
+// $TARGETPLATFORM, and without it the target is whatever machine runs the
+// build — an arm64 binary from a Mac, for a service on amd64.
+func runDockerBuild(ctx context.Context, job buildJob, platform string) ([]byte, error) {
+	var out bytes.Buffer
 
-	args := make([]string, 0, fixedArgs+argsPerBuildArg*len(job.buildArgs)+len(job.args)+tailArgs)
+	//nolint:gosec // every argument is ours: the registry's plugin.yaml and the --platform flag
+	cmd := exec.CommandContext(ctx, "docker", dockerBuildArgs(job, platform)...)
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+
+	err := cmd.Run()
+
+	return out.Bytes(), err
+}
+
+// dockerBuildArgs is the docker command line that builds job for platform.
+func dockerBuildArgs(job buildJob, platform string) []string {
+	// 4 fixed flags + the platform pair + a pair per build arg + per-version
+	// extras + output/-f/context.
+	const fixedArgs, platformArgs, tailArgs, argsPerBuildArg = 4, 2, 5, 2
+
+	args := make([]string, 0, fixedArgs+platformArgs+argsPerBuildArg*len(job.buildArgs)+len(job.args)+tailArgs)
 	args = append(args,
 		"build", "--progress=plain",
 		"--build-arg", "VERSION="+job.version,
 	)
+
+	if platform != "" {
+		args = append(args, "--platform", platform)
+	}
 
 	keys := make([]string, 0, len(job.buildArgs))
 	for k := range job.buildArgs {
@@ -605,14 +628,7 @@ func runDockerBuild(ctx context.Context, job buildJob) ([]byte, error) {
 		job.pluginDir,
 	)
 
-	var out bytes.Buffer
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-
-	err := cmd.Run()
-
-	return out.Bytes(), err
+	return args
 }
 
 // dockerfilePath resolves the Dockerfile to use for a job. A per-version dockerfile

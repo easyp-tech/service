@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -48,6 +49,7 @@ func listPlugins(ctx context.Context, svc core.Service, req *generator.PluginsRe
 	response := &generator.PluginsResponse{
 		Plugins:       make([]*generator.PluginInfo, 0, len(list.Plugins)),
 		NextPageToken: encodePageToken(list.Next),
+		Platform:      pluginPlatform(),
 	}
 
 	for _, plugInfo := range list.Plugins {
@@ -62,4 +64,11 @@ func listPlugins(ctx context.Context, svc core.Service, req *generator.PluginsRe
 	}
 
 	return response, nil
+}
+
+// pluginPlatform is the platform plugins run on here, as os/arch. The service
+// executes them itself, so it is the platform of this binary — what
+// `plugins publish` has to build them for.
+func pluginPlatform() string {
+	return runtime.GOOS + "/" + runtime.GOARCH
 }
