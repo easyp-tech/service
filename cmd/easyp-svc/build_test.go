@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -248,5 +249,28 @@ func TestNormalizeOutputRejectsDirectory(t *testing.T) {
 	_, err := normalizeOutput(buildJob{outputDir: dir})
 	if !errors.Is(err, ErrNoOutputBinary) {
 		t.Errorf("expected ErrNoOutputBinary, got %v", err)
+	}
+}
+
+// TestDockerBuildArgsTargetThePlatform pins the one flag that decides which
+// architecture the plugin binary is for. Without it the target is the build
+// machine's, and a Mac publishes arm64 binaries an amd64 service cannot run.
+func TestDockerBuildArgsTargetThePlatform(t *testing.T) {
+	t.Parallel()
+
+	job := buildJob{version: "v1.6.2", pluginDir: "registry/grpc/go", outputDir: "out"} //nolint:exhaustruct // the fields a build reads
+
+	args := dockerBuildArgs(job, "linux/amd64")
+	at := slices.Index(args, "--platform")
+	if at < 0 || args[at+1] != "linux/amd64" {
+		t.Fatalf("no --platform linux/amd64 in %q", args)
+	}
+
+	if args[len(args)-1] != job.pluginDir {
+		t.Fatalf("the build context must stay last: %q", args)
+	}
+
+	if slices.Contains(dockerBuildArgs(job, ""), "--platform") {
+		t.Fatalf("an empty platform must leave the choice to Docker")
 	}
 }

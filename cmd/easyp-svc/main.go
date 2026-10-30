@@ -285,6 +285,7 @@ func getPluginsPublishCommand() *cli.Command {
 				parallel:       cmd.Int(flagParallel),
 				verify: verifyOptions{
 					runtimeImage: cmd.String("runtime-image"),
+					platform:     cmd.String("platform"),
 					smoke:        !cmd.Bool("no-smoke"),
 				},
 			}
@@ -400,6 +401,7 @@ func getPluginsBuildCommand() *cli.Command {
 				archive:        cmd.Bool("archive"),
 				verify: verifyOptions{
 					runtimeImage: cmd.String("runtime-image"),
+					platform:     cmd.String("platform"),
 					smoke:        !cmd.Bool("no-smoke"),
 				},
 			})
@@ -605,6 +607,12 @@ func verifyFlags() []cli.Flag {
 			Usage: "image each built plugin is smoke-tested in; must match the base of the " +
 				"service image the plugins will run under",
 			Value: defaultRuntimeImage,
+		},
+		&cli.StringFlag{
+			Name: "platform",
+			Usage: "platform to build and smoke-test plugins for, e.g. linux/amd64; publish defaults to the " +
+				"one the service reports, build to the machine it runs on",
+			Value: "",
 		},
 		&cli.BoolFlag{
 			Name: "no-smoke",

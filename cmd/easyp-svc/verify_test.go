@@ -98,7 +98,7 @@ func TestSmokeRunsUnpackedBundleWithItsParameter(t *testing.T) {
 	_, err := verifyBundle(t.Context(), job, verifyOptions{
 		smoke:        true,
 		runtimeImage: defaultRuntimeImage,
-		run: func(_ context.Context, image, dir, parameter string) ([]byte, error) {
+		run: func(_ context.Context, image, _, dir, parameter string) ([]byte, error) {
 			gotImage, gotDir, gotParam = image, dir, parameter
 			assert.FileExists(t, filepath.Join(dir, plugarchive.EntrypointName))
 
@@ -123,7 +123,7 @@ func TestSmokeSkipIsHonoured(t *testing.T) {
 
 	_, err := verifyBundle(t.Context(), job, verifyOptions{
 		smoke: true,
-		run: func(context.Context, string, string, string) ([]byte, error) {
+		run: func(context.Context, string, string, string, string) ([]byte, error) {
 			t.Fatal("a plugin marked skip must not be run")
 
 			return nil, nil
@@ -143,7 +143,7 @@ func TestFailedSmokeLeavesNothingToShip(t *testing.T) {
 
 	_, err := verifyBundle(t.Context(), job, verifyOptions{
 		smoke: true,
-		run: func(context.Context, string, string, string) ([]byte, error) {
+		run: func(context.Context, string, string, string, string) ([]byte, error) {
 			return []byte("exec: /nodejs/bin/node: not found"), errors.New("exit status 127")
 		},
 	})

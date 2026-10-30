@@ -58,13 +58,16 @@ type smokeConfig struct {
 // smokeRunner runs an unpacked bundle the way the service would and reports
 // whether it produced a CodeGeneratorResponse. A variable so tests can verify
 // what happens around a failure without a Docker daemon.
-type smokeRunner func(ctx context.Context, image, bundleDir, parameter string) ([]byte, error)
+type smokeRunner func(ctx context.Context, image, platform, bundleDir, parameter string) ([]byte, error)
 
 // verifyOptions controls the checks run on every freshly built version.
 type verifyOptions struct {
 	runtimeImage string
-	smoke        bool
-	run          smokeRunner
+	// platform is what versions are built and smoke-tested for, as Docker's
+	// --platform takes it; empty leaves it to Docker, which picks the host's.
+	platform string
+	smoke    bool
+	run      smokeRunner
 }
 
 // verifyBundle makes a built version directory what the service can use, or
@@ -103,7 +106,7 @@ func verifyBundle(ctx context.Context, job buildJob, opts verifyOptions) ([]byte
 		run = dockerSmoke
 	}
 
-	out, err := run(ctx, opts.runtimeImage, unpacked, job.smoke.Parameter)
+	out, err := run(ctx, opts.runtimeImage, opts.platform, unpacked, job.smoke.Parameter)
 	if err != nil {
 		return out, fmt.Errorf("%w: %w", ErrSmokeFailed, err)
 	}
@@ -241,7 +244,9 @@ func roundTrip(dir string) (string, string, func(), error) {
 // `env -i` empties the environment, as the service does for every plugin; the
 // working directory is /tmp, writable by the service user, standing in for the
 // private one the service creates per run. The bundle is mounted read-only.
-func dockerSmoke(ctx context.Context, image, bundleDir, parameter string) ([]byte, error) {
+// With a platform the image runs as that platform, emulated when it is not the
+// host's, so a binary built for the service is tested as the service runs it.
+func dockerSmoke(ctx context.Context, image, platform, bundleDir, parameter string) ([]byte, error) {
 	request, err := proto.Marshal(smokeRequest(parameter))
 	if err != nil {
 		return nil, fmt.Errorf("proto.Marshal: %w", err)
@@ -250,8 +255,12 @@ func dockerSmoke(ctx context.Context, image, bundleDir, parameter string) ([]byt
 	ctx, cancel := context.WithTimeout(ctx, smokeTimeout)
 	defer cancel()
 
-	//nolint:gosec // every argument is ours; bundleDir is a temp dir this process created
-	cmd := exec.CommandContext(ctx, "docker", "run", "--rm", "-i",
+	args := []string{"run", "--rm", "-i"}
+	if platform != "" {
+		args = append(args, "--platform", platform)
+	}
+
+	args = append(args,
 		"--user", smokeUser,
 		"--workdir", "/tmp",
 		"-v", bundleDir+":/p:ro",
@@ -259,6 +268,8 @@ func dockerSmoke(ctx context.Context, image, bundleDir, parameter string) ([]byt
 		image,
 		"-i", "/p/"+plugarchive.EntrypointName,
 	)
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
 
 	var stdout, stderr bytes.Buffer
 
