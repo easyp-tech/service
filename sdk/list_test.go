@@ -121,3 +121,31 @@ func TestListPluginsStopsWhenTheCallerCancels(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.Less(t, fake.served, 100)
 }
+
+// onePage answers a listing with a single page and records the request.
+type onePage struct {
+	generator.GeneratorAPIClient
+
+	resp *generator.PluginsResponse
+	req  *generator.PluginsRequest
+}
+
+func (o *onePage) Plugins(
+	_ context.Context, req *generator.PluginsRequest, _ ...grpc.CallOption,
+) (*generator.PluginsResponse, error) {
+	o.req = req
+
+	return o.resp, nil
+}
+
+func TestPlatformAsksForTheSmallestPage(t *testing.T) {
+	t.Parallel()
+
+	fake := &onePage{resp: &generator.PluginsResponse{Platform: "linux/amd64"}} //nolint:exhaustruct // req is recorded
+
+	platform, err := testClient(t, fake, time.Second).Platform(t.Context())
+
+	require.NoError(t, err)
+	require.Equal(t, "linux/amd64", platform)
+	require.Equal(t, uint32(1), fake.req.GetPageSize())
+}

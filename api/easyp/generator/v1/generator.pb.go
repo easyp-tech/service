@@ -260,6 +260,12 @@ type PluginsResponse struct {
 	// Pass it back in PluginsRequest.page_token, with the same filters, to
 	// continue the listing.
 	NextPageToken string `protobuf:"bytes,3,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	// Platform the service runs plugins on, as os/arch.
+	//
+	// A plugin binary must be built for it: the service executes the binary
+	// itself, so one built for another architecture fails on every request.
+	// Empty from a server older than v1.3.0.
+	Platform      string `protobuf:"bytes,4,opt,name=platform,proto3" json:"platform,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -304,6 +310,13 @@ func (x *PluginsResponse) GetPlugins() []*PluginInfo {
 func (x *PluginsResponse) GetNextPageToken() string {
 	if x != nil {
 		return x.NextPageToken
+	}
+	return ""
+}
+
+func (x *PluginsResponse) GetPlatform() string {
+	if x != nil {
+		return x.Platform
 	}
 	return ""
 }
@@ -831,10 +844,11 @@ const file_easyp_generator_v1_generator_proto_rawDesc = "" +
 	"\b_versionB\f\n" +
 	"\n" +
 	"_page_sizeB\r\n" +
-	"\v_page_token\"\x8e\x01\n" +
+	"\v_page_token\"\xbf\x01\n" +
 	"\x0fPluginsResponse\x12?\n" +
 	"\aplugins\x18\x01 \x03(\v2\x1e.easyp.generator.v1.PluginInfoB\x05\xdaI\x02\x10\x01R\aplugins\x12-\n" +
-	"\x0fnext_page_token\x18\x03 \x01(\tB\x05\xdaI\x02\x10\x01R\rnextPageTokenJ\x04\b\x02\x10\x03R\x05total\"\xc2\x02\n" +
+	"\x0fnext_page_token\x18\x03 \x01(\tB\x05\xdaI\x02\x10\x01R\rnextPageToken\x12/\n" +
+	"\bplatform\x18\x04 \x01(\tB\x13\xdaI\x10\x10\x01\xa2\x01\vlinux/amd64R\bplatformJ\x04\b\x02\x10\x03R\x05total\"\xc2\x02\n" +
 	"\n" +
 	"PluginInfo\x12\x17\n" +
 	"\x02id\x18\x01 \x01(\tB\a\xdaI\x04\x10\x01P\x01R\x02id\x12A\n" +

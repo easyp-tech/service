@@ -194,6 +194,25 @@ func (c *Client) ListPlugins(ctx context.Context, opts ...ListOption) ([]*genera
 	return plugins, nil
 }
 
+// Platform reports the platform the service runs plugins on, as os/arch —
+// "linux/amd64". A plugin binary has to be built for it. It is empty from a
+// server older than v1.3.0, which does not say.
+func (c *Client) Platform(ctx context.Context) (string, error) {
+	ctx, cancel := c.withTimeout(ctx, c.cfg.listPluginsTimeout)
+	defer cancel()
+
+	// One plugin is the least a page can hold; the platform rides on every
+	// page, so nothing more of the listing is needed.
+	pageSize := uint32(1)
+
+	resp, err := c.genClient.Plugins(ctx, &generator.PluginsRequest{PageSize: &pageSize})
+	if err != nil {
+		return "", fmt.Errorf("c.genClient.Plugins: %w", err)
+	}
+
+	return resp.GetPlatform(), nil
+}
+
 // UpdatePlugin replaces the config and tags of a registered plugin.
 //
 // paths selects what to replace: "config", "tags", or both. Passing none

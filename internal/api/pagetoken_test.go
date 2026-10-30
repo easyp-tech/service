@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -81,6 +82,17 @@ func TestPluginsHandlerSpeaksThePagingContract(t *testing.T) {
 	decoded, err := decodePageToken(resp.GetNextPageToken())
 	require.NoError(t, err)
 	assert.Equal(t, next, decoded, "the response token must resume where the core said the page ended")
+}
+
+// TestPluginsHandlerReportsThePluginPlatform pins what publish builds for: the
+// platform of the binary that will execute the plugins.
+func TestPluginsHandlerReportsThePluginPlatform(t *testing.T) {
+	t.Parallel()
+
+	resp, err := (&API{app: &pagingService{}}).Plugins(t.Context(), &generator.PluginsRequest{})
+	require.NoError(t, err)
+
+	assert.Equal(t, runtime.GOOS+"/"+runtime.GOARCH, resp.GetPlatform())
 }
 
 func TestPluginsHandlerRejectsForeignToken(t *testing.T) {

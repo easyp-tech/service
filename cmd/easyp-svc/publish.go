@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -75,6 +76,7 @@ type archiveStore interface {
 // pluginService is the part of the service publish talks to.
 type pluginService interface {
 	ListPlugins(ctx context.Context, opts ...sdk.ListOption) ([]*generator.PluginInfo, error)
+	Platform(ctx context.Context) (string, error)
 	CreatePlugin(
 		ctx context.Context, group, name, version string, config map[string]any, tags []string,
 	) (*generator.PluginInfo, error)
@@ -281,6 +283,11 @@ func runPluginsPublish(ctx context.Context, opts publishOptions, dest destinatio
 	}
 	defer closeService()
 
+	opts.verify.platform, err = buildPlatform(ctx, opts, service)
+	if err != nil {
+		return err
+	}
+
 	runCtx, abort := context.WithCancelCause(ctx)
 	defer abort(nil)
 
@@ -295,8 +302,7 @@ func runPluginsPublish(ctx context.Context, opts publishOptions, dest destinatio
 		abort:        abort,
 	}
 
-	_, _ = fmt.Fprintf(os.Stdout, "Публикация: %d версий (build-parallel=%d, parallel=%d)\n\n",
-		len(items), cap(pub.buildSlots), cap(pub.deliverSlots))
+	pub.printHeader(len(items))
 
 	pub.tracker.verb = "Publishing"
 
@@ -385,6 +391,47 @@ func prepare(
 	}
 
 	return service, closeService, registered, nil
+}
+
+// printHeader says what the run is about to do, and for a build, what for.
+func (p *publisher) printHeader(versions int) {
+	_, _ = fmt.Fprintf(os.Stdout, "Публикация: %d версий (build-parallel=%d, parallel=%d)\n",
+		versions, cap(p.buildSlots), cap(p.deliverSlots))
+
+	if p.opts.registryPath != "" {
+		_, _ = fmt.Fprintf(os.Stdout, "Платформа сборки: %s\n", cmp.Or(p.opts.verify.platform, "как у этой машины"))
+	}
+
+	_, _ = fmt.Fprintln(os.Stdout)
+}
+
+// buildPlatform is the platform a run builds for: --platform when given, else
+// the service's. Nothing is built from --archives or --plugins-dir, so there
+// is nothing to ask.
+func buildPlatform(ctx context.Context, opts publishOptions, service pluginService) (string, error) {
+	if opts.registryPath == "" || opts.verify.platform != "" {
+		return opts.verify.platform, nil
+	}
+
+	return servicePlatform(ctx, service)
+}
+
+// servicePlatform is the platform the service runs plugins on, which is what
+// they have to be built for. A server too old to say leaves the build to the
+// machine publish runs on, as before, and is warned about: from a Mac that is
+// arm64, which an amd64 service cannot execute.
+func servicePlatform(ctx context.Context, service pluginService) (string, error) {
+	platform, err := service.Platform(ctx)
+	if err != nil {
+		return "", fmt.Errorf("asking the service for its platform: %w", err)
+	}
+
+	if platform == "" {
+		_, _ = fmt.Fprintln(os.Stderr, "warning: the service does not report its platform (older than v1.3.0); "+
+			"building for this machine's — pass --platform if the service runs on another")
+	}
+
+	return platform, nil
 }
 
 // publishItems lists the versions to publish and the ones plugin.yaml skips.

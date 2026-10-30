@@ -76,6 +76,7 @@ type fakeService struct {
 	onCreate   func(key string) error
 	onUpdate   func(key string) error
 	onPreflt   error
+	platform   string
 }
 
 func newFakeService(registered ...string) *fakeService {
@@ -106,6 +107,10 @@ func (f *fakeService) ListPlugins(context.Context, ...sdk.ListOption) ([]*genera
 	}
 
 	return out, nil
+}
+
+func (f *fakeService) Platform(context.Context) (string, error) {
+	return f.platform, nil
 }
 
 //nolint:wrapcheck // a fake answering with the statuses the service sends
@@ -530,4 +535,32 @@ func TestPruneEmptyDirsLeavesFailedBuilds(t *testing.T) {
 	assert.NoDirExists(t, filepath.Join(root, "grpc"), "an emptied {group}/{name} goes")
 	assert.FileExists(t, filepath.Join(failed, "build.log"), "a failed build keeps its log")
 	assert.DirExists(t, root, "the work directory itself stays")
+}
+
+func TestBuildPlatform(t *testing.T) {
+	t.Parallel()
+
+	service := newFakeService()
+	service.platform = "linux/amd64"
+
+	build := publishOptions{registryPath: "registry"} //nolint:exhaustruct // a registry run
+	given := publishOptions{registryPath: "registry"} //nolint:exhaustruct // a registry run with --platform
+	given.verify.platform = "linux/arm64"
+	archives := publishOptions{archivesDir: "archives"} //nolint:exhaustruct // nothing is built
+
+	for _, tc := range []struct {
+		name    string
+		opts    publishOptions
+		service *fakeService
+		want    string
+	}{
+		{"the service's", build, service, "linux/amd64"},
+		{"--platform over the service's", given, service, "linux/arm64"},
+		{"nothing to build", archives, service, ""},
+		{"an old server leaves it to this machine", build, newFakeService(), ""},
+	} {
+		got, err := buildPlatform(t.Context(), tc.opts, tc.service)
+		require.NoError(t, err, tc.name)
+		assert.Equal(t, tc.want, got, tc.name)
+	}
 }
