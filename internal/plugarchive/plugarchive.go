@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // EntrypointName is the required executable name inside every plugin archive.
@@ -37,6 +38,13 @@ const (
 	// ownerAccess is OR-ed into restored directory modes so the extracting
 	// process can always descend into what it just created.
 	ownerAccess = 0o700
+	// Modes recorded in an archive. A file keeps only whether it is
+	// executable: the rest of its mode is the building machine's umask.
+	packedDirMode     = 0o755
+	packedExecMode    = 0o755
+	packedFileMode    = 0o644
+	packedSymlinkMode = 0o777
+	anyExecBits       = 0o111
 )
 
 // Package errors.
@@ -46,8 +54,14 @@ var (
 )
 
 // PackDir writes a tar.gz archive of the contents of dirPath to w.
-// Entry names are relative to dirPath; file modes (including exec bits) are
-// preserved and symlinks are stored verbatim.
+// Entry names are relative to dirPath; exec bits are preserved and symlinks are
+// stored verbatim.
+//
+// The same contents always pack to the same bytes. Times, owners and the
+// umask's share of a mode depend on where and when the version was built, not
+// on what it is, so they are left out. The archive's sha256 then names the
+// plugin: a rebuild of an unchanged version matches what storage holds, its
+// upload is skipped, and no replica refetches it.
 func PackDir(dirPath string, w io.Writer) error {
 	gzWriter := gzip.NewWriter(w)
 	tarWriter := tar.NewWriter(gzWriter)
@@ -102,6 +116,7 @@ func packEntry(tarWriter *tar.Writer, dirPath string, path string, info os.FileI
 	if info.IsDir() {
 		header.Name += "/"
 	}
+	normalizeHeader(header, info)
 
 	err = tarWriter.WriteHeader(header)
 	if err != nil {
@@ -127,6 +142,32 @@ func packEntry(tarWriter *tar.Writer, dirPath string, path string, info os.FileI
 	}
 
 	return nil
+}
+
+// normalizeHeader drops from header everything that depends on the machine and
+// moment of the build rather than on the plugin.
+//
+// Every entry gets the epoch as its modification time. Nothing reads it back —
+// Unpack lets files take the time they are written — and a real one is the
+// build's clock, which made two builds of the same binary two different
+// archives.
+func normalizeHeader(header *tar.Header, info os.FileInfo) {
+	header.ModTime = time.Unix(0, 0).UTC()
+	header.AccessTime = time.Time{}
+	header.ChangeTime = time.Time{}
+	header.Uid, header.Gid = 0, 0
+	header.Uname, header.Gname = "", ""
+
+	switch {
+	case info.IsDir():
+		header.Mode = packedDirMode
+	case info.Mode()&os.ModeSymlink != 0:
+		header.Mode = packedSymlinkMode
+	case info.Mode()&anyExecBits != 0:
+		header.Mode = packedExecMode
+	default:
+		header.Mode = packedFileMode
+	}
 }
 
 // Unpack extracts the tar.gz archive at archivePath into destDir, replacing
