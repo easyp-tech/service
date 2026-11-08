@@ -175,21 +175,10 @@ linters:
       - linters:
           - funlen
         path: internal/telemetry/telemetry\.go
-      # Smoke test binary and test files: dynamic errors are acceptable
+      # Test files: dynamic errors are acceptable
       - linters:
           - err113
         path: _test\.go
-      - linters:
-          - err113
-          - wrapcheck
-          - errcheck
-          - forbidigo
-          - noinlineerr
-          - cyclop
-          - gocognit
-          - funlen
-          - mnd
-        path: cmd/mcp-smoke/
       # Configuration validation reports what is wrong with a specific setting:
       # the message carries the key, the value the operator wrote and what was
       # expected. A sentinel per setting would be a hundred exported errors

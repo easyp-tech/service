@@ -474,7 +474,7 @@ func TestPublishRegistersWhatIsAlreadyInStorage(t *testing.T) {
 	assert.Empty(t, calls[0].config)
 }
 
-// TestPublishRegistersAPluginsDir is `task run-local`: a plugins_dir holding
+// TestPublishRegistersAPluginsDir is the from-source quick start: a plugins_dir holding
 // unpacked versions, and a service started on it with an empty registry.
 func TestPublishRegistersAPluginsDir(t *testing.T) {
 	t.Parallel()
