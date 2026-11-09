@@ -19,7 +19,7 @@ import (
 )
 
 // licensePublicKeysEnv is spelled out rather than imported: this test is the
-// other side of the contract with the Helm chart and docker-compose, and it
+// other side of the contract with the Helm chart, and it
 // should fail if the variable is ever renamed rather than follow it.
 const licensePublicKeysEnv = "LICENSE_PUBLIC_KEYS"
 
@@ -125,11 +125,11 @@ func TestLicensePublicKeysDecoding(t *testing.T) {
 }
 
 // TestLicensePublicKeysOverrideEmptyYAMLMap is the regression guard for the trap
-// that makes the whole layering work: `public_keys: {}` in a shipped config
+// that makes the whole layering work: `public_keys: {}` in a config file
 // decodes to a non-nil empty map, for which reflect.IsZero is false. Without
 // DefaultOverwrite envconfig would skip the field entirely and never look the
-// variable up — the enterprise container would run as community, and only
-// deploy/scripts/check-tiers.sh would notice.
+// variable up — an enterprise container would run as community, and nothing at
+// startup would say so.
 func TestLicensePublicKeysOverrideEmptyYAMLMap(t *testing.T) {
 	t.Parallel()
 

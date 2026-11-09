@@ -12,94 +12,29 @@ import (
 	"github.com/easyp-tech/service/internal/config"
 )
 
-// shippedConfigs are the files the repository actually deploys with. The paths
-// are relative to this package.
-var shippedConfigs = []string{
-	"config.yml",
-	"config.local.yml",
-	"config.community.dev.yml",
-	"config.enterprise.dev.yml",
+// s3Fixture writes a config that stores plugins in object storage and leaves
+// the credentials to the environment, which is how a deployment is expected to
+// supply them.
+func s3Fixture(t *testing.T) string {
+	t.Helper()
+
+	return fixture(t, `
+db:
+  postgres: "postgres://easyp_svc:easyp_pass@postgres:5432/easyp_db?sslmode=disable"
+registry:
+  s3:
+    endpoint: "https://storage.example.com"
+    bucket: "easyp-plugins"
+    force_path_style: true
+auth:
+  write_tokens: []
+`)
 }
 
-func shippedPath(name string) string {
-	return filepath.Join("..", "..", "deploy", "config", name)
-}
-
-// noEnv is an empty environment: the configs must stand on their own, since a
-// developer runs them with `task run-local` and a container starts with only
-// what its compose file passes in.
+// noEnv is an empty environment, so a fixture is loaded with nothing but what
+// the file itself says.
 func noEnv() envconfig.Lookuper {
 	return envconfig.MapLookuper(map[string]string{})
-}
-
-// TestShippedConfigsAreValid is the test whose absence let a broken config reach
-// HEAD: deploy/config/config.local.yml omitted server.max_send_msg_size, which
-// arrived as zero and failed the check against registry.max_output_size, so
-// `task run-local` did not start for anyone who cloned the repository. Every
-// rule in Validate was covered by nothing, and no test loaded these files at all.
-func TestShippedConfigsAreValid(t *testing.T) {
-	t.Parallel()
-
-	for _, name := range shippedConfigs {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
-			res, err := config.LoadWith(t.Context(), shippedPath(name), noEnv())
-			cfg, warnings := res.Config, res.Diagnostics
-			require.NoError(t, err)
-			require.NotNil(t, cfg)
-			require.Empty(t, warnings, "unknown fields in a shipped config are settings that do nothing")
-		})
-	}
-}
-
-// TestShippedConfigsHaveNoWriteTokensOnPublicStacks pins the decision that the
-// two tier configs ship no credentials. They are what docker-compose.public.yml
-// puts on the internet, and they used to carry the digest of the literal
-// "local-dev-token" — published in this repository, so anyone who read it could
-// create, replace and delete plugins. An empty list denies every write; real
-// ones arrive through AUTH_WRITE_TOKENS.
-func TestShippedConfigsHaveNoWriteTokensOnPublicStacks(t *testing.T) {
-	t.Parallel()
-
-	for _, name := range []string{"config.community.dev.yml", "config.enterprise.dev.yml"} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
-			res, err := config.LoadWith(t.Context(), shippedPath(name), noEnv())
-			cfg := res.Config
-			require.NoError(t, err)
-			require.Empty(t, cfg.Auth.WriteTokens,
-				"a publicly reachable stack must not ship a credential in a committed file")
-		})
-	}
-}
-
-// TestShippedConfigsTrustTheProxy guards the setting whose empty value is
-// invisible: behind traefik, with no trusted range, the library short-circuits
-// to the connecting address and never reads a forwarding header, so every caller
-// shares one rate-limit bucket and the audit log names the proxy. The same
-// defect was already fixed once in the extractor; the configs kept it alive.
-func TestShippedConfigsTrustTheProxy(t *testing.T) {
-	t.Parallel()
-
-	// config.local.yml is deliberately absent: it runs without a proxy, where an
-	// empty list is the correct and safe answer.
-	for _, name := range []string{"config.yml", "config.community.dev.yml", "config.enterprise.dev.yml"} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
-			res, err := config.LoadWith(t.Context(), shippedPath(name), noEnv())
-			cfg := res.Config
-			require.NoError(t, err)
-			require.NotEmpty(t, cfg.Server.TrustedProxies,
-				"this stack is reached through traefik, so the proxy range has to be trusted")
-
-			prefixes, err := cfg.Server.TrustedProxyPrefixes()
-			require.NoError(t, err)
-			require.NotEmpty(t, prefixes)
-		})
-	}
 }
 
 // TestPrecedence covers the whole layering in one table. The order is the point:
@@ -183,19 +118,16 @@ func TestTelemetryHasNoDefault(t *testing.T) {
 	require.Empty(t, cfg.Telemetry.OTLPEndpoint, "an unset collector must stay unset")
 	require.Empty(t, cfg.Telemetry.PyroscopeEndpoint)
 
-	// And the tier configs, which ship it empty on purpose, must stay that way.
-	for _, name := range []string{"config.community.dev.yml", "config.enterprise.dev.yml"} {
-		res, err := config.LoadWith(t.Context(), shippedPath(name), noEnv())
-		loaded := res.Config
-		require.NoError(t, err)
-		require.Empty(t, loaded.Telemetry.OTLPEndpoint,
-			"%s has no collector unless the observability overlay is layered on", name)
-		require.Empty(t, loaded.Telemetry.PyroscopeEndpoint, name)
-	}
+	// And a file that does not name a collector loads without one.
+	res, err := config.LoadWith(t.Context(), s3Fixture(t), noEnv())
+	loaded := res.Config
+	require.NoError(t, err)
+	require.Empty(t, loaded.Telemetry.OTLPEndpoint, "a file without a collector must not acquire one")
+	require.Empty(t, loaded.Telemetry.PyroscopeEndpoint)
 }
 
 // TestEmptyVariableDoesNotClobber covers the interaction with docker-compose,
-// where the idiom throughout deploy/ is `LICENSE_KEY: "${LICENSE_KEY:-}"`: the
+// where the usual idiom is `LICENSE_KEY: "${LICENSE_KEY:-}"`: the
 // variable is always defined in the container and usually empty. os.LookupEnv
 // reports those as found, so without treating empty as absent an unset shell
 // variable would wipe whatever the config file said.
@@ -228,8 +160,8 @@ func TestEmptyVariableDoesNotClobber(t *testing.T) {
 // makes the layering work at all. A YAML `{}` or `[]` decodes to a non-nil empty
 // map or slice, for which reflect.IsZero is false; without DefaultOverwrite
 // envconfig skips such a field and never looks the variable up. The licence keys
-// are the case that matters — the enterprise container would have run as
-// community, and only deploy/scripts/check-tiers.sh would have noticed.
+// are the case that matters — an enterprise container would have run as
+// community, and nothing at startup would have said so.
 func TestEnvOverridesNonZeroCollections(t *testing.T) {
 	t.Parallel()
 
@@ -240,7 +172,7 @@ func TestEnvOverridesNonZeroCollections(t *testing.T) {
 	)
 
 	cfg := config.Config{}
-	// Exactly what the shipped configs decode to.
+	// Exactly what a file with `{}` and `[]` in these keys decodes to.
 	cfg.License.PublicKeys = map[string]string{}
 	cfg.Server.TrustedProxies = []string{}
 	cfg.Auth.WriteTokens = config.TokenList{}
@@ -260,11 +192,11 @@ func TestEnvOverridesNonZeroCollections(t *testing.T) {
 		"AUTH_WRITE_TOKENS is the only way to give a --cfg deployment a credential")
 }
 
-// TestShippedConfigsAcceptEnvOverrides walks the real files rather than a
-// hand-built struct: the tier configs ship an empty write-token list and empty
-// telemetry endpoints precisely because the environment is expected to fill
-// them, and that expectation is worth pinning.
-func TestShippedConfigsAcceptEnvOverrides(t *testing.T) {
+// TestFileAcceptsEnvOverrides loads a real file rather than a hand-built
+// struct: a deployment ships an empty write-token list and empty telemetry
+// endpoints precisely because the environment is expected to fill them, and
+// that expectation is worth pinning.
+func TestFileAcceptsEnvOverrides(t *testing.T) {
 	t.Parallel()
 
 	const digest = "0000000000000000000000000000000000000000000000000000000000000002"
@@ -276,7 +208,7 @@ func TestShippedConfigsAcceptEnvOverrides(t *testing.T) {
 		"REGISTRY_S3_SECRET_ACCESS_KEY": "secret",
 	})
 
-	res, err := config.LoadWith(t.Context(), shippedPath("config.enterprise.dev.yml"), env)
+	res, err := config.LoadWith(t.Context(), s3Fixture(t), env)
 	cfg := res.Config
 	require.NoError(t, err)
 
@@ -300,7 +232,7 @@ func TestS3CredentialsValidatedAfterEnv(t *testing.T) {
 		"REGISTRY_S3_ACCESS_KEY_ID": "key-without-its-secret",
 	})
 
-	_, err := config.LoadWith(t.Context(), shippedPath("config.enterprise.dev.yml"), env)
+	_, err := config.LoadWith(t.Context(), s3Fixture(t), env)
 	require.ErrorContains(t, err, "must be set together")
 }
 
@@ -436,68 +368,6 @@ func TestExplicitZerosSurvive(t *testing.T) {
 	})
 }
 
-// restatedDefaultsAllowed lists the keys a shipped config may state even though
-// stating them changes nothing. Each needs a reason, because the cost is real:
-// every such key is one more line that looks like it configures something.
-var restatedDefaultsAllowed = map[string]string{
-	// Written down empty, in the two configs that face the internet, so that the
-	// decision is visible in the file. What used to sit there was the digest of
-	// a token published in this repository; a reader has to be able to see that
-	// it is gone on purpose rather than wonder whether it was lost in an edit.
-	"auth.write_tokens": "the absence of a credential is the setting, and it is worth stating",
-}
-
-// TestShippedConfigsStateOnlyWhatTheyChange is the guard for the defect that
-// went unnoticed longest. worker_pool.max_retries said 3 in all four of these
-// files and 2 in the Helm chart and the struct tag, so docker deployments
-// retried a generation four times and Kubernetes ones three — a difference
-// nobody chose and nothing reported.
-//
-// It survived because the files restated nearly every default: 48 of 53
-// settings in the enterprise config came from the file, and 44 of those said
-// exactly what the binary already said. One line that genuinely differed was
-// indistinguishable from forty that did not.
-//
-// So: a key in a shipped config must change something. To see what a file
-// actually says, and what it resolves to including the defaults it leaves
-// alone, use `easyp-svc config print --cfg <file> --changed` and `--origin`.
-func TestShippedConfigsStateOnlyWhatTheyChange(t *testing.T) {
-	t.Parallel()
-
-	defaults, err := config.Defaults(t.Context())
-	require.NoError(t, err)
-
-	leaves, err := config.Leaves()
-	require.NoError(t, err)
-
-	for _, name := range shippedConfigs {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
-			res, err := config.LoadWith(t.Context(), shippedPath(name), noEnv())
-			cfg, origins := res.Config, res.Origins
-			require.NoError(t, err)
-
-			for _, leaf := range leaves {
-				if origins[leaf.Name()] != config.OriginFile {
-					continue
-				}
-
-				if reason, allowed := restatedDefaultsAllowed[leaf.Name()]; allowed {
-					t.Logf("%s restates its default deliberately: %s", leaf.Name(), reason)
-
-					continue
-				}
-
-				require.False(t, leaf.SameValue(cfg, defaults),
-					"%s repeats the default (%v) and can be deleted; if it is meant to pin the value "+
-						"against a change in the binary, add it to restatedDefaultsAllowed with the reason",
-					leaf.Name(), leaf.Value(defaults).Interface())
-			}
-		})
-	}
-}
-
 // TestExplicitZerosSurviveForEveryField is the half TestExplicitZerosSurvive
 // could not cover. That test names the five fields a hand-maintained list used
 // to enumerate; this one takes a field that was never on it.
@@ -544,7 +414,7 @@ func TestOriginsReportEachLayer(t *testing.T) {
 		"REGISTRY_S3_BUCKET": "",
 	}))
 
-	res, err := config.LoadWith(t.Context(), shippedPath("config.enterprise.dev.yml"), env)
+	res, err := config.LoadWith(t.Context(), s3Fixture(t), env)
 	cfg, origins := res.Config, res.Origins
 	require.NoError(t, err)
 
@@ -552,8 +422,7 @@ func TestOriginsReportEachLayer(t *testing.T) {
 	require.Equal(t, config.OriginFile, origins["registry.s3.bucket"],
 		"an empty variable did not supply this; the file did")
 	require.Equal(t, "easyp-plugins", cfg.Registry.S3.Bucket)
-	// One of the few settings the shipped configs do not restate. That it is
-	// this hard to find one is what Этап 4 is about.
+	// A setting the fixture does not name.
 	require.Equal(t, config.OriginDefault, origins["audit.enqueue_timeout"],
 		"a setting the file does not name comes from the tag")
 

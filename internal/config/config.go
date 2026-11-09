@@ -1171,8 +1171,8 @@ func ApplyEnv(ctx context.Context, cfg *Config) error {
 // environmentLookuper reads the process environment, treating a variable that is
 // set but empty as absent.
 //
-// This is what makes the layering safe next to docker-compose, where the idiom
-// throughout deploy/ is `LICENSE_KEY: "${LICENSE_KEY:-}"` — a variable that is
+// This is what makes the layering safe next to docker-compose, where the usual
+// idiom is `LICENSE_KEY: "${LICENSE_KEY:-}"` — a variable that is
 // always defined and usually empty. os.LookupEnv reports those as found, so
 // without this an unset shell variable would overwrite a value written in the
 // config file with nothing, and a licence or a DSN in the YAML would vanish the

@@ -351,8 +351,8 @@ func TestEnsureBinaryRefetchesRepublished(t *testing.T) {
 	})
 }
 
-// TestRelativePluginsDirDerivesARunnableCommand covers `task run-local`, whose
-// config says plugins_dir "./plugins". The derived command used to keep that
+// TestRelativePluginsDirDerivesARunnableCommand covers the from-source quick start, whose
+// plugins_dir is "./plugins". The derived command used to keep that
 // relative form, and a plugin runs in a private directory under .tmp, so every
 // generation failed with "no such file or directory".
 //

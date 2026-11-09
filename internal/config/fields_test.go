@@ -53,9 +53,9 @@ func TestLeafNamesAreUnique(t *testing.T) {
 
 // TestLeavesMatchTheDeployedNames pins the two names against what is written
 // down outside this repository's Go code: the environment variables in
-// deploy/charts/easyp-service/templates/deployment.yaml and the keys in
-// deploy/config/*.yml. If the prefix accumulation were wrong — a missing
-// underscore, a section skipped — every one of those files would be addressing a
+// deploy/charts/easyp-service/templates/statefulset.yaml and the keys of a YAML
+// config. If the prefix accumulation were wrong — a missing
+// underscore, a section skipped — every one of those would be addressing a
 // setting that does not exist, and nothing else would say so.
 func TestLeavesMatchTheDeployedNames(t *testing.T) {
 	t.Parallel()

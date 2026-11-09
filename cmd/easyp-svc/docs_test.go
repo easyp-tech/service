@@ -39,11 +39,10 @@ func TestReadmeNamesOnlyRealVariables(t *testing.T) {
 	}
 
 	// Real names that are not settings of this Config, so the check does not
-	// reject the README for documenting them: the client's credential, the
-	// compose-level variables, and the ones `task publish-archives` reads.
+	// reject the README for documenting them: the client commands' credential
+	// and log level, and what the AWS SDK reads for `plugins publish --archives`.
 	for _, name := range []string{
 		"EASYP_TOKEN",
-		"EASYP_SERVICE_VERSION",
 		"LOG_LEVEL",
 		"S3_ENDPOINT",
 		"AWS_ACCESS_KEY_ID",

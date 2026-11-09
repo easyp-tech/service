@@ -107,7 +107,3 @@ generate:
       out: api
       opts:
         paths: source_relative
-    # - remote: "api.beta.easyp.tech/easyp-tech/easydoc"
-    #   out: docs
-    #   opts:
-    #     formats: "html|md"
