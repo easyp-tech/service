@@ -3,10 +3,9 @@
 # Why this exists: release.yml runs only on a version tag, and goreleaser
 # publishes `:latest` from there. So `:latest` has always meant "the last
 # release", never "current master", and nothing published master at all. That
-# gap produced a dead end for anyone following the README — the config files in
-# this repository are written as differences from the binary's defaults, so a
-# file and an image from different weeks disagree about which defaults exist,
-# and the error names a key whose default is documented.
+# left no image matching the README on master: a config written against
+# current defaults fails on an image from a release weeks old, and the error
+# names a key whose default is documented.
 #
 # Three tags, three meanings, and they must not be confused:
 #
