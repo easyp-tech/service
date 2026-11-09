@@ -5,9 +5,6 @@
 *.so
 *.dylib
 bin/
-main
-easyp
-epctl
 plugins/
 
 # Test binary, built with `go test -c`
@@ -35,16 +32,8 @@ Thumbs.db
 # Dependency directories
 vendor/
 
-# Generated protobuf files are committed for client usage
-# api/**/*.pb.go
-# api/**/*_grpc.pb.go
-
-# Test generated files
-test/generated/
-
 # EasyP generated files
 easyp.lock
-.kiro/
 
 # Serena tool workspace: local project config and cache.
 .serena/

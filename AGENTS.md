@@ -105,7 +105,6 @@ See [README.md](README.md#development) for full setup.
 ```bash
 task build-plugins       # Build the whole registry into plugins/ (80 plugins, hundreds of versions; takes hours)
 task build-plugins-filter # One slice: FILTER='grpc/go:v1.6.2' task build-plugins-filter
-task publish-archives    # Publish a plugin.tgz tree to any service + S3 (S3_ENDPOINT, ADDR, ARCHIVES)
 task generate            # Regenerate api/ (easyp.yaml, against plugins.beta.easyp.tech)
 go test ./...            # Standard tests
 go test -p 1 -tags integration ./test/... ./internal/database/...   # Needs EASYP_TEST_DSN
