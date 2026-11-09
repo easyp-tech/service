@@ -48,10 +48,6 @@ enough to confirm it works, not enough to expose. The chart's
 [README](deploy/charts/easyp-service/README.md) covers TLS, mTLS, the licence,
 `ServiceMonitor`, `PrometheusRule` and what each secret key means.
 
-**Compose** — `deploy/docker-compose.yml` is the full development stack:
-Postgres, an S3-compatible store, the observability suite and traefik in front
-of the service. [Quick start](#quick-start) walks through it.
-
 **Binaries** — `easyp-svc` for linux and darwin, amd64 and arm64, on the
 [releases page](https://github.com/easyp-tech/service/releases). The same binary
 is the server (`service start`) and the operator's CLI (`plugins`, `config`,
@@ -61,71 +57,49 @@ is the server (`service start`) and the operator's CLI (`plugins`, `config`,
 
 ### Prerequisites
 
-- Docker with the compose plugin (`docker compose`, not `docker-compose`)
-- [Task](https://taskfile.dev/)
-- Go 1.26+ to run the CLI from source; otherwise a release binary on `PATH`
+- A Postgres the service can reach
+- Docker, to build plugins from their recipes in `registry/`
+- [Task](https://taskfile.dev/) and Go 1.26+ to run from source; otherwise a release binary on `PATH`
 - [easyp](https://github.com/easyp-tech/easyp) to generate code from the client side
 
-### The compose stack
+### From source
 
-Plugins are built from the Dockerfiles in `registry/`, pushed to the stack's
-object store, then registered with the service. The whole catalogue is 80
+Plugins are built from the Dockerfiles in `registry/`. The whole catalogue is 80
 plugins in several hundred versions and takes hours; a filter builds one:
-
-```bash
-# 1. Generate development certificates and start everything.
-task up
-
-# 2. Build, upload and register the two plugins easyp.local.yaml asks for.
-#    Without FILTER, `task publish-plugins` publishes the whole registry.
-FILTER='protocolbuffers/go:v1.36.10' task publish-plugins
-FILTER='grpc/go:v1.6.2' task publish-plugins
-
-# Or restart the stack and publish the whole registry in one go:
-task run
-```
-
-The gRPC port is not published on the host: the way in is traefik at
-`easyp.api.localhost:4443`, which terminates TLS and speaks mutual TLS to the
-service. `task publish-plugins` already knows that. To see what got
-registered:
-
-```bash
-easyp-svc api descriptor -o api.protoset
-grpcurl -protoset api.protoset -cacert deploy/certs/ca.crt \
-  easyp.api.localhost:4443 easyp.generator.v1.GeneratorAPI/Plugins
-```
-
-Grafana is on [localhost:3000](http://localhost:3000) (`admin` / `admin`).
-
-### From source, against Postgres alone
-
-For working on the service itself: no traefik, no TLS, no object store.
-`task run-local` starts the service from `deploy/config/config.local.yml`,
-plaintext on 8080, and registers whatever is in `plugins/` once it is ready.
 
 ```bash
 FILTER='protocolbuffers/go:v1.36.10' task build-plugins-filter
 FILTER='grpc/go:v1.6.2' task build-plugins-filter
-task up-minimal        # Postgres only; on 5433 if 5432 is taken (EASYP_POSTGRES_PORT)
-task run-local
-easyp --cfg easyp.local.yaml generate       # in another terminal
-go run ./cmd/mcp-smoke --endpoint http://localhost:8083/mcp
+
+# A credential for registering them. Keep the token; the digest goes to the service.
+go run ./cmd/easyp-svc auth new-token --name local
+
+DB_POSTGRES_DSN='postgres://user:pass@localhost:5432/easyp?sslmode=disable' \
+REGISTRY_PLUGINS_DIR=./plugins \
+AUTH_WRITE_TOKENS='local=<64 hex>' \
+MCP_ENABLED=true \
+  go run ./cmd/easyp-svc service start
+
+# In another terminal: register what was built.
+go run ./cmd/easyp-svc plugins publish --plugins-dir plugins --insecure --token '<token>'
 ```
+
+That is plaintext on the default ports, with no object storage: plugins are read
+from `plugins/` and nothing is evicted from it.
 
 **On macOS this registers plugins but cannot run them.** `plugins build` is a
 Docker build, so the binaries it extracts are Linux binaries, and a service
 running natively on macOS gets `exec format error` from the first
-`GenerateCode`. Use the compose stack there — the service runs in a Linux
-container — and keep the from-source path for Linux hosts.
+`GenerateCode`. Run the image there instead, with `plugins/` mounted at
+`/plugins` — the service then runs in a Linux container.
 
 ### Is it up?
 
 ```bash
-curl -i http://localhost:8082/live    # liveness: 200 as soon as the listener is bound
-curl -i http://localhost:8082/        # readiness: 200 once Postgres answers, 503 before
-easyp-svc health --addr localhost:8082   # the same probe as a command; exit 0 or 1
-curl http://localhost:8081/metrics
+curl -i http://localhost:23412/live    # liveness: 200 as soon as the listener is bound
+curl -i http://localhost:23412/        # readiness: 200 once Postgres answers, 503 before
+easyp-svc health --addr localhost:23412   # the same probe as a command; exit 0 or 1
+curl http://localhost:23411/metrics
 ```
 
 `easyp-svc health` is what the image's `HEALTHCHECK` runs. See
@@ -150,9 +124,6 @@ generate:
         paths: source_relative
 ```
 
-`easyp.local.yaml` in this repository does exactly that against a service run
-from source.
-
 ### Go SDK
 
 ```go
@@ -162,7 +133,7 @@ import "github.com/easyp-tech/service/sdk"
 // sdk.WithTransportCredentials for a private CA, or sdk.WithInsecure() for a
 // plaintext local service.
 client, err := sdk.NewClient(
-    "localhost:8080",
+    "localhost:23410",
     sdk.WithInsecure(),
     sdk.WithMaxRetries(3),
     sdk.WithRetryBaseDelay(time.Second),
@@ -221,19 +192,18 @@ An HTTP endpoint at `/mcp` (streamable transport) for AI tooling, with one tool:
 **Opt-in.** The listener is off unless `mcp.enabled: true` (env `MCP_ENABLED`):
 it serves plain HTTP outside the gRPC interceptor chain — no TLS, no rate limit,
 no audit — so a deployment decides whether that surface exists. It is read-only
-and exposes nothing the anonymous gRPC reads do not. easyp-tech's own configs
-under `deploy/config/` enable it; the Helm chart ships it off.
+and exposes nothing the anonymous gRPC reads do not. The Helm chart ships it
+off.
 
 ```json
 {
   "mcpServers": {
-    "easyp": { "url": "http://localhost:8083/mcp" }
+    "easyp": { "url": "http://localhost:23413/mcp" }
   }
 }
 ```
 
-Handler tests: `task test-mcp`. Live check against a running endpoint:
-`task smoke-mcp`.
+Handler tests: `go test ./internal/api`.
 
 ## Configuration
 
@@ -250,8 +220,8 @@ The file can also be named by `EASYP_CONFIG` instead of `--cfg`. The image's
 `HEALTHCHECK` depends on that: the probe runs without a command line of its own
 and finds the health port through the same variable.
 
-A variable that is set but empty counts as not set, so the `"${VAR:-}"` form used
-throughout `deploy/` leaves the file's value alone when the variable is not
+A variable that is set but empty counts as not set, so the `"${VAR:-}"` form
+compose files use leaves the file's value alone when the variable is not
 exported. This is what lets a secret — `DB_POSTGRES_DSN`, `AUTH_WRITE_TOKENS`,
 `LICENSE_KEY`, `REGISTRY_S3_SECRET_ACCESS_KEY` — stay out of a committed config.
 
@@ -288,13 +258,13 @@ LICENSE_KEY=
 LICENSE_PUBLIC_KEYS="<kid>:<64 hex>"
 
 # Object storage; enabled by the bucket being set.
-REGISTRY_S3_ENDPOINT="http://rustfs:9000"
+REGISTRY_S3_ENDPOINT="https://storage.example.com"
 REGISTRY_S3_BUCKET="easyp-plugins"
-REGISTRY_S3_ACCESS_KEY_ID="rustfsadmin"
-REGISTRY_S3_SECRET_ACCESS_KEY="rustfsadmin"
+REGISTRY_S3_ACCESS_KEY_ID="<access key>"
+REGISTRY_S3_SECRET_ACCESS_KEY="<secret key>"
 
 # Telemetry; empty means no exporter is built.
-TELEMETRY_OTLP_ENDPOINT="easyp-alloy:4317"
+TELEMETRY_OTLP_ENDPOINT="otel-collector:4317"
 ```
 
 ### Checking a configuration
@@ -304,14 +274,14 @@ service to be running:
 
 ```bash
 # Would the service start on this? Exits non-zero if not.
-easyp-svc config validate --cfg deploy/config/config.yml
+easyp-svc config validate --cfg config.yml
 
 # What will actually apply, and which layer supplied each value?
-easyp-svc config print --cfg deploy/config/config.yml --origin
+easyp-svc config print --cfg config.yml --origin
 
 # What does this deployment change from the built-in defaults? The output is
 # exactly what the file needs to contain.
-easyp-svc config print --cfg deploy/config/config.yml --origin --changed
+easyp-svc config print --cfg config.yml --origin --changed
 ```
 
 Secrets print as `***` unless `--show-secrets` is given. With no `--cfg`, both
@@ -324,26 +294,19 @@ question is answerable inside a container where these commands are not to hand.
 ### Ports
 
 The binary's defaults are `23410` (gRPC), `23411` (metrics), `23412` (health)
-and `23413` (MCP). Every configuration under `deploy/` moves them to
-`8080`–`8083`, and so do the examples in this file — a port seen in a compose
-file or a log line is a deployment's choice, not the default. `plugins publish`
-dials `localhost:23410` unless told otherwise.
+and `23413` (MCP), and the examples in this file use them. The Helm chart moves
+them to `8080`–`8083`, so a port seen in a manifest or a log line is a
+deployment's choice, not the default. `plugins publish` dials `localhost:23410`
+unless told otherwise.
 
-### Configuration Files
+### Configuration file
 
-| File | Purpose |
-|------|---------|
-| `deploy/config/config.yml` | Docker-compose service config (internal hostnames) |
-| `deploy/config/config.local.yml` | Local development config (localhost, port 5433) |
-| `deploy/config/config.community.dev.yml` | Two-tier dev stack, unlicensed container |
-| `deploy/config/config.enterprise.dev.yml` | Two-tier dev stack, licensed container |
+The repository ships no config file: a deployment brings its own, and the Helm
+chart renders one from its values. Secrets — the DSN, write tokens, the licence,
+storage keys — belong in the environment rather than in the file.
 
-The two tier configs ship no write tokens and no telemetry endpoints on purpose:
-that stack is what `deploy/docker-compose.public.yml` puts on the internet, and a
-committed credential is a published one. Supply them through `deploy/.env.dev`.
-
-An example, not the defaults — `config print --changed` against any of the
-files above prints exactly what that deployment changes:
+An example, not the defaults — `config print --changed` against a file prints
+exactly what that deployment changes:
 
 ```yaml
 server:
@@ -353,20 +316,17 @@ server:
     metric: 8081
     health: 8082
     mcp: 8083
-db:
-  postgres: "postgres://easyp_svc:easyp_pass@localhost:5433/easyp_db?sslmode=disable"
 registry:
-  plugins_dir: "./plugins"
+  plugins_dir: "/var/cache/easyp/plugins"
   max_output_size: 67108864
   # Optional S3-compatible binary storage. When enabled, plugin archives
   # uploaded by `easyp-svc plugins publish` are lazily downloaded into plugins_dir
-  # (acting as a local cache) and sha256-verified before unpacking.
+  # (acting as a local cache) and sha256-verified before unpacking. The keys
+  # come from REGISTRY_S3_ACCESS_KEY_ID and REGISTRY_S3_SECRET_ACCESS_KEY.
   s3:
-    endpoint: "http://localhost:9000"
+    endpoint: "https://storage.example.com"
     bucket: "easyp-plugins"
     region: "us-east-1"
-    access_key_id: "rustfsadmin"
-    secret_access_key: "rustfsadmin"
     force_path_style: true
 worker_pool:
   workers: 4
@@ -408,20 +368,9 @@ certificate it is: there is no subject or SAN allow-list. An internal PKI issues
 one here makes every one of those workloads able to create, replace and delete
 plugins. A CA scoped to this service keeps the set to the clients you issued.
 
-In the compose stack traefik is the only client holding a certificate, and the
-gRPC port is not published to the host — the way in is `easyp.api.localhost` on
-`EASYP_TRAEFIK_TLS_PORT` (4443 by default), where traefik terminates the edge
-certificate and re-establishes mutual TLS toward the service.
-
 ```bash
-# Generate a development CA plus the server, client and edge certificates.
-# `task up` runs this for you; FORCE=1 regenerates.
-task certs
-
-# Talk to the service through traefik
 easyp-svc plugins publish registry --filter 'grpc/go:v1.6.2' \
-  --addr easyp.api.localhost:4443 --tls-ca deploy/certs/ca.crt --cfg deploy/config/config.yml \
-  --endpoint http://localhost:9000
+  --addr plugins.example.com:443 --tls-ca ca.crt --cfg config.yml
 ```
 
 Client-side flags: `--tls-ca` overrides the trust store, `--tls-cert`/`--tls-key`
@@ -429,8 +378,7 @@ supply a client certificate for a server that enforces mTLS, and `--insecure`
 is the explicit opt-out used against a plaintext local service. TLS is the
 default — plaintext is never reached by omitting a flag.
 
-`certs/` is gitignored and holds development material only. In production the
-paths point at certificates issued by your own CA.
+The paths point at certificates issued by your own CA.
 
 ### Authentication
 
@@ -443,7 +391,7 @@ easyp-svc auth new-token --name ci
 ```
 
 The command prints the token once and a `sha256` digest. Only the digest goes
-into the configuration, so `deploy/config/config.yml` stays safe to commit; the token belongs
+into the configuration, so the config file stays safe to commit; the token belongs
 in your secret manager:
 
 ```yaml
@@ -508,7 +456,7 @@ so the drop does not arrive unannounced with an unrelated deploy.
 Enterprise needs two things — a token and the public key it is verified against:
 
 ```bash
-LICENSE_PUBLIC_KEYS=<kid>:<hex> LICENSE_KEY=<paseto-token> task up
+LICENSE_PUBLIC_KEYS=<kid>:<hex> LICENSE_KEY=<paseto-token> easyp-svc service start --cfg config.yml
 ```
 
 Both are read at runtime. The token comes from `license.key`, then
@@ -529,7 +477,7 @@ key be rotated without every deployment having to change key on the same day.
 A key that is not a valid hex Ed25519 key stops startup rather than quietly
 dropping the service to community mode.
 
-Because the verification key is configuration, whoever can edit `deploy/config/config.yml` can
+Because the verification key is configuration, whoever can edit the config file can
 point the service at a different signing authority — protect that file the way
 you protect the database password next to it.
 
@@ -724,10 +672,11 @@ What the service needs from the result:
 Then prove it:
 
 ```bash
-task up
-FILTER='grpc/go:v1.6.2' task publish-plugins
-easyp --cfg easyp.local.yaml generate
+FILTER='grpc/go:v1.6.2' task build-plugins-filter
 ```
+
+`plugins build` smoke-runs every version it builds; to generate with it, run it
+behind a service as in [Quick start](#quick-start).
 
 Open a pull request with the two files. A request for a plugin someone else
 should package is the **plugin request** issue template.
@@ -796,35 +745,15 @@ What a backup has to contain and how to restore it is in
 
 ```bash
 go build -o bin/easyp-svc ./cmd/easyp-svc
-./bin/easyp-svc service start --cfg deploy/config/config.local.yml
+DB_POSTGRES_DSN='postgres://…' ./bin/easyp-svc service start
 
 # The level is a setting, so it needs no flag; --log_level still overrides it.
-LOG_LEVEL=debug ./bin/easyp-svc service start --cfg deploy/config/config.local.yml
+LOG_LEVEL=debug DB_POSTGRES_DSN='postgres://…' ./bin/easyp-svc service start
 
 go test ./...                                   # unit tests, all three modules from the root
 go test -p 1 -tags integration ./test/... ./internal/database/...   # needs a Postgres; -p 1 as in CI
 golangci-lint run ./...                         # CI pins the latest v2
 ```
-
-### The two-tier stack
-
-`deploy/docker-compose.dev.yml` runs a community container and an enterprise
-container side by side, from the same image, so a licence change can be seen
-rather than assumed. It needs `deploy/.env.dev` — copy `.env.dev.example` and
-fill in the licence and the storage keys it explains.
-
-```bash
-task up-dev            # the two tiers
-task up-dev-full       # plus the observability overlay
-task tier-dev          # assert the two containers really are different tiers
-task logs-dev
-task down-dev
-```
-
-`task deploy-dev HOST=user@host` ships `deploy/` to a stand over rsync — never
-the certificates or env files — and rolls the stack to the version this
-repository's compose file names, waiting for both containers to report healthy.
-The stand keeps its own `.env` and certificates; it is not a git checkout.
 
 ### Regenerating the API
 
@@ -845,7 +774,6 @@ CI uses means regenerating even when the proto did not change.
 api/                    # The wire contract. Its own Go module, Apache-2.0.
   easyp/generator/v1/   # .proto, generated stubs, MCP bindings
 cmd/easyp-svc/          # The service and its CLI (service, plugins, auth, api, config, health)
-cmd/mcp-smoke/          # MCP smoke test client
 internal/
   core/                 # Domain types, interfaces, sentinel errors, worker pool
   api/                  # gRPC handlers, audit & license interceptors, MCP handler
@@ -868,18 +796,8 @@ registry/               # Plugin recipes: one directory per plugin, Dockerfile +
 plugins/                # Built plugin binaries (gitignored)
 test/                   # Integration tests (build tag `integration`) and CI helpers
 test_registry/          # Plugin recipes the tests build against
-deploy/
-  docker-compose.yml               # Full dev stack
-  docker-compose.dev.yml           # Community and enterprise side by side
-  docker-compose.observability.yml # Overlay for the two-tier stack
-  docker-compose.public.yml        # Overlay that puts the two-tier stack on the internet
-  .env.example, .env.dev.example   # Templates for the two stacks
-  config/                          # Service configs, one per way of running it
-  observability/                   # Alloy, Grafana, Loki, Tempo, Mimir, Pyroscope, Traefik
-  charts/easyp-service/            # Helm chart
-  scripts/                         # gen-dev-certs.sh, check-tiers.sh, deploy-dev.sh
-  certs/                           # Throwaway dev TLS material (gitignored)
-easyp.yaml, easyp.local.yaml, easyp.*.dev.yaml   # easyp configs: CI, from-source, the two tiers
+deploy/charts/easyp-service/   # Helm chart
+easyp.yaml              # easyp config that regenerates api/
 Taskfile.yml
 ```
 
@@ -1036,37 +954,26 @@ cosign verify ghcr.io/easyp-tech/service:v1.3.0 \
 ## Troubleshooting
 
 ```bash
-# The stack
-docker compose -f deploy/docker-compose.yml ps
-docker compose -f deploy/docker-compose.yml logs service
-
 # What the service resolved its configuration to, and from where
-easyp-svc config print --cfg deploy/config/config.yml --origin
+easyp-svc config print --cfg config.yml --origin
 
 # Plugins: what is built, what is registered
 ls plugins/
 easyp-svc api descriptor -o api.protoset
-grpcurl -protoset api.protoset -cacert deploy/certs/ca.crt \
-  easyp.api.localhost:4443 easyp.generator.v1.GeneratorAPI/Plugins
 grpcurl -protoset api.protoset -plaintext \
-  localhost:8080 easyp.generator.v1.GeneratorAPI/Plugins        # from-source service
+  localhost:23410 easyp.generator.v1.GeneratorAPI/Plugins
 
 # The database
-docker exec -it easyp-postgres psql -U easyp_svc -d easyp_db -c 'SELECT group_name, name, version FROM plugins;'
+psql "$DB_POSTGRES_DSN" -c 'SELECT group_name, name, version FROM plugins;'
 ```
 
-`task up` failing with `ports are not available … 9001` means something on the
-host already listens there; `EASYP_RUSTFS_CONSOLE_PORT=9011 task up` moves the
-object store's console aside. Nothing on the host needs it.
-
 A `CreatePlugin` that fails with `FAILED_PRECONDITION` means the archive is not
-in storage, or — reason `CHECKSUM_MISMATCH` — is not the one named; `task
-publish-plugins` uploads before it registers, and `--force` republishes.
+in storage, or — reason `CHECKSUM_MISMATCH` — is not the one named; `plugins
+publish` uploads before it registers, and `--force` republishes.
 `plugins publish` paces itself when the server's rate limit refuses a burst,
 but its default `--parallel` of 8 against a server left at the default
-`rate_limit.max_concurrent_per_ip` of 2 still loses most of the batch — the
-configs under `deploy/` raise the cap; against any other server pass
-`--parallel 2`. A
+`rate_limit.max_concurrent_per_ip` of 2 still loses most of the batch — raise
+the cap on the server, or pass `--parallel 2`. A
 `GenerateCode` that fails with `GENERATION_FAILED` and a plugin's stderr in the
 message is the plugin refusing the input — a proto without `go_package`, for
 instance — not the service.

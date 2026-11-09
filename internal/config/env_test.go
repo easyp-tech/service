@@ -78,7 +78,7 @@ func TestObservabilityStackVarsAreOutOfScope(t *testing.T) {
 	require.Empty(t, diags, "these carry no section prefix of this service")
 
 	// And the old names, which no longer belong to anything, are now reported
-	// rather than allowlisted — an operator with a stale deploy/.env.dev is
+	// rather than allowlisted — an operator with a stale .env file is
 	// told the variable stopped doing anything.
 	stale, err := config.UnknownEnv([]string{"TELEMETRY_S3_ENDPOINT=rustfs:9000"})
 	require.NoError(t, err)
