@@ -114,7 +114,6 @@ type GeneratorAPIClient interface {
 	// Create a new plugin registration.
 	//
 	// Registers a plugin with the given group, name, version, optional config, and tags.
-	// Requires an Enterprise license.
 	//
 	// ## Error Codes
 	//
@@ -124,12 +123,11 @@ type GeneratorAPIClient interface {
 	// | `INVALID_ARGUMENT` | Invalid plugin name format, or an invalid config |
 	// | `FAILED_PRECONDITION` | The archive is not in storage, or its checksum is not the `sha256` the config names (reason `CHECKSUM_MISMATCH`) |
 	// | `RESOURCE_EXHAUSTED` | Max plugins limit reached |
-	// | `PERMISSION_DENIED` | Enterprise license required |
+	// | `PERMISSION_DENIED` | The license does not include this feature (reason `FEATURE_DENIED`) |
 	CreatePlugin(ctx context.Context, in *CreatePluginRequest, opts ...grpc.CallOption) (*CreatePluginResponse, error)
 	// Update an existing plugin.
 	//
 	// Replaces the config and tags of an existing plugin identified by group/name/version.
-	// Requires an Enterprise license.
 	//
 	// ## Error Codes
 	//
@@ -138,19 +136,18 @@ type GeneratorAPIClient interface {
 	// | `NOT_FOUND` | Plugin not found |
 	// | `INVALID_ARGUMENT` | Invalid plugin name format, or an invalid config |
 	// | `FAILED_PRECONDITION` | The archive is not in storage, or its checksum is not the `sha256` the config names (reason `CHECKSUM_MISMATCH`) |
-	// | `PERMISSION_DENIED` | Enterprise license required |
+	// | `PERMISSION_DENIED` | The license does not include this feature (reason `FEATURE_DENIED`) |
 	UpdatePlugin(ctx context.Context, in *UpdatePluginRequest, opts ...grpc.CallOption) (*UpdatePluginResponse, error)
 	// Delete a plugin.
 	//
 	// Removes a plugin from the registry by group/name/version.
-	// Requires an Enterprise license.
 	//
 	// ## Error Codes
 	//
 	// | Code | Description |
 	// |------|-------------|
 	// | `NOT_FOUND` | Plugin not found |
-	// | `PERMISSION_DENIED` | Enterprise license required |
+	// | `PERMISSION_DENIED` | The license does not include this feature (reason `FEATURE_DENIED`) |
 	DeletePlugin(ctx context.Context, in *DeletePluginRequest, opts ...grpc.CallOption) (*DeletePluginResponse, error)
 }
 
@@ -300,7 +297,6 @@ type GeneratorAPIServer interface {
 	// Create a new plugin registration.
 	//
 	// Registers a plugin with the given group, name, version, optional config, and tags.
-	// Requires an Enterprise license.
 	//
 	// ## Error Codes
 	//
@@ -310,12 +306,11 @@ type GeneratorAPIServer interface {
 	// | `INVALID_ARGUMENT` | Invalid plugin name format, or an invalid config |
 	// | `FAILED_PRECONDITION` | The archive is not in storage, or its checksum is not the `sha256` the config names (reason `CHECKSUM_MISMATCH`) |
 	// | `RESOURCE_EXHAUSTED` | Max plugins limit reached |
-	// | `PERMISSION_DENIED` | Enterprise license required |
+	// | `PERMISSION_DENIED` | The license does not include this feature (reason `FEATURE_DENIED`) |
 	CreatePlugin(context.Context, *CreatePluginRequest) (*CreatePluginResponse, error)
 	// Update an existing plugin.
 	//
 	// Replaces the config and tags of an existing plugin identified by group/name/version.
-	// Requires an Enterprise license.
 	//
 	// ## Error Codes
 	//
@@ -324,19 +319,18 @@ type GeneratorAPIServer interface {
 	// | `NOT_FOUND` | Plugin not found |
 	// | `INVALID_ARGUMENT` | Invalid plugin name format, or an invalid config |
 	// | `FAILED_PRECONDITION` | The archive is not in storage, or its checksum is not the `sha256` the config names (reason `CHECKSUM_MISMATCH`) |
-	// | `PERMISSION_DENIED` | Enterprise license required |
+	// | `PERMISSION_DENIED` | The license does not include this feature (reason `FEATURE_DENIED`) |
 	UpdatePlugin(context.Context, *UpdatePluginRequest) (*UpdatePluginResponse, error)
 	// Delete a plugin.
 	//
 	// Removes a plugin from the registry by group/name/version.
-	// Requires an Enterprise license.
 	//
 	// ## Error Codes
 	//
 	// | Code | Description |
 	// |------|-------------|
 	// | `NOT_FOUND` | Plugin not found |
-	// | `PERMISSION_DENIED` | Enterprise license required |
+	// | `PERMISSION_DENIED` | The license does not include this feature (reason `FEATURE_DENIED`) |
 	DeletePlugin(context.Context, *DeletePluginRequest) (*DeletePluginResponse, error)
 }
 
