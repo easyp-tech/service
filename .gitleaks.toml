@@ -27,5 +27,8 @@ commits = [
   # commit reachable by SHA — so the fix is rotation at the provider, which is
   # tracked outside this file. Recorded here so the scan keeps failing on the
   # next leak rather than on this one forever.
-  "56d2d2c3c4168c2f4a4d6a0fdf212b8dac94cb0e",
+  #
+  # The history rewrite of 2026-11-16 (author emails) gave the commit a new
+  # SHA; it was 56d2d2c3c4168c2f4a4d6a0fdf212b8dac94cb0e before.
+  "d0c1fbdc081dd20d4cf82e915e759c283ebd2ae2",
 ]
