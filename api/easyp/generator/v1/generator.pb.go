@@ -349,7 +349,7 @@ type PluginInfo struct {
 	// Follows semantic versioning (semver) format.
 	Version string `protobuf:"bytes,4,opt,name=version,proto3" json:"version,omitempty"`
 	// Timestamp when the plugin was registered.
-	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,proto3" json:"created_at,omitempty"`
+	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	// Tags associated with the plugin for categorization.
 	//
 	// Tags help organize and filter plugins by category.
@@ -848,16 +848,15 @@ const file_easyp_generator_v1_generator_proto_rawDesc = "" +
 	"\x0fPluginsResponse\x12?\n" +
 	"\aplugins\x18\x01 \x03(\v2\x1e.easyp.generator.v1.PluginInfoB\x05\xdaI\x02\x10\x01R\aplugins\x12-\n" +
 	"\x0fnext_page_token\x18\x03 \x01(\tB\x05\xdaI\x02\x10\x01R\rnextPageToken\x12/\n" +
-	"\bplatform\x18\x04 \x01(\tB\x13\xdaI\x10\x10\x01\xa2\x01\vlinux/amd64R\bplatformJ\x04\b\x02\x10\x03R\x05total\"\xc2\x02\n" +
+	"\bplatform\x18\x04 \x01(\tB\x13\xdaI\x10\x10\x01\xa2\x01\vlinux/amd64R\bplatformJ\x04\b\x02\x10\x03R\x05total\"\xc1\x02\n" +
 	"\n" +
 	"PluginInfo\x12\x17\n" +
 	"\x02id\x18\x01 \x01(\tB\a\xdaI\x04\x10\x01P\x01R\x02id\x12A\n" +
 	"\x05group\x18\x02 \x01(\tB+\xdaI(\x10\x01\xa2\x01\x0fprotocolbuffers\x92\x02\x11^[a-z][a-z0-9-]*$R\x05group\x122\n" +
 	"\x04name\x18\x03 \x01(\tB\x1e\xdaI\x1b\x10\x01\xa2\x01\x02go\x92\x02\x11^[a-z][a-z0-9-]*$R\x04name\x12F\n" +
-	"\aversion\x18\x04 \x01(\tB,\xdaI)\x10\x01\xa2\x01\bv1.36.10\x92\x02\x19^v[0-9]+\\.[0-9]+\\.[0-9]+$R\aversion\x12A\n" +
+	"\aversion\x18\x04 \x01(\tB,\xdaI)\x10\x01\xa2\x01\bv1.36.10\x92\x02\x19^v[0-9]+\\.[0-9]+\\.[0-9]+$R\aversion\x12@\n" +
 	"\n" +
-	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampB\x05\xdaI\x02\x10\x01R\n" +
-	"created_at\x12\x19\n" +
+	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampB\x05\xdaI\x02\x10\x01R\tcreatedAt\x12\x19\n" +
 	"\x04tags\x18\x06 \x03(\tB\x05\xdaI\x02\x10\x01R\x04tags\"\x8c\x02\n" +
 	"\x13CreatePluginRequest\x126\n" +
 	"\x05group\x18\x01 \x01(\tB \xdaI\x1d\b\x01\xa2\x01\x04grpc\x92\x02\x11^[a-z][a-z0-9-]*$R\x05group\x122\n" +
