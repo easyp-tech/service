@@ -74,6 +74,7 @@ func requireDSN(t *testing.T) string {
 type harness struct {
 	core       *core.Core
 	pool       *core.WorkerPool
+	repo       *registry.Registry
 	pluginsDir string
 }
 
@@ -120,6 +121,7 @@ func newHarness(t *testing.T, gate core.FeatureGate) *harness {
 	return &harness{
 		core:       core.New(metrics, pool, gate, nil, logger),
 		pool:       pool,
+		repo:       repo,
 		pluginsDir: pluginsDir,
 	}
 }
