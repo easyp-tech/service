@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -239,14 +240,17 @@ func New(
 func (r *Registry) Get(ctx context.Context, pluginGroup, pluginName, pluginVersion string) (core.Plugin, error) {
 	dbFormat := plugin{}
 
+	if pluginVersion == "latest" {
+		resolved, err := r.latestVersion(ctx, pluginGroup, pluginName)
+		if err != nil {
+			return nil, err
+		}
+
+		pluginVersion = resolved
+	}
+
 	query := "select id, group_name, name, version, config, tags, created_at from plugins where group_name = $1 and name = $2 and version = $3"
 	args := []any{pluginGroup, pluginName, pluginVersion}
-
-	if pluginVersion == "latest" {
-		query = "select id, group_name, name, version, config, tags, created_at" +
-			" from plugins where group_name = $1 and name = $2 order by version desc limit 1"
-		args = []any{pluginGroup, pluginName}
-	}
 
 	err := r.db.NoTxContext(ctx, func(conn *sqlx.DB) error {
 		return conn.GetContext(ctx, &dbFormat, query, args...)
@@ -290,6 +294,101 @@ func (r *Registry) Get(ctx context.Context, pluginGroup, pluginName, pluginVersi
 	dbFormat.workRoot = r.tmpDir
 
 	return &dbFormat, nil
+}
+
+// latestVersion resolves `latest` to the newest registered version of a plugin.
+//
+// It used to be `order by version desc limit 1` on a text column, which sorts
+// characters, not numbers: v1.36.9 came out ahead of v1.36.11, so `latest`
+// served an old release for every plugin whose versions crossed a digit
+// boundary. The versions are compared as numbers here instead; one plugin has
+// at most a few dozen of them, so reading them all costs nothing.
+func (r *Registry) latestVersion(ctx context.Context, pluginGroup, pluginName string) (string, error) { //nolint:funcorder,lll // helper for Get above
+	var versions []string
+
+	err := r.db.NoTxContext(ctx, func(conn *sqlx.DB) error {
+		return conn.SelectContext(ctx, &versions,
+			"select version from plugins where group_name = $1 and name = $2", pluginGroup, pluginName)
+	})
+	if err != nil {
+		return "", fmt.Errorf("r.db.NoTxContext(latestVersion): %w", err)
+	}
+
+	if len(versions) == 0 {
+		return "", fmt.Errorf("%w: %s/%s:latest", core.ErrNotFound, pluginGroup, pluginName)
+	}
+
+	return newestVersion(versions), nil
+}
+
+// newestVersion returns the highest of versions shaped vX.Y or vX.Y.Z, compared
+// component by component as numbers; a missing patch counts as zero.
+//
+// Equal numbers (v33.1 beside v33.1.0) fall back to comparing the strings, so
+// the choice does not depend on the order the database returned them in. A
+// value that does not parse ranks below every one that does — registration
+// refuses such versions, so one could only be a row older than that check.
+func newestVersion(versions []string) string {
+	best := versions[0]
+	bestParts, bestOK := versionParts(best)
+
+	for _, candidate := range versions[1:] {
+		parts, ok := versionParts(candidate)
+
+		var newer bool
+
+		switch {
+		case ok != bestOK:
+			newer = ok
+		case !ok:
+			newer = candidate > best
+		default:
+			cmp := compareVersionParts(parts, bestParts)
+			newer = cmp > 0 || (cmp == 0 && candidate > best)
+		}
+
+		if newer {
+			best, bestParts, bestOK = candidate, parts, ok
+		}
+	}
+
+	return best
+}
+
+// versionParts splits vX.Y or vX.Y.Z into its numbers.
+func versionParts(version string) ([3]int, bool) {
+	var parts [3]int
+
+	fields := strings.Split(strings.TrimPrefix(version, "v"), ".")
+	if !strings.HasPrefix(version, "v") || len(fields) < 2 || len(fields) > len(parts) {
+		return parts, false
+	}
+
+	for idx, field := range fields {
+		n, err := strconv.Atoi(field)
+		if err != nil || n < 0 || field[0] == '+' {
+			return parts, false
+		}
+
+		parts[idx] = n
+	}
+
+	return parts, true
+}
+
+// compareVersionParts orders two parsed versions: negative, zero or positive.
+func compareVersionParts(a, b [3]int) int {
+	for i := range a {
+		if a[i] != b[i] {
+			if a[i] < b[i] {
+				return -1
+			}
+
+			return 1
+		}
+	}
+
+	return 0
 }
 
 // archiveKey returns the storage object key for a plugin archive.
