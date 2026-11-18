@@ -26,7 +26,11 @@ import (
 // The tool is worth having back. It belongs in a library both sides can depend
 // on, below them in the graph — its only tie to easyp internals is one call for
 // the list of lint rule names.
-func newMCPHandler(ps core.Service, logger *slog.Logger) http.Handler {
+//
+// version is what initialize reports as serverInfo.version. It used to be the
+// literal "v1.0.0" whatever was running, so the endpoint could not tell an
+// operator or an agent which release it was talking to.
+func newMCPHandler(ps core.Service, logger *slog.Logger, version string) http.Handler {
 	opts := &mcp.ServerOptions{
 		Instructions: "EasyP MCP server with plugin discovery.",
 	}
@@ -36,7 +40,7 @@ func newMCPHandler(ps core.Service, logger *slog.Logger) http.Handler {
 
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "easyp-service-mcp",
-		Version: "v1.0.0",
+		Version: version,
 	}, opts)
 
 	err := generator.RegisterGeneratorAPITools(srv, newPluginToolHandler(ps))

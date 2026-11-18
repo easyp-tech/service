@@ -37,9 +37,10 @@ const (
 // a variable rather than a constant for exactly that reason, and the fallback
 // is what a local `go build` gets.
 //
-// It reaches three places: `easyp-svc --version`, the version field on every log
-// line, and the service.version resource attribute on every trace and profile.
-// Before it existed all three said "dev" no matter what was running, so the only
+// It reaches four places: `easyp-svc --version`, the version field on every log
+// line, the service.version resource attribute on every trace and profile, and
+// serverInfo.version in the MCP endpoint's initialize response.
+// Before it existed the first three said "dev" no matter what was running, so the only
 // way to identify a deployed build was to read the image label from outside the
 // container — which says nothing about the binary actually executing.
 var version = "dev"

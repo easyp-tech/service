@@ -37,12 +37,21 @@ type API struct {
 // serving status, and wires up the MCP HTTP handler.
 // The gRPC server and health server are expected to be created
 // externally (e.g. via grpchelper.NewServer).
-func New(grpcSrv *grpc.Server, healthSrv *health.Server, applications core.Service, logger *slog.Logger) *API {
+//
+// serviceVersion is the build's own version; the MCP endpoint reports it in its
+// initialize response.
+func New(
+	grpcSrv *grpc.Server,
+	healthSrv *health.Server,
+	applications core.Service,
+	logger *slog.Logger,
+	serviceVersion string,
+) *API {
 	healthSrv.SetServingStatus(generator.GeneratorAPI_ServiceDesc.ServiceName, healthpb.HealthCheckResponse_SERVING)
 
 	api := &API{
 		app:        applications,
-		mcpHandler: newMCPHandler(applications, logger),
+		mcpHandler: newMCPHandler(applications, logger, serviceVersion),
 	}
 	generator.RegisterGeneratorAPIServer(grpcSrv, api)
 

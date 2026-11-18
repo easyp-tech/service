@@ -763,7 +763,7 @@ func buildGRPCServer(
 	)
 	serverMetrics.InitializeMetrics(grpcSrv)
 
-	apiSrv := api.New(grpcSrv, healthSrv, tracedCore, log)
+	apiSrv := api.New(grpcSrv, healthSrv, tracedCore, log, version)
 
 	return grpcSrv, apiSrv
 }

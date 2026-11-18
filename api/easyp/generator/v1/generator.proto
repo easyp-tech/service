@@ -333,12 +333,9 @@ message PluginInfo {
   }];
 
   // Timestamp when the plugin was registered.
-  google.protobuf.Timestamp created_at = 5 [
-    json_name = "created_at",
-    (doc.v1.field) = {
-      output_only: true
-    }
-  ];
+  google.protobuf.Timestamp created_at = 5 [(doc.v1.field) = {
+    output_only: true
+  }];
 
   // Tags associated with the plugin for categorization.
   //
