@@ -5,7 +5,7 @@
 // it happens to live in.
 module github.com/easyp-tech/service/sdk
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/easyp-tech/service/api v0.14.0
