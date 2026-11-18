@@ -107,7 +107,6 @@ service GeneratorAPI {
   // Create a new plugin registration.
   //
   // Registers a plugin with the given group, name, version, optional config, and tags.
-  // Requires an Enterprise license.
   //
   // ## Error Codes
   //
@@ -117,7 +116,7 @@ service GeneratorAPI {
   // | `INVALID_ARGUMENT` | Invalid plugin name format, or an invalid config |
   // | `FAILED_PRECONDITION` | The archive is not in storage, or its checksum is not the `sha256` the config names (reason `CHECKSUM_MISMATCH`) |
   // | `RESOURCE_EXHAUSTED` | Max plugins limit reached |
-  // | `PERMISSION_DENIED` | Enterprise license required |
+  // | `PERMISSION_DENIED` | The license does not include this feature (reason `FEATURE_DENIED`) |
   rpc CreatePlugin(CreatePluginRequest) returns (CreatePluginResponse) {
     option (mcp.options.v1.method) = {
       hidden: true
@@ -127,7 +126,6 @@ service GeneratorAPI {
   // Update an existing plugin.
   //
   // Replaces the config and tags of an existing plugin identified by group/name/version.
-  // Requires an Enterprise license.
   //
   // ## Error Codes
   //
@@ -136,7 +134,7 @@ service GeneratorAPI {
   // | `NOT_FOUND` | Plugin not found |
   // | `INVALID_ARGUMENT` | Invalid plugin name format, or an invalid config |
   // | `FAILED_PRECONDITION` | The archive is not in storage, or its checksum is not the `sha256` the config names (reason `CHECKSUM_MISMATCH`) |
-  // | `PERMISSION_DENIED` | Enterprise license required |
+  // | `PERMISSION_DENIED` | The license does not include this feature (reason `FEATURE_DENIED`) |
   rpc UpdatePlugin(UpdatePluginRequest) returns (UpdatePluginResponse) {
     option (mcp.options.v1.method) = {
       hidden: true
@@ -146,14 +144,13 @@ service GeneratorAPI {
   // Delete a plugin.
   //
   // Removes a plugin from the registry by group/name/version.
-  // Requires an Enterprise license.
   //
   // ## Error Codes
   //
   // | Code | Description |
   // |------|-------------|
   // | `NOT_FOUND` | Plugin not found |
-  // | `PERMISSION_DENIED` | Enterprise license required |
+  // | `PERMISSION_DENIED` | The license does not include this feature (reason `FEATURE_DENIED`) |
   rpc DeletePlugin(DeletePluginRequest) returns (DeletePluginResponse) {
     option (mcp.options.v1.method) = {
       hidden: true
