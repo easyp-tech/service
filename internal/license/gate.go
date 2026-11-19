@@ -53,7 +53,7 @@ func (fg *FeatureGate) MaxWorkers() int {
 	return fg.manager.Claims().MaxWorkers
 }
 
-// MaxPlugins returns the maximum number of registered plugins. -1 means unlimited.
+// MaxPlugins returns the maximum number of registered plugin versions. -1 means unlimited.
 func (fg *FeatureGate) MaxPlugins() int {
 	return fg.manager.Claims().MaxPlugins
 }
