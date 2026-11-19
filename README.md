@@ -342,6 +342,9 @@ rate_limit:
 
 ## Security
 
+To report a vulnerability, see [SECURITY.md](SECURITY.md): privately, through
+GitHub, not in a public issue.
+
 ### Transport security
 
 The gRPC listener is configured by `server.tls`:
