@@ -123,7 +123,7 @@ type (
 		List(ctx context.Context, filter PluginFilter, page PluginPage) ([]PluginInfo, error)
 		// Create registers a new plugin in the registry. When maxPlugins is
 		// not LicenseUnlimited, the registry refuses with ErrMaxPluginsExceeded
-		// once it already holds that many: the count and the insert have to be
+		// once it already holds that many versions: the count and the insert have to be
 		// one step, or concurrent registrations all pass a count taken before
 		// any of them landed.
 		Create(ctx context.Context, req CreatePluginRequest, maxPlugins int) (*PluginInfo, error)
@@ -276,7 +276,7 @@ type (
 		Enabled(feature Feature) bool
 		// MaxWorkers возвращает лимит воркеров из текущей лицензии.
 		MaxWorkers() int
-		// MaxPlugins возвращает лимит плагинов из текущей лицензии.
+		// MaxPlugins возвращает лимит зарегистрированных версий плагинов из текущей лицензии.
 		// -1 означает отсутствие ограничения.
 		MaxPlugins() int
 		// MaxGenerations возвращает лимит одновременных запусков плагинов из
@@ -301,7 +301,8 @@ type (
 		Features []Feature
 		// MaxWorkers is the maximum number of concurrent workers; -1 means unlimited.
 		MaxWorkers int
-		// MaxPlugins is the maximum number of registered plugins; -1 means unlimited.
+		// MaxPlugins is the maximum number of registered plugin versions (each
+		// version is a row); -1 means unlimited.
 		MaxPlugins int
 		// MaxGenerations is the maximum number of plugin processes that may run
 		// at once; -1 means unlimited.

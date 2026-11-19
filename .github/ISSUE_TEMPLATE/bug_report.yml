@@ -109,5 +109,5 @@ body:
           required: true
         - label: >-
             This is not a security vulnerability. Vulnerabilities should not be
-            filed here — contact the maintainers directly instead.
+            filed here — report them privately as SECURITY.md describes.
           required: true

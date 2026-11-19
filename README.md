@@ -440,7 +440,10 @@ ceilings that a licence lifts —
 |---|---|---|
 | `worker_pool.workers` | 4 | as configured |
 | `worker_pool.max_concurrent_generations` | 16 | as configured |
-| registered plugins | 10 | unlimited |
+| registered plugin versions | 10 | unlimited |
+
+The version ceiling counts versions, not plugins: `protocolbuffers/go` in three
+versions is three of the ten.
 
 Each community ceiling is the shipped default of the setting it caps, so a
 deployment that never changed one is not affected by the ceiling existing. A
@@ -999,7 +1002,7 @@ and removing license notices.
 
 Community mode needs no license key and stays free under those terms. What
 Enterprise adds today is the audit log and the removal of the three community
-ceilings — 4 workers, 16 concurrent generations, 10 registered plugins — as
+ceilings — 4 workers, 16 concurrent generations, 10 registered plugin versions — as
 the [Licensing](#licensing) table says.
 
 The client SDK and the API contract it is generated from are both Apache 2.0, so
