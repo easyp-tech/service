@@ -395,11 +395,11 @@ func prepare(
 
 // printHeader says what the run is about to do, and for a build, what for.
 func (p *publisher) printHeader(versions int) {
-	_, _ = fmt.Fprintf(os.Stdout, "Публикация: %d версий (build-parallel=%d, parallel=%d)\n",
+	_, _ = fmt.Fprintf(os.Stdout, "Publishing %d versions (build-parallel=%d, parallel=%d)\n",
 		versions, cap(p.buildSlots), cap(p.deliverSlots))
 
 	if p.opts.registryPath != "" {
-		_, _ = fmt.Fprintf(os.Stdout, "Платформа сборки: %s\n", cmp.Or(p.opts.verify.platform, "как у этой машины"))
+		_, _ = fmt.Fprintf(os.Stdout, "Build platform: %s\n", cmp.Or(p.opts.verify.platform, "this machine's"))
 	}
 
 	_, _ = fmt.Fprintln(os.Stdout)
@@ -933,16 +933,16 @@ func (p *publisher) printSummary(total int, skipped []string) {
 		p.tracker.clear()
 	}
 
-	_, _ = fmt.Fprintln(os.Stdout, "\nРезультаты публикации:")
+	_, _ = fmt.Fprintln(os.Stdout, "\nPublish results:")
 	_, _ = fmt.Fprintln(os.Stdout, strings.Repeat("-", separatorLength))
-	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Всего версий найдено", total)
-	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Опубликовано", p.tracker.succeeded)
-	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "  из них залито", p.uploaded.Load())
-	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "  создано", p.created.Load())
-	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "  обновлено", p.updated.Load())
-	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Пропущено (на месте)", p.tracker.skipped)
-	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Пропущено (skip)", len(skipped))
-	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Ошибка", p.tracker.failed)
+	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Versions found", total)
+	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Published", p.tracker.succeeded)
+	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "  uploaded", p.uploaded.Load())
+	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "  created", p.created.Load())
+	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "  updated", p.updated.Load())
+	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Skipped (up to date)", p.tracker.skipped)
+	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Skipped (declared)", len(skipped))
+	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Failed", p.tracker.failed)
 	_, _ = fmt.Fprintln(os.Stdout, strings.Repeat("-", separatorLength))
 	printSkipped(skipped)
 }

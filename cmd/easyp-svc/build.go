@@ -693,11 +693,11 @@ func startTicker(tracker *buildTracker) func() {
 
 func printBuildPlan(registryPath string, filter string, total int, toBuild int, cached int, skipped int, parallel int) {
 	if filter != "" {
-		_, _ = fmt.Fprintf(os.Stdout, "Сканирование %s (фильтр %q): найдено %d версий\n", registryPath, filter, total)
+		_, _ = fmt.Fprintf(os.Stdout, "Scanning %s (filter %q): %d versions found\n", registryPath, filter, total)
 	} else {
-		_, _ = fmt.Fprintf(os.Stdout, "Сканирование %s: найдено %d версий\n", registryPath, total)
+		_, _ = fmt.Fprintf(os.Stdout, "Scanning %s: %d versions found\n", registryPath, total)
 	}
-	_, _ = fmt.Fprintf(os.Stdout, "Кэш: %d готово, %d к сборке", cached, toBuild)
+	_, _ = fmt.Fprintf(os.Stdout, "Cache: %d ready, %d to build", cached, toBuild)
 	if skipped > 0 {
 		_, _ = fmt.Fprintf(os.Stdout, ", %d skip", skipped)
 	}
@@ -708,7 +708,7 @@ func printDryRun(jobs []buildJob, skipped []string) {
 	if len(jobs) == 0 {
 		_, _ = fmt.Fprintln(os.Stdout, "Nothing to build, all cached!")
 	} else {
-		_, _ = fmt.Fprintln(os.Stdout, "Будет собрано:")
+		_, _ = fmt.Fprintln(os.Stdout, "Would build:")
 		for _, j := range jobs {
 			_, _ = fmt.Fprintf(os.Stdout, "  %s\n", j.key())
 		}
@@ -720,7 +720,7 @@ func printSkipped(skipped []string) {
 	if len(skipped) == 0 {
 		return
 	}
-	_, _ = fmt.Fprintln(os.Stdout, "Пропущено (declared skip):")
+	_, _ = fmt.Fprintln(os.Stdout, "Skipped (declared skip):")
 	for _, key := range skipped {
 		_, _ = fmt.Fprintf(os.Stdout, "  %s\n", key)
 	}
@@ -731,13 +731,13 @@ func printBuildSummary(tracker *buildTracker, total int, cached int, skipped []s
 		tracker.clear()
 	}
 
-	_, _ = fmt.Fprintln(os.Stdout, "\nРезультаты сборки:")
+	_, _ = fmt.Fprintln(os.Stdout, "\nBuild results:")
 	_, _ = fmt.Fprintln(os.Stdout, strings.Repeat("-", separatorLength))
-	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Всего версий найдено", total)
-	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Собрано", tracker.succeeded)
-	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Пропущено (кэш)", cached)
-	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Пропущено (skip)", len(skipped))
-	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Ошибка сборки", tracker.failed)
+	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Versions found", total)
+	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Built", tracker.succeeded)
+	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Skipped (cached)", cached)
+	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Skipped (declared)", len(skipped))
+	_, _ = fmt.Fprintf(os.Stdout, "%-25s : %d\n", "Failed", tracker.failed)
 	_, _ = fmt.Fprintln(os.Stdout, strings.Repeat("-", separatorLength))
 	printSkipped(skipped)
 }

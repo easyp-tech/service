@@ -5,6 +5,11 @@
 blank_issues_enabled: false
 
 contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/easyp-tech/service/security/advisories/new
+    about: >-
+      Privately, not in a public issue. What to include is in SECURITY.md.
+
   - name: Add a plugin yourself
     url: https://github.com/easyp-tech/service#contributing-plugins
     about: >-

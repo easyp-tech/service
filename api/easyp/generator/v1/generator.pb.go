@@ -43,6 +43,9 @@ type GenerateCodeRequest struct {
 	// - `protocolbuffers/go:v1.36.10`
 	// - `grpc/go:v1.5.1`
 	// - `grpc-ecosystem/gateway:latest`
+	//
+	// `<version>` is `vX.Y.Z`, `vX.Y` (projects that publish no patch number,
+	// such as protobuf's language runtimes: `v35.0`) or `latest`.
 	PluginName    string `protobuf:"bytes,2,opt,name=plugin_name,json=pluginName,proto3" json:"plugin_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -346,7 +349,7 @@ type PluginInfo struct {
 	Name string `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
 	// Version of the plugin.
 	//
-	// Follows semantic versioning (semver) format.
+	// `vX.Y.Z`, or `vX.Y` for projects that publish no patch number (e.g. `v35.0`).
 	Version string `protobuf:"bytes,4,opt,name=version,proto3" json:"version,omitempty"`
 	// Timestamp when the plugin was registered.
 	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
@@ -823,17 +826,17 @@ var File_easyp_generator_v1_generator_proto protoreflect.FileDescriptor
 
 const file_easyp_generator_v1_generator_proto_rawDesc = "" +
 	"\n" +
-	"\"easyp/generator/v1/generator.proto\x12\x12easyp.generator.v1\x1a\x1cmcp/options/v1/options.proto\x1a\x10doc/v1/doc.proto\x1a%google/protobuf/compiler/plugin.proto\x1a google/protobuf/field_mask.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x8e\x02\n" +
+	"\"easyp/generator/v1/generator.proto\x12\x12easyp.generator.v1\x1a\x1cmcp/options/v1/options.proto\x1a\x10doc/v1/doc.proto\x1a%google/protobuf/compiler/plugin.proto\x1a google/protobuf/field_mask.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x91\x02\n" +
 	"\x13GenerateCodeRequest\x12k\n" +
-	"\x16code_generator_request\x18\x01 \x01(\v2..google.protobuf.compiler.CodeGeneratorRequestB\x05\xdaI\x02\b\x01R\x14codeGeneratorRequest\x12\x89\x01\n" +
-	"\vplugin_name\x18\x02 \x01(\tBh\xdaIe\b\x01\xa2\x01\x1bprotocolbuffers/go:v1.36.10\x92\x02B^[a-z][a-z0-9-]*/[a-z][a-z0-9-]*:(v[0-9]+\\.[0-9]+\\.[0-9]+|latest)$R\n" +
+	"\x16code_generator_request\x18\x01 \x01(\v2..google.protobuf.compiler.CodeGeneratorRequestB\x05\xdaI\x02\b\x01R\x14codeGeneratorRequest\x12\x8c\x01\n" +
+	"\vplugin_name\x18\x02 \x01(\tBk\xdaIh\b\x01\xa2\x01\x1bprotocolbuffers/go:v1.36.10\x92\x02E^[a-z][a-z0-9-]*/[a-z][a-z0-9-]*:(v[0-9]+\\.[0-9]+(\\.[0-9]+)?|latest)$R\n" +
 	"pluginName\"\x86\x01\n" +
 	"\x14GenerateCodeResponse\x12n\n" +
-	"\x17code_generator_response\x18\x01 \x01(\v2/.google.protobuf.compiler.CodeGeneratorResponseB\x05\xdaI\x02\x10\x01R\x15codeGeneratorResponse\"\xff\x02\n" +
+	"\x17code_generator_response\x18\x01 \x01(\v2/.google.protobuf.compiler.CodeGeneratorResponseB\x05\xdaI\x02\x10\x01R\x15codeGeneratorResponse\"\x82\x03\n" +
 	"\x0ePluginsRequest\x129\n" +
 	"\x05group\x18\x01 \x01(\tB\x1e\xdaI\x1b\xa2\x01\x04grpc\x92\x02\x11^[a-z][a-z0-9-]*$H\x00R\x05group\x88\x01\x01\x125\n" +
-	"\x04name\x18\x02 \x01(\tB\x1c\xdaI\x19\xa2\x01\x02go\x92\x02\x11^[a-z][a-z0-9-]*$H\x01R\x04name\x88\x01\x01\x12G\n" +
-	"\aversion\x18\x03 \x01(\tB(\xdaI%\xa2\x01\x06v1.5.1\x92\x02\x19^v[0-9]+\\.[0-9]+\\.[0-9]+$H\x02R\aversion\x88\x01\x01\x12 \n" +
+	"\x04name\x18\x02 \x01(\tB\x1c\xdaI\x19\xa2\x01\x02go\x92\x02\x11^[a-z][a-z0-9-]*$H\x01R\x04name\x88\x01\x01\x12J\n" +
+	"\aversion\x18\x03 \x01(\tB+\xdaI(\xa2\x01\x06v1.5.1\x92\x02\x1c^v[0-9]+\\.[0-9]+(\\.[0-9]+)?$H\x02R\aversion\x88\x01\x01\x12 \n" +
 	"\x04tags\x18\x04 \x03(\tB\f\xdaI\t\xa2\x01\x06stableR\x04tags\x12+\n" +
 	"\tpage_size\x18\x05 \x01(\rB\t\xdaI\x06\xa2\x01\x03100H\x03R\bpageSize\x88\x01\x01\x12'\n" +
 	"\n" +
@@ -848,38 +851,38 @@ const file_easyp_generator_v1_generator_proto_rawDesc = "" +
 	"\x0fPluginsResponse\x12?\n" +
 	"\aplugins\x18\x01 \x03(\v2\x1e.easyp.generator.v1.PluginInfoB\x05\xdaI\x02\x10\x01R\aplugins\x12-\n" +
 	"\x0fnext_page_token\x18\x03 \x01(\tB\x05\xdaI\x02\x10\x01R\rnextPageToken\x12/\n" +
-	"\bplatform\x18\x04 \x01(\tB\x13\xdaI\x10\x10\x01\xa2\x01\vlinux/amd64R\bplatformJ\x04\b\x02\x10\x03R\x05total\"\xc1\x02\n" +
+	"\bplatform\x18\x04 \x01(\tB\x13\xdaI\x10\x10\x01\xa2\x01\vlinux/amd64R\bplatformJ\x04\b\x02\x10\x03R\x05total\"\xc4\x02\n" +
 	"\n" +
 	"PluginInfo\x12\x17\n" +
 	"\x02id\x18\x01 \x01(\tB\a\xdaI\x04\x10\x01P\x01R\x02id\x12A\n" +
 	"\x05group\x18\x02 \x01(\tB+\xdaI(\x10\x01\xa2\x01\x0fprotocolbuffers\x92\x02\x11^[a-z][a-z0-9-]*$R\x05group\x122\n" +
-	"\x04name\x18\x03 \x01(\tB\x1e\xdaI\x1b\x10\x01\xa2\x01\x02go\x92\x02\x11^[a-z][a-z0-9-]*$R\x04name\x12F\n" +
-	"\aversion\x18\x04 \x01(\tB,\xdaI)\x10\x01\xa2\x01\bv1.36.10\x92\x02\x19^v[0-9]+\\.[0-9]+\\.[0-9]+$R\aversion\x12@\n" +
+	"\x04name\x18\x03 \x01(\tB\x1e\xdaI\x1b\x10\x01\xa2\x01\x02go\x92\x02\x11^[a-z][a-z0-9-]*$R\x04name\x12I\n" +
+	"\aversion\x18\x04 \x01(\tB/\xdaI,\x10\x01\xa2\x01\bv1.36.10\x92\x02\x1c^v[0-9]+\\.[0-9]+(\\.[0-9]+)?$R\aversion\x12@\n" +
 	"\n" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampB\x05\xdaI\x02\x10\x01R\tcreatedAt\x12\x19\n" +
-	"\x04tags\x18\x06 \x03(\tB\x05\xdaI\x02\x10\x01R\x04tags\"\x8c\x02\n" +
+	"\x04tags\x18\x06 \x03(\tB\x05\xdaI\x02\x10\x01R\x04tags\"\x8f\x02\n" +
 	"\x13CreatePluginRequest\x126\n" +
 	"\x05group\x18\x01 \x01(\tB \xdaI\x1d\b\x01\xa2\x01\x04grpc\x92\x02\x11^[a-z][a-z0-9-]*$R\x05group\x122\n" +
-	"\x04name\x18\x02 \x01(\tB\x1e\xdaI\x1b\b\x01\xa2\x01\x02go\x92\x02\x11^[a-z][a-z0-9-]*$R\x04name\x12D\n" +
-	"\aversion\x18\x03 \x01(\tB*\xdaI'\b\x01\xa2\x01\x06v1.5.1\x92\x02\x19^v[0-9]+\\.[0-9]+\\.[0-9]+$R\aversion\x12/\n" +
+	"\x04name\x18\x02 \x01(\tB\x1e\xdaI\x1b\b\x01\xa2\x01\x02go\x92\x02\x11^[a-z][a-z0-9-]*$R\x04name\x12G\n" +
+	"\aversion\x18\x03 \x01(\tB-\xdaI*\b\x01\xa2\x01\x06v1.5.1\x92\x02\x1c^v[0-9]+\\.[0-9]+(\\.[0-9]+)?$R\aversion\x12/\n" +
 	"\x06config\x18\x04 \x01(\v2\x17.google.protobuf.StructR\x06config\x12\x12\n" +
 	"\x04tags\x18\x05 \x03(\tR\x04tags\"U\n" +
 	"\x14CreatePluginResponse\x12=\n" +
-	"\x06plugin\x18\x01 \x01(\v2\x1e.easyp.generator.v1.PluginInfoB\x05\xdaI\x02\x10\x01R\x06plugin\"\xc9\x02\n" +
+	"\x06plugin\x18\x01 \x01(\v2\x1e.easyp.generator.v1.PluginInfoB\x05\xdaI\x02\x10\x01R\x06plugin\"\xcc\x02\n" +
 	"\x13UpdatePluginRequest\x126\n" +
 	"\x05group\x18\x01 \x01(\tB \xdaI\x1d\b\x01\xa2\x01\x04grpc\x92\x02\x11^[a-z][a-z0-9-]*$R\x05group\x122\n" +
-	"\x04name\x18\x02 \x01(\tB\x1e\xdaI\x1b\b\x01\xa2\x01\x02go\x92\x02\x11^[a-z][a-z0-9-]*$R\x04name\x12D\n" +
-	"\aversion\x18\x03 \x01(\tB*\xdaI'\b\x01\xa2\x01\x06v1.5.1\x92\x02\x19^v[0-9]+\\.[0-9]+\\.[0-9]+$R\aversion\x12/\n" +
+	"\x04name\x18\x02 \x01(\tB\x1e\xdaI\x1b\b\x01\xa2\x01\x02go\x92\x02\x11^[a-z][a-z0-9-]*$R\x04name\x12G\n" +
+	"\aversion\x18\x03 \x01(\tB-\xdaI*\b\x01\xa2\x01\x06v1.5.1\x92\x02\x1c^v[0-9]+\\.[0-9]+(\\.[0-9]+)?$R\aversion\x12/\n" +
 	"\x06config\x18\x04 \x01(\v2\x17.google.protobuf.StructR\x06config\x12\x12\n" +
 	"\x04tags\x18\x05 \x03(\tR\x04tags\x12;\n" +
 	"\vupdate_mask\x18\x06 \x01(\v2\x1a.google.protobuf.FieldMaskR\n" +
 	"updateMask\"U\n" +
 	"\x14UpdatePluginResponse\x12=\n" +
-	"\x06plugin\x18\x01 \x01(\v2\x1e.easyp.generator.v1.PluginInfoB\x05\xdaI\x02\x10\x01R\x06plugin\"\xc7\x01\n" +
+	"\x06plugin\x18\x01 \x01(\v2\x1e.easyp.generator.v1.PluginInfoB\x05\xdaI\x02\x10\x01R\x06plugin\"\xca\x01\n" +
 	"\x13DeletePluginRequest\x126\n" +
 	"\x05group\x18\x01 \x01(\tB \xdaI\x1d\b\x01\xa2\x01\x04grpc\x92\x02\x11^[a-z][a-z0-9-]*$R\x05group\x122\n" +
-	"\x04name\x18\x02 \x01(\tB\x1e\xdaI\x1b\b\x01\xa2\x01\x02go\x92\x02\x11^[a-z][a-z0-9-]*$R\x04name\x12D\n" +
-	"\aversion\x18\x03 \x01(\tB*\xdaI'\b\x01\xa2\x01\x06v1.5.1\x92\x02\x19^v[0-9]+\\.[0-9]+\\.[0-9]+$R\aversion\"\x16\n" +
+	"\x04name\x18\x02 \x01(\tB\x1e\xdaI\x1b\b\x01\xa2\x01\x02go\x92\x02\x11^[a-z][a-z0-9-]*$R\x04name\x12G\n" +
+	"\aversion\x18\x03 \x01(\tB-\xdaI*\b\x01\xa2\x01\x06v1.5.1\x92\x02\x1c^v[0-9]+\\.[0-9]+(\\.[0-9]+)?$R\aversion\"\x16\n" +
 	"\x14DeletePluginResponse2\xfc\x04\n" +
 	"\fGeneratorAPI\x12i\n" +
 	"\fGenerateCode\x12'.easyp.generator.v1.GenerateCodeRequest\x1a(.easyp.generator.v1.GenerateCodeResponse\"\x06ҷ,\x02 \x01\x12\xbf\x01\n" +
