@@ -72,7 +72,7 @@ offering ships as a version rather than as a licence reissue for every customer.
 ```
 api/                    # The wire contract. Its own Go module, Apache-2.0.
   easyp/generator/v1/   # .proto, generated stubs, MCP bindings
-cmd/easyp-svc/          # The service and its CLI (service start, plugins, config, auth)
+cmd/easyp-svc/          # The service and its CLI (service start, plugins, config, auth, api, health)
 internal/
   core/                 # Domain types, interfaces, sentinel errors, worker pool
   api/                  # gRPC handlers, audit & license interceptors, MCP handler
@@ -130,9 +130,10 @@ as in [README.md](README.md#quick-start).
 - **Binary storage:** `core.BinaryStorage` interface (read-only: Download/Open/Stat/Delete), S3 implementation in `internal/adapters/storage`; uploads happen out-of-band via `easyp-svc plugins publish`, which records the sha256 as `x-amz-meta-sha256`
 - **Testing:** standard `go test` with `stretchr/testify` assertions (`assert`/`require`); mocks defined in test files
 - **Config priority:** environment > YAML file > `default=` struct tag. The only
-  flags that take part are `--cfg`, which chooses the file, and `--log_level`,
-  which overrides `log.level`. `--cfg` also reads `EASYP_CONFIG`, which is how
-  the image's `HEALTHCHECK` finds the same file the service was started with.
+  flags that take part are `--cfg`, which chooses the file, and `--log-level`
+  (alias `--log_level`), which overrides `log.level` on `service start`.
+  `--cfg` also reads `EASYP_CONFIG`, which is how the image's `HEALTHCHECK`
+  finds the same file the service was started with.
   An unrecognised YAML key refuses the start. See
   [Configuration](README.md#configuration) and `internal/config/config.go`.
 - **Comments:** English only; every exported symbol must have a godoc comment starting with its name; no inline comments on `if`/`for`/`return` lines unless genuinely non-obvious.
@@ -142,7 +143,7 @@ as in [README.md](README.md#quick-start).
 - **Plugins are local binaries** — service executes plugins from `plugins/` directory, not Docker containers at runtime
 - **S3 mode** — with `registry.s3` configured, `plugins_dir` is a local cache: archives are uploaded out-of-band (`plugins publish`), then downloaded on demand (singleflight-deduplicated), sha256-verified and unpacked before execution; registering a version whose archive is absent fails with `FAILED_PRECONDITION`, and one whose archive is not the `sha256` named with `FAILED_PRECONDITION` / `CHECKSUM_MISMATCH`; S3 outage surfaces as `UNAVAILABLE`, not `NOT_FOUND`
 - **Republishing** — `plugins publish --force` uploads the new archive and `UpdatePlugin`s the new checksum; each unpacked version directory carries a `.sha256` marker, and `ensureBinary` refetches on every replica when it differs from the registry. A directory without a marker (unpacked before v1.2.0, or bind-mounted from a build tree) is fetched once and gets one; only a version registered without a checksum skips the comparison
-- **Entrypoint is always named `plugin`** — build output and migrate scan require `plugins/{group}/{name}/{version}/plugin`; Dockerfiles must `COPY` the entrypoint to `/plugin` (sidecars optional)
+- **Entrypoint is always named `plugin`** — build output and `plugins publish --plugins-dir` require `plugins/{group}/{name}/{version}/plugin`; Dockerfiles must `COPY` the entrypoint to `/plugin` (sidecars optional)
 - **A plugin runs outside its image** — the service unpacks the image filesystem and execs `plugin` as a plain process on its own base (`debian:trixie-slim`). Wrappers resolve paths from `DIR=${0%/*}`, never from `/`; absolute symlinks are skipped on unpack. `plugins build` proves it per version: it relativises in-bundle absolute links, round-trips the archive through `plugarchive`, and smoke-runs `plugin` in the runtime image as uid 65532 with an empty env — a failure leaves only `build.log`. `TestSmokeImageMatchesServiceBase` keeps the smoke image equal to the Dockerfile's runtime stage
 - **`easyp-svc plugins build <registry-path>`** — uses Docker multi-stage builds to extract image filesystems to the output directory (`plugins/` by default) and verifies each version; `--archive` keeps only the verified `{g}/{n}/{v}/plugin.tgz` instead. Supports `--filter`, `--parallel`, `--force`, `--dry-run`. Nothing is uploaded
 - **`easyp-svc plugins publish [registry-path]`** — per version: build → verify → upload with sha256 metadata → `CreatePlugin` (or `UpdatePlugin` when it exists) → delete the local copy. Sources: a registry, `--archives <dir>` (a `build --archive` tree), or with neither, `--plugins-dir` itself. Destination: S3 (`--cfg` supplies `registry.s3`, flags override it) or `--plugins-dir` (no object storage, same host). Skips what is registered and in storage, only registers what is in storage but not registered, skips uploads of an identical archive; `--force` republishes. Builds and smoke runs target the platform the service reports in `PluginsResponse.platform` (`runtime.GOOS/GOARCH` of the server), or `--platform`; an older server reports none and the build is for the local machine, with a warning. `plugarchive.PackDir` is reproducible (epoch mtimes, no owners, modes reduced to 0755/0644/0777), so an unchanged rebuild is an identical archive. Preflight checks storage and the token before building. `--build-parallel` 4, `--parallel` 8, backing off on the rate and concurrency limits — the SDK deliberately does not retry `ResourceExhausted` — and stopping new versions at the licence tier's plugin cap. Against a server left at the default `rate_limit.max_concurrent_per_ip` of 2, pass `--parallel 2`. Needs a v1.2.0+ server

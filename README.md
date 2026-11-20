@@ -175,13 +175,17 @@ The server does not serve reflection. `easyp-svc api descriptor` writes a
 
 ### Errors
 
-Every non-OK status carries a `google.rpc.ErrorInfo` with domain `easyp.tech`
-and a `reason` a client can branch on — `NOT_FOUND`, `INVALID_PLUGIN_NAME`,
-`INVALID_CONFIG`, `GENERATION_FAILED`, `SERVER_OVERLOADED`, `ALREADY_EXISTS`,
-`MAX_PLUGINS_EXCEEDED`, `SHUTTING_DOWN`, `STORAGE_UNAVAILABLE`,
-`BINARY_NOT_UPLOADED`, `FEATURE_DENIED`, `DEADLINE_EXCEEDED`. The gRPC code is
-a category and the message is prose; the reason is the part that is promised
-to stay. They are documented in the proto next to the RPC that returns them.
+Every error the handlers return carries a `google.rpc.ErrorInfo` with domain
+`easyp.tech` and a `reason` a client can branch on — `NOT_FOUND`,
+`INVALID_PLUGIN_NAME`, `INVALID_CONFIG`, `GENERATION_FAILED`,
+`SERVER_OVERLOADED`, `ALREADY_EXISTS`, `MAX_PLUGINS_EXCEEDED`, `SHUTTING_DOWN`,
+`STORAGE_UNAVAILABLE`, `BINARY_NOT_UPLOADED`, `CHECKSUM_MISMATCH`,
+`FEATURE_DENIED`, `DEADLINE_EXCEEDED`, `CANCELED`, and `INTERNAL` for anything
+else. The gRPC code is a category and the message is prose; the reason is the
+part that is promised to stay. They are documented in the proto next to the RPC
+that returns them. Refusals from the interceptors in front of the handlers —
+rate limit, per-client concurrency, authentication — are plain statuses with no
+`ErrorInfo`.
 
 ### MCP
 
@@ -465,9 +469,12 @@ Enterprise needs two things — a token and the public key it is verified agains
 LICENSE_PUBLIC_KEYS=<kid>:<hex> LICENSE_KEY=<paseto-token> easyp-svc service start --cfg config.yml
 ```
 
-Both are read at runtime. The token comes from `license.key`, then
-`license.file`, then `LICENSE_KEY`; the public keys from `license.public_keys`
-or `LICENSE_PUBLIC_KEYS`. Without a public key no token is honoured.
+Both are read at runtime. The token is `license.key` if set, otherwise the
+contents of the file named by `license.file`. Each setting has an environment
+form — `LICENSE_KEY`, `LICENSE_FILE` — which, as everywhere, wins over the YAML
+key: `LICENSE_KEY` overrides `license.key` written in the config file, and a
+key from either source beats `license.file`. The public keys come from `license.public_keys`, or
+`LICENSE_PUBLIC_KEYS` over it. Without a public key no token is honoured.
 
 `license.public_keys` is keyed by the key id in the token's footer. The reserved
 key id `"*"` verifies any token the other entries do not cover, which is what the
@@ -753,7 +760,7 @@ What a backup has to contain and how to restore it is in
 go build -o bin/easyp-svc ./cmd/easyp-svc
 DB_POSTGRES_DSN='postgres://…' ./bin/easyp-svc service start
 
-# The level is a setting, so it needs no flag; --log_level still overrides it.
+# The level is a setting, so it needs no flag; --log-level still overrides it.
 LOG_LEVEL=debug DB_POSTGRES_DSN='postgres://…' ./bin/easyp-svc service start
 
 go test ./...                                   # unit tests, all three modules from the root
